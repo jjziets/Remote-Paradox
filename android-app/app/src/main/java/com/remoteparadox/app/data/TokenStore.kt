@@ -73,6 +73,17 @@ class TokenStore(context: Context) {
         role = "user"
     }
 
+    val hasServerConfig: Boolean get() = serverHost != null
+
+    fun clearAuth() {
+        prefs.edit()
+            .remove(KEY_TOKEN)
+            .remove(KEY_USERNAME)
+            .remove(KEY_ROLE)
+            .remove(KEY_ALARM_CODE)
+            .apply()
+    }
+
     fun clear() {
         prefs.edit().clear().apply()
     }

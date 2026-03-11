@@ -33,6 +33,8 @@ import com.remoteparadox.app.data.ServerConfig
 fun ScanScreen(
     onCodeScanned: (ServerConfig) -> Unit,
     onManualEntry: () -> Unit,
+    hasServerConfig: Boolean = false,
+    onLogin: () -> Unit = {},
 ) {
     var hasPermission by remember { mutableStateOf<Boolean?>(null) }
     val context = LocalContext.current
@@ -63,7 +65,7 @@ fun ScanScreen(
         )
         Spacer(Modifier.height(8.dp))
         Text(
-            "Point your camera at the QR code\nprinted by your admin",
+            "Point your camera at the invite QR code\nfrom the admin dashboard",
             textAlign = TextAlign.Center,
             color = Color.White.copy(alpha = 0.7f),
             fontSize = 14.sp,
@@ -100,9 +102,17 @@ fun ScanScreen(
         Spacer(Modifier.height(16.dp))
         OutlinedButton(
             onClick = onManualEntry,
-            modifier = Modifier.padding(bottom = 32.dp),
+            modifier = Modifier.padding(bottom = if (hasServerConfig) 8.dp else 32.dp),
         ) {
             Text("Enter code manually")
+        }
+        if (hasServerConfig) {
+            TextButton(
+                onClick = onLogin,
+                modifier = Modifier.padding(bottom = 24.dp),
+            ) {
+                Text("Already registered? Log in")
+            }
         }
     }
 }

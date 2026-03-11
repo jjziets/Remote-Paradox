@@ -58,6 +58,8 @@ class MainActivity : ComponentActivity() {
                     Screen.Scan -> ScanScreen(
                         onCodeScanned = { vm.onQrScanned(it) },
                         onManualEntry = { vm.goToManualSetup() },
+                        hasServerConfig = vm.hasServerConfig,
+                        onLogin = { vm.goToLogin() },
                     )
 
                     Screen.Setup -> SetupScreen(
@@ -68,6 +70,7 @@ class MainActivity : ComponentActivity() {
                             vm.register(h, p, fp, code, user, pass)
                         },
                         onScanInstead = { vm.goToScan() },
+                        onLoginInstead = { vm.goToLoginFromSetup(state.pendingServerConfig) },
                     )
 
                     Screen.Login -> LoginScreen(
@@ -80,7 +83,7 @@ class MainActivity : ComponentActivity() {
 
                     Screen.Dashboard -> DashboardScreen(
                         alarmStatus = state.alarmStatus,
-                        zoneHistory = state.zoneHistory,
+                        eventHistory = state.eventHistory,
                         selectedPartition = state.selectedPartition,
                         isLoading = state.isLoading,
                         actionInProgress = state.actionInProgress,

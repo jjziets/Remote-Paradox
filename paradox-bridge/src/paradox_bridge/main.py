@@ -25,20 +25,22 @@ from paradox_bridge.models import (
     AuditLogResponse,
     BypassRequest,
     ErrorResponse,
+    EventHistoryResponse,
+    EventResponse,
     HealthResponse,
     InviteResponse,
     LoginRequest,
     LoginResponse,
+    PanicRequest,
     PartitionResponse,
     RegisterRequest,
     RegisterResponse,
     UserInfo,
     UserListResponse,
-    ZoneEventResponse,
-    ZoneHistoryResponse,
     ZoneResponse,
     ZoneToggleRequest,
 )
+from paradox_bridge.dashboard import router as dashboard_router
 from paradox_bridge.tls import generate_self_signed_cert, get_cert_fingerprint
 from paradox_bridge.ws import ConnectionManager
 
@@ -191,6 +193,18 @@ async def lifespan(application: FastAPI):
 
 app = FastAPI(title="Paradox Bridge", version="0.2.0", lifespan=lifespan)
 
+from fastapi.middleware.cors import CORSMiddleware
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+app.include_router(dashboard_router)
+
 
 # ── Auth routes ──
 
@@ -228,11 +242,38 @@ def create_invite(
     audit: Annotated[AuditService, Depends(get_audit)],
 ):
     code = auth.generate_invite(user["sub"])
+    invite_host = cfg.public_host or _get_local_ip()
+    invite_port = cfg.public_port or cfg.api_port
     uri = auth.build_invite_uri(
-        code, host=_get_local_ip(), port=cfg.api_port, fingerprint=_cert_fingerprint,
+        code, host=invite_host, port=invite_port, fingerprint=_cert_fingerprint,
     )
     audit.record(user["sub"], "create_invite", f"code={code}")
-    return InviteResponse(code=code, uri=uri, expires_in_seconds=cfg.invite_expiry_seconds)
+    qr_data = _generate_qr_data_uri(uri)
+    return InviteResponse(
+        code=code, uri=uri,
+        expires_in_seconds=cfg.invite_expiry_seconds,
+        qr_data_uri=qr_data,
+    )
+
+
+def _generate_qr_data_uri(data: str) -> str:
+    try:
+        import base64
+        import io
+        import qrcode
+        qr = qrcode.QRCode(
+            version=None, error_correction=qrcode.constants.ERROR_CORRECT_M,
+            box_size=8, border=2,
+        )
+        qr.add_data(data)
+        qr.make(fit=True)
+        img = qr.make_image(fill_color="black", back_color="white")
+        buf = io.BytesIO()
+        img.save(buf, format="PNG")
+        b64 = base64.b64encode(buf.getvalue()).decode("ascii")
+        return f"data:image/png;base64,{b64}"
+    except ImportError:
+        return ""
 
 
 @app.get("/auth/users", response_model=UserListResponse)
@@ -271,10 +312,13 @@ def _build_status_response(alarm: AlarmService) -> AlarmStatusResponse:
         partitions=[
             PartitionResponse(
                 id=p.id, name=p.name, armed=p.armed, mode=p.mode,
+                entry_delay=p.entry_delay, ready=p.ready,
                 zones=[
                     ZoneResponse(
                         id=z.id, name=z.name, open=z.open,
                         bypassed=z.bypassed, partition_id=z.partition_id,
+                        alarm=z.alarm, was_in_alarm=z.was_in_alarm,
+                        tamper=z.tamper,
                     )
                     for z in p.zones
                 ],
@@ -378,17 +422,33 @@ def zone_toggle(
     return ActionResult(success=True, action=action, message=f"Zone {req.zone_id}")
 
 
-# ── Zone history ──
+# ── Panic (demo) ──
 
-@app.get("/alarm/history", response_model=ZoneHistoryResponse)
-def zone_history(
+@app.post("/alarm/panic", response_model=ActionResult)
+def panic(
+    req: PanicRequest,
+    user: Annotated[dict, Depends(get_current_user)],
+    alarm: Annotated[AlarmService, Depends(get_alarm)],
+    audit: Annotated[AuditService, Depends(get_audit)],
+):
+    if not alarm.demo_mode:
+        raise HTTPException(status_code=403, detail="Panic only available in demo mode")
+    ok = alarm.send_panic(partition_id=req.partition_id, panic_type=req.panic_type)
+    audit.record(user["sub"], "panic", f"partition={req.partition_id} type={req.panic_type}")
+    return ActionResult(success=ok, action="panic")
+
+
+# ── Event history ──
+
+@app.get("/alarm/history", response_model=EventHistoryResponse)
+def event_history(
     user: Annotated[dict, Depends(get_current_user)],
     alarm: Annotated[AlarmService, Depends(get_alarm)],
     limit: int = Query(default=50, le=200),
 ):
     events = alarm.get_zone_history(limit=limit)
-    return ZoneHistoryResponse(
-        events=[ZoneEventResponse(**e) for e in events]
+    return EventHistoryResponse(
+        events=[EventResponse(**e) for e in events]
     )
 
 
