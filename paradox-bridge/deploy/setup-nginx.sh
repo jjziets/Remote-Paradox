@@ -51,14 +51,35 @@ if [ -f "$CONFIG_FILE" ]; then
     fi
 fi
 
+# 7. Harden SSH — disable password authentication
+echo "[7/7] Hardening SSH (key-only access)..."
+SSHD_CONF="/etc/ssh/sshd_config"
+if grep -q "^PasswordAuthentication yes" "$SSHD_CONF" 2>/dev/null || \
+   ! grep -q "^PasswordAuthentication no" "$SSHD_CONF" 2>/dev/null; then
+    # Ensure key-only auth
+    sed -i 's/^#\?PasswordAuthentication.*/PasswordAuthentication no/' "$SSHD_CONF"
+    sed -i 's/^#\?ChallengeResponseAuthentication.*/ChallengeResponseAuthentication no/' "$SSHD_CONF"
+    sed -i 's/^#\?UsePAM.*/UsePAM no/' "$SSHD_CONF"
+    # Ensure PubkeyAuthentication is on
+    sed -i 's/^#\?PubkeyAuthentication.*/PubkeyAuthentication yes/' "$SSHD_CONF"
+    systemctl restart sshd
+    echo "  SSH hardened: password auth disabled, key-only access"
+else
+    echo "  SSH already hardened"
+fi
+
 echo ""
 echo "=== Done! ==="
-echo "  nginx:  https://<pi-ip>/ (web app + API proxy)"
+echo "  nginx:  https://<pi-ip>:8443/ (web app + API proxy)"
 echo "  API:    127.0.0.1:8080 (internal only)"
+echo "  SSH:    key-based only (password auth disabled)"
 echo ""
 echo "Router port forwarding:"
-echo "  WAN :443 → Pi :443 (HTTPS)"
-echo "  WAN :22  → Pi :22  (SSH)"
+echo "  WAN :<your-port> → Pi :8443 (HTTPS)"
+echo "  WAN :22           → Pi :22  (SSH, key-only)"
+echo ""
+echo "IMPORTANT: Make sure your SSH key is installed before running this!"
+echo "  ssh-copy-id home@remote-paradox"
 echo ""
 echo "Restart paradox-bridge if api_host was changed:"
 echo "  sudo systemctl restart paradox-bridge"
