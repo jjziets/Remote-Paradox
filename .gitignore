@@ -1,0 +1,41 @@
+# Secrets
+.env
+*.pem
+*.key
+*.crt
+/paradox-bridge/certs/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+.venv/
+venv/
+dist/
+build/
+.pytest_cache/
+
+# Android
+android-app/.gradle/
+android-app/build/
+android-app/app/build/
+android-app/local.properties
+*.apk
+!releases/*.apk
+
+# IDE
+.idea/
+*.iml
+.vscode/
+
+# OS images, installers & saved webpages
+*.img
+*.img.xz
+*.dmg
+Raspberry Pi Zero 2W.html
+Raspberry Pi Zero 2W_files/
+
+# OS
+.DS_Store
+Thumbs.db

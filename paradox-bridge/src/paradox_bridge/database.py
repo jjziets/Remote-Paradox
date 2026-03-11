@@ -1,0 +1,144 @@
+"""SQLite database layer for users, invites, and audit logs."""
+
+import secrets
+import sqlite3
+import time
+from datetime import datetime, timezone
+from typing import Optional
+
+
+class Database:
+    def __init__(self, db_path: str):
+        self._path = db_path
+        self._conn: Optional[sqlite3.Connection] = None
+
+    @property
+    def conn(self) -> sqlite3.Connection:
+        if self._conn is None:
+            self._conn = sqlite3.connect(self._path, check_same_thread=False)
+            self._conn.row_factory = sqlite3.Row
+            self._conn.execute("PRAGMA journal_mode=WAL")
+            self._conn.execute("PRAGMA foreign_keys=ON")
+        return self._conn
+
+    def init(self) -> None:
+        c = self.conn
+        c.executescript("""
+            CREATE TABLE IF NOT EXISTS users (
+                username    TEXT PRIMARY KEY,
+                password_hash TEXT NOT NULL,
+                role        TEXT NOT NULL DEFAULT 'user',
+                created_at  TEXT NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS invites (
+                code        TEXT PRIMARY KEY,
+                created_by  TEXT NOT NULL,
+                created_at  REAL NOT NULL,
+                expires_at  REAL NOT NULL,
+                used_by     TEXT,
+                used_at     REAL,
+                FOREIGN KEY (created_by) REFERENCES users(username)
+            );
+
+            CREATE TABLE IF NOT EXISTS audit_log (
+                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                timestamp   TEXT NOT NULL,
+                username    TEXT NOT NULL,
+                action      TEXT NOT NULL,
+                detail      TEXT
+            );
+        """)
+        c.commit()
+
+    def close(self) -> None:
+        if self._conn:
+            self._conn.close()
+            self._conn = None
+
+    def list_tables(self) -> list[str]:
+        rows = self.conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name"
+        ).fetchall()
+        return [r["name"] for r in rows]
+
+    # ── Users ──
+
+    def create_user(self, username: str, password_hash: str, role: str = "user") -> None:
+        existing = self.get_user(username)
+        if existing is not None:
+            raise ValueError(f"User '{username}' already exists")
+        now = datetime.now(timezone.utc).isoformat()
+        self.conn.execute(
+            "INSERT INTO users (username, password_hash, role, created_at) VALUES (?, ?, ?, ?)",
+            (username, password_hash, role, now),
+        )
+        self.conn.commit()
+
+    def get_user(self, username: str) -> Optional[dict]:
+        row = self.conn.execute(
+            "SELECT * FROM users WHERE username = ?", (username,)
+        ).fetchone()
+        return dict(row) if row else None
+
+    def list_users(self) -> list[dict]:
+        rows = self.conn.execute("SELECT * FROM users ORDER BY created_at").fetchall()
+        return [dict(r) for r in rows]
+
+    def delete_user(self, username: str) -> None:
+        existing = self.get_user(username)
+        if existing is None:
+            raise ValueError(f"User '{username}' not found")
+        self.conn.execute("DELETE FROM users WHERE username = ?", (username,))
+        self.conn.commit()
+
+    # ── Invites ──
+
+    def create_invite(self, created_by: str, expires_in_seconds: int = 900) -> str:
+        code = secrets.token_hex(4).upper()
+        code = f"{code[:4]}-{code[4:]}"
+        now = time.time()
+        self.conn.execute(
+            "INSERT INTO invites (code, created_by, created_at, expires_at) VALUES (?, ?, ?, ?)",
+            (code, created_by, now, now + expires_in_seconds),
+        )
+        self.conn.commit()
+        return code
+
+    def validate_invite(self, code: str) -> bool:
+        row = self.conn.execute(
+            "SELECT * FROM invites WHERE code = ? AND used_by IS NULL AND expires_at > ?",
+            (code, time.time()),
+        ).fetchone()
+        return row is not None
+
+    def consume_invite(self, code: str, used_by: str) -> None:
+        self.conn.execute(
+            "UPDATE invites SET used_by = ?, used_at = ? WHERE code = ?",
+            (used_by, time.time(), code),
+        )
+        self.conn.commit()
+
+    # ── Audit Log ──
+
+    def log_action(self, username: str, action: str, detail: Optional[str] = None) -> None:
+        now = datetime.now(timezone.utc).isoformat()
+        self.conn.execute(
+            "INSERT INTO audit_log (timestamp, username, action, detail) VALUES (?, ?, ?, ?)",
+            (now, username, action, detail),
+        )
+        self.conn.commit()
+
+    def get_audit_log(
+        self, limit: int = 50, username: Optional[str] = None
+    ) -> list[dict]:
+        if username:
+            rows = self.conn.execute(
+                "SELECT * FROM audit_log WHERE username = ? ORDER BY id DESC LIMIT ?",
+                (username, limit),
+            ).fetchall()
+        else:
+            rows = self.conn.execute(
+                "SELECT * FROM audit_log ORDER BY id DESC LIMIT ?", (limit,)
+            ).fetchall()
+        return [dict(r) for r in rows]

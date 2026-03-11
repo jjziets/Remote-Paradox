@@ -1,0 +1,41 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "paradox-bridge"
+version = "0.1.0"
+description = "Local FastAPI bridge between Paradox SP6000 alarm and Android app"
+requires-python = ">=3.11"
+dependencies = [
+    "fastapi>=0.135",
+    "uvicorn[standard]>=0.41",
+    "python-jose[cryptography]>=3.5",
+    "cryptography>=44.0",
+    "bcrypt>=4.0",
+    "pydantic>=2.12",
+    "websockets>=16.0",
+    "pyserial>=3.5",
+    "pyserial-asyncio>=0.6",
+    "qrcode>=8.0",
+]
+
+[project.optional-dependencies]
+pi = [
+    "paradox-alarm-interface>=3.7",
+]
+dev = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.24",
+    "httpx>=0.27",
+]
+
+[project.scripts]
+paradox-invite = "paradox_bridge.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
