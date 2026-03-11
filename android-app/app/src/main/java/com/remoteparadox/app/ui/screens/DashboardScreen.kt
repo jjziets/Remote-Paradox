@@ -139,8 +139,8 @@ fun DashboardScreen(
 
 @Composable
 private fun ConnectionBanner(connected: Boolean, loading: Boolean) {
-    val bg = if (connected) SafeGreen.copy(alpha = 0.15f) else Color(0xFF442222)
-    val fg = if (connected) SafeGreen else MaterialTheme.colorScheme.error
+    val bg = if (connected) AlarmDisarmed.copy(alpha = 0.15f) else Color(0xFF442222)
+    val fg = if (connected) AlarmDisarmed else MaterialTheme.colorScheme.error
     val icon = if (connected) Icons.Default.WifiTethering else Icons.Default.WifiOff
     val text = when {
         loading -> "Connecting..."
