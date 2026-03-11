@@ -95,6 +95,7 @@ class MainActivity : ComponentActivity() {
                         onArmStay = { code, pid -> vm.armStay(code, pid) },
                         onDisarm = { code, pid -> vm.disarm(code, pid) },
                         onBypass = { zoneId, bypass -> vm.bypassZone(zoneId, bypass) },
+                        onPanic = { type, pid -> vm.sendPanic(type, pid) },
                         onRefresh = { vm.refreshStatus() },
                         onLogout = { vm.logout() },
                     )

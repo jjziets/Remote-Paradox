@@ -44,6 +44,7 @@ fun DashboardScreen(
     onArmStay: (code: String, partitionId: Int) -> Unit,
     onDisarm: (code: String, partitionId: Int) -> Unit,
     onBypass: (zoneId: Int, bypass: Boolean) -> Unit,
+    onPanic: (panicType: String, partitionId: Int) -> Unit,
     onRefresh: () -> Unit,
     onLogout: () -> Unit,
 ) {
@@ -128,6 +129,16 @@ fun DashboardScreen(
                     onArmAway = { if (savedAlarmCode != null) onArmAway(savedAlarmCode, pid) else showCodeDialog = "arm_away" },
                     onArmStay = { if (savedAlarmCode != null) onArmStay(savedAlarmCode, pid) else showCodeDialog = "arm_stay" },
                     onDisarm = { if (savedAlarmCode != null) onDisarm(savedAlarmCode, pid) else showCodeDialog = "disarm" },
+                )
+            }
+
+            // Panic buttons
+            item {
+                val pid = currentPartition?.id ?: 1
+                PanicButtons(
+                    connected = alarmStatus?.connected ?: false,
+                    actionInProgress = actionInProgress,
+                    onPanic = { type -> onPanic(type, pid) },
                 )
             }
 
@@ -450,6 +461,67 @@ private fun ControlButtons(
                 }
             }
         }
+    }
+}
+
+// ── Panic buttons ──
+
+@Composable
+private fun PanicButtons(
+    connected: Boolean,
+    actionInProgress: String?,
+    onPanic: (String) -> Unit,
+) {
+    var showConfirm by remember { mutableStateOf<String?>(null) }
+
+    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        OutlinedButton(
+            onClick = { showConfirm = "emergency" },
+            modifier = Modifier.weight(1f).height(46.dp),
+            enabled = connected && actionInProgress == null,
+            colors = ButtonDefaults.outlinedButtonColors(contentColor = Color(0xFFE94560)),
+            border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFFE94560).copy(alpha = 0.5f)),
+            shape = RoundedCornerShape(12.dp),
+        ) {
+            Text("\uD83D\uDEA8 PANIC", fontWeight = FontWeight.Bold, fontSize = 12.sp)
+        }
+        OutlinedButton(
+            onClick = { showConfirm = "medical" },
+            modifier = Modifier.weight(1f).height(46.dp),
+            enabled = connected && actionInProgress == null,
+            colors = ButtonDefaults.outlinedButtonColors(contentColor = Color(0xFF42A5F5)),
+            border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFF42A5F5).copy(alpha = 0.5f)),
+            shape = RoundedCornerShape(12.dp),
+        ) {
+            Text("\uD83C\uDFE5 MEDICAL", fontWeight = FontWeight.Bold, fontSize = 12.sp)
+        }
+        OutlinedButton(
+            onClick = { showConfirm = "fire" },
+            modifier = Modifier.weight(1f).height(46.dp),
+            enabled = connected && actionInProgress == null,
+            colors = ButtonDefaults.outlinedButtonColors(contentColor = Color(0xFFFF7043)),
+            border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFFFF7043).copy(alpha = 0.5f)),
+            shape = RoundedCornerShape(12.dp),
+        ) {
+            Text("\uD83D\uDD25 FIRE", fontWeight = FontWeight.Bold, fontSize = 12.sp)
+        }
+    }
+
+    if (showConfirm != null) {
+        AlertDialog(
+            onDismissRequest = { showConfirm = null },
+            title = { Text("Confirm Panic") },
+            text = { Text("Send ${showConfirm!!.uppercase()} alert? This will trigger the alarm immediately.") },
+            confirmButton = {
+                TextButton(onClick = {
+                    onPanic(showConfirm!!)
+                    showConfirm = null
+                }) { Text("SEND", color = Color(0xFFE94560)) }
+            },
+            dismissButton = {
+                TextButton(onClick = { showConfirm = null }) { Text("Cancel") }
+            },
+        )
     }
 }
 

@@ -163,6 +163,11 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             it.bypassZone(tokenStore.bearerHeader, BypassRequest(zoneId, bypass))
         }
 
+    fun sendPanic(panicType: String, partitionId: Int) =
+        alarmAction("panic") {
+            it.panic(tokenStore.bearerHeader, PanicRequest(partitionId, panicType))
+        }
+
     private fun alarmAction(name: String, call: suspend (ParadoxApi) -> retrofit2.Response<ActionResult>) {
         val a = api ?: return
         _state.update { it.copy(actionInProgress = name, error = null) }
