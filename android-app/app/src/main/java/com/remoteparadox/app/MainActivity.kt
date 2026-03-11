@@ -86,6 +86,7 @@ class MainActivity : ComponentActivity() {
                         actionInProgress = state.actionInProgress,
                         error = state.error,
                         username = vm.tokenStore.username,
+                        savedAlarmCode = vm.savedAlarmCode,
                         onSelectPartition = { vm.selectPartition(it) },
                         onArmAway = { code, pid -> vm.armAway(code, pid) },
                         onArmStay = { code, pid -> vm.armStay(code, pid) },

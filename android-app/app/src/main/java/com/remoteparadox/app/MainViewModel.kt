@@ -126,14 +126,22 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     // ── Alarm actions ──
 
-    fun armAway(code: String, partitionId: Int) =
+    val savedAlarmCode: String? get() = tokenStore.alarmCode
+
+    fun armAway(code: String, partitionId: Int) {
+        tokenStore.alarmCode = code
         alarmAction("arm_away") { it.armAway(tokenStore.bearerHeader, ArmRequest(code, partitionId)) }
+    }
 
-    fun armStay(code: String, partitionId: Int) =
+    fun armStay(code: String, partitionId: Int) {
+        tokenStore.alarmCode = code
         alarmAction("arm_stay") { it.armStay(tokenStore.bearerHeader, ArmRequest(code, partitionId)) }
+    }
 
-    fun disarm(code: String, partitionId: Int) =
+    fun disarm(code: String, partitionId: Int) {
+        tokenStore.alarmCode = code
         alarmAction("disarm") { it.disarm(tokenStore.bearerHeader, ArmRequest(code, partitionId)) }
+    }
 
     fun bypassZone(zoneId: Int, bypass: Boolean) =
         alarmAction(if (bypass) "bypass" else "unbypass") {

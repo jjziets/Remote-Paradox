@@ -34,6 +34,7 @@ fun DashboardScreen(
     actionInProgress: String?,
     error: String?,
     username: String?,
+    savedAlarmCode: String?,
     onSelectPartition: (Int) -> Unit,
     onArmAway: (code: String, partitionId: Int) -> Unit,
     onArmStay: (code: String, partitionId: Int) -> Unit,
@@ -119,13 +120,23 @@ fun DashboardScreen(
 
             // Control buttons
             item {
+                val pid = currentPartition?.id ?: 1
                 ControlButtons(
                     armed = currentPartition?.armed ?: false,
                     connected = alarmStatus?.connected ?: false,
                     actionInProgress = actionInProgress,
-                    onArmAway = { showCodeDialog = "arm_away" },
-                    onArmStay = { showCodeDialog = "arm_stay" },
-                    onDisarm = { showCodeDialog = "disarm" },
+                    onArmAway = {
+                        if (savedAlarmCode != null) onArmAway(savedAlarmCode, pid)
+                        else showCodeDialog = "arm_away"
+                    },
+                    onArmStay = {
+                        if (savedAlarmCode != null) onArmStay(savedAlarmCode, pid)
+                        else showCodeDialog = "arm_stay"
+                    },
+                    onDisarm = {
+                        if (savedAlarmCode != null) onDisarm(savedAlarmCode, pid)
+                        else showCodeDialog = "disarm"
+                    },
                 )
             }
 
@@ -167,6 +178,7 @@ fun DashboardScreen(
     if (showCodeDialog != null) {
         AlarmCodeDialog(
             action = showCodeDialog!!,
+            initialCode = savedAlarmCode.orEmpty(),
             onConfirm = { code ->
                 val pid = currentPartition?.id ?: 1
                 when (showCodeDialog) {
@@ -423,10 +435,11 @@ private fun HistoryRow(event: ZoneEvent) {
 @Composable
 private fun AlarmCodeDialog(
     action: String,
+    initialCode: String = "",
     onConfirm: (String) -> Unit,
     onDismiss: () -> Unit,
 ) {
-    var code by remember { mutableStateOf("") }
+    var code by remember { mutableStateOf(initialCode) }
     val title = when (action) {
         "arm_away" -> "Arm Away"
         "arm_stay" -> "Arm Stay"

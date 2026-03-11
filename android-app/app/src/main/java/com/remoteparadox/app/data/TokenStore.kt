@@ -49,6 +49,10 @@ class TokenStore(context: Context) {
         return "https://$h:$serverPort/"
     }
 
+    var alarmCode: String?
+        get() = prefs.getString(KEY_ALARM_CODE, null)
+        set(value) = prefs.edit().putString(KEY_ALARM_CODE, value).apply()
+
     val bearerHeader: String get() = "Bearer ${token.orEmpty()}"
 
     fun saveLogin(host: String, port: Int, fingerprint: String, loginResp: LoginResponse) {
@@ -80,5 +84,6 @@ class TokenStore(context: Context) {
         private const val KEY_HOST = "server_host"
         private const val KEY_PORT = "server_port"
         private const val KEY_FINGERPRINT = "cert_fingerprint"
+        private const val KEY_ALARM_CODE = "alarm_code"
     }
 }
