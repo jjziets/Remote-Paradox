@@ -35,7 +35,7 @@ class TokenStore(context: Context) {
         set(value) = prefs.edit().putString(KEY_HOST, value).apply()
 
     var serverPort: Int
-        get() = prefs.getInt(KEY_PORT, 8443)
+        get() = prefs.getInt(KEY_PORT, 9433)
         set(value) = prefs.edit().putInt(KEY_PORT, value).apply()
 
     var certFingerprint: String?
