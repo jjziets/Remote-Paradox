@@ -1,6 +1,7 @@
 """Integration tests for the FastAPI app using httpx TestClient."""
 
 import json
+import time
 
 import pytest
 from fastapi.testclient import TestClient
@@ -25,6 +26,7 @@ def demo_app(tmp_path):
     config_path = tmp_path / "demo_config.json"
     config_path.write_text(json.dumps({"demo_mode": True}))
     init_services(config_path=str(config_path))
+    app_module._alarm.panel.COMMAND_ACK_DELAY = 0  # instant for tests
     app_module._auth.setup_admin("admin", "secret123")
 
 
@@ -85,6 +87,8 @@ class TestInviteAndRegister:
         assert "uri" in data
         assert data["uri"].startswith("paradox://")
         assert data["expires_in_seconds"] == 900
+        assert "qr_data_uri" in data
+        assert data["qr_data_uri"].startswith("data:image/png;base64,")
 
     def test_create_invite_as_non_admin(self, client, admin_token):
         inv = client.post("/auth/invite", headers=auth_header(admin_token)).json()
@@ -176,7 +180,14 @@ class TestAlarmDemo:
         assert "Internal" in names
         assert "External" in names
 
-    def test_arm_away_demo(self, client, demo_app, admin_token):
+    def test_status_has_ready_and_entry_delay(self, client, demo_app, admin_token):
+        st = client.get("/alarm/status", headers=auth_header(admin_token)).json()
+        p1 = [p for p in st["partitions"] if p["id"] == 1][0]
+        assert p1["ready"] is True
+        assert p1["entry_delay"] is False
+        assert "exit_delay_remaining" not in p1
+
+    def test_arm_away_demo_starts_arming(self, client, demo_app, admin_token):
         resp = client.post(
             "/alarm/arm-away",
             json={"code": "1234", "partition_id": 1},
@@ -186,8 +197,47 @@ class TestAlarmDemo:
         assert resp.json()["success"] is True
         st = client.get("/alarm/status", headers=auth_header(admin_token)).json()
         p1 = [p for p in st["partitions"] if p["id"] == 1][0]
+        assert p1["armed"] is False
+        assert p1["mode"] == "arming"
+
+    def test_arm_transitions_to_armed_away(self, client, demo_app, admin_token):
+        client.post(
+            "/alarm/arm-away",
+            json={"code": "1234", "partition_id": 1},
+            headers=auth_header(admin_token),
+        )
+        alarm = app_module._alarm
+        alarm.panel._force_exit_delay_done(1)
+        st = client.get("/alarm/status", headers=auth_header(admin_token)).json()
+        p1 = [p for p in st["partitions"] if p["id"] == 1][0]
         assert p1["armed"] is True
-        assert p1["mode"] == "away"
+        assert p1["mode"] == "armed_away"
+
+    def test_instant_zone_triggers_via_api(self, client, demo_app, admin_token):
+        """Open an instant zone (Main Bedroom) while armed → triggered immediately."""
+        client.post("/alarm/arm-away", json={"code": "1234", "partition_id": 1},
+                     headers=auth_header(admin_token))
+        alarm = app_module._alarm
+        alarm.panel._force_exit_delay_done(1)
+        client.post("/alarm/zone-toggle", json={"zone_id": 1, "open": True})
+        st = client.get("/alarm/status", headers=auth_header(admin_token)).json()
+        p1 = [p for p in st["partitions"] if p["id"] == 1][0]
+        assert p1["mode"] == "triggered"
+        triggered_zones = [z for z in p1["zones"] if z["alarm"]]
+        assert len(triggered_zones) >= 1
+        assert triggered_zones[0]["id"] == 1
+
+    def test_entry_zone_starts_entry_delay(self, client, demo_app, admin_token):
+        """Open an entry/exit zone (Front Door) while armed → entry_delay first."""
+        client.post("/alarm/arm-away", json={"code": "1234", "partition_id": 1},
+                     headers=auth_header(admin_token))
+        alarm = app_module._alarm
+        alarm.panel._force_exit_delay_done(1)
+        client.post("/alarm/zone-toggle", json={"zone_id": 9, "open": True})
+        st = client.get("/alarm/status", headers=auth_header(admin_token)).json()
+        p1 = [p for p in st["partitions"] if p["id"] == 1][0]
+        assert p1["entry_delay"] is True
+        assert p1["mode"] == "armed_away"
 
     def test_bypass_zone(self, client, demo_app, admin_token):
         resp = client.post(
@@ -235,15 +285,39 @@ class TestAlarmDemo:
         )
         assert resp.status_code == 403
 
-    def test_zone_history(self, client, demo_app, admin_token):
+    def test_event_history(self, client, demo_app, admin_token):
         client.post("/alarm/zone-toggle", json={"zone_id": 1, "open": True})
         client.post("/alarm/zone-toggle", json={"zone_id": 1, "open": False})
         resp = client.get("/alarm/history", headers=auth_header(admin_token))
         assert resp.status_code == 200
         events = resp.json()["events"]
-        assert len(events) == 2
-        assert events[0]["event"] == "closed"
-        assert events[1]["event"] == "opened"
+        assert len(events) >= 2
+        assert events[0]["type"] == "zone"
+        assert events[0]["label"] == "Main Bedroom"
+
+    def test_panic_route(self, client, demo_app, admin_token):
+        resp = client.post(
+            "/alarm/panic",
+            json={"partition_id": 1, "panic_type": "fire"},
+            headers=auth_header(admin_token),
+        )
+        assert resp.status_code == 200
+        assert resp.json()["success"] is True
+        st = client.get("/alarm/status", headers=auth_header(admin_token)).json()
+        p1 = [p for p in st["partitions"] if p["id"] == 1][0]
+        assert p1["mode"] == "triggered"
+
+    def test_not_ready_prevents_arm(self, client, demo_app, admin_token):
+        client.post("/alarm/zone-toggle", json={"zone_id": 9, "open": True})
+        st = client.get("/alarm/status", headers=auth_header(admin_token)).json()
+        p1 = [p for p in st["partitions"] if p["id"] == 1][0]
+        assert p1["ready"] is False
+        resp = client.post(
+            "/alarm/arm-away",
+            json={"code": "1234", "partition_id": 1},
+            headers=auth_header(admin_token),
+        )
+        assert resp.json()["success"] is False
 
 
 class TestAuditLogs:
@@ -257,3 +331,19 @@ class TestAuditLogs:
     def test_audit_logs_require_auth(self, client):
         resp = client.get("/alarm/logs")
         assert resp.status_code in (401, 403)
+
+
+class TestCORS:
+    def test_cors_preflight(self, client):
+        resp = client.options(
+            "/health",
+            headers={
+                "Origin": "http://localhost:3000",
+                "Access-Control-Request-Method": "GET",
+            },
+        )
+        assert "access-control-allow-origin" in resp.headers
+
+    def test_cors_on_response(self, client):
+        resp = client.get("/health", headers={"Origin": "http://localhost:3000"})
+        assert "access-control-allow-origin" in resp.headers

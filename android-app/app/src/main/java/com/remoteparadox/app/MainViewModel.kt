@@ -12,7 +12,7 @@ import kotlinx.coroutines.flow.update
 data class AppState(
     val screen: Screen = Screen.Loading,
     val alarmStatus: AlarmStatus? = null,
-    val zoneHistory: List<ZoneEvent> = emptyList(),
+    val eventHistory: List<PanelEvent> = emptyList(),
     val selectedPartition: Int = 1,
     val isLoading: Boolean = false,
     val actionInProgress: String? = null,
@@ -52,6 +52,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     // ── QR Scan result ──
 
+    val hasServerConfig: Boolean get() = tokenStore.hasServerConfig
+
     fun onQrScanned(config: ServerConfig) {
         _state.update { it.copy(screen = Screen.Setup, pendingServerConfig = config) }
     }
@@ -62,6 +64,19 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     fun goToScan() {
         _state.update { it.copy(screen = Screen.Scan, error = null) }
+    }
+
+    fun goToLogin() {
+        _state.update { it.copy(screen = Screen.Login, error = null) }
+    }
+
+    fun goToLoginFromSetup(config: ServerConfig?) {
+        if (config != null) {
+            tokenStore.serverHost = config.host
+            tokenStore.serverPort = config.port
+            tokenStore.certFingerprint = config.fingerprint
+        }
+        _state.update { it.copy(screen = Screen.Login, error = null) }
     }
 
     // ── Register ──
@@ -191,12 +206,17 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         val a = api ?: return
         viewModelScope.launch(Dispatchers.IO) {
             try {
-                val resp = a.zoneHistory(tokenStore.bearerHeader, limit = 50)
+                val resp = a.eventHistory(tokenStore.bearerHeader, limit = 50)
                 if (resp.isSuccessful && resp.body() != null) {
-                    _state.update { it.copy(zoneHistory = resp.body()!!.events) }
+                    _state.update { it.copy(eventHistory = resp.body()!!.events) }
                 }
             } catch (_: Exception) { }
         }
+    }
+
+    private fun needsFastPoll(): Boolean {
+        val parts = _state.value.alarmStatus?.partitions.orEmpty()
+        return parts.any { it.mode == "arming" || it.mode == "triggered" || it.entryDelay }
     }
 
     // ── Polling (foreground only) ──
@@ -207,7 +227,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             while (isActive) {
                 refreshStatus()
                 refreshHistory()
-                delay(5_000)
+                delay(if (needsFastPoll()) 1_000 else 5_000)
             }
         }
     }
@@ -226,12 +246,14 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     fun logout() {
         stopPolling()
-        tokenStore.clear()
-        api = null
-        _state.update { AppState(screen = Screen.Scan) }
+        tokenStore.clearAuth()
+        _state.update { AppState(screen = Screen.Login) }
     }
 
     fun switchServer() {
-        logout()
+        stopPolling()
+        tokenStore.clear()
+        api = null
+        _state.update { AppState(screen = Screen.Scan) }
     }
 }

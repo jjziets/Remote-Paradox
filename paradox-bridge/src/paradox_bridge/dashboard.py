@@ -1,0 +1,490 @@
+"""Serves a self-contained web dashboard at GET /dashboard."""
+
+from fastapi import APIRouter
+from fastapi.responses import HTMLResponse
+
+router = APIRouter()
+
+DASHBOARD_HTML = r"""<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Remote Paradox</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;background:#1a1a2e;color:#fff;min-height:100vh}
+.top{background:#16213e;padding:12px 20px;display:flex;justify-content:space-between;align-items:center;position:sticky;top:0;z-index:10}
+.top h1{font-size:18px;font-weight:700}
+.top .user{font-size:12px;opacity:.6}
+.top-btns{display:flex;align-items:center;gap:8px}
+.top-btns button{background:none;border:1px solid rgba(255,255,255,.2);color:#fff;padding:6px 12px;border-radius:6px;cursor:pointer;font-size:12px}
+.top-btns button:hover{background:rgba(255,255,255,.1)}
+.wrap{max-width:560px;margin:0 auto;padding:16px}
+.card{background:#16213e;border-radius:12px;padding:16px;margin-bottom:12px}
+.banner{display:flex;align-items:center;gap:8px;padding:10px 14px;border-radius:10px;font-size:13px;font-weight:500;margin-bottom:12px}
+.banner.on{background:rgba(76,175,80,.15);color:#4caf50}
+.banner.off{background:rgba(68,34,34,1);color:#e94560}
+
+/* Triggered alarm banner */
+.alarm-banner{background:#e94560;color:#fff;border-radius:12px;padding:16px;margin-bottom:12px;animation:pulse 1s infinite alternate}
+@keyframes pulse{from{opacity:1}to{opacity:.7}}
+.alarm-banner h2{font-size:20px;margin-bottom:6px}
+.alarm-banner .zones{font-size:14px;opacity:.9;margin-bottom:10px}
+.alarm-banner button{background:#fff;color:#e94560;border:none;padding:12px 24px;border-radius:10px;font-weight:700;font-size:14px;cursor:pointer;width:100%}
+
+.state-card{display:flex;align-items:center;gap:16px}
+.state-icon{width:56px;height:56px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:28px;flex-shrink:0}
+.state-label{font-size:22px;font-weight:800}
+.state-sub{font-size:13px;opacity:.6;margin-top:2px}
+
+/* Partition tabs */
+.tabs{display:flex;gap:8px;margin-bottom:12px}
+.tab{flex:1;padding:10px;border-radius:8px;border:1px solid rgba(255,255,255,.15);background:none;color:#fff;cursor:pointer;font-size:13px;text-align:center;display:flex;align-items:center;justify-content:center;gap:6px}
+.tab.active{background:rgba(0,210,255,.15);border-color:#00d2ff}
+.tab .dot{width:8px;height:8px;border-radius:50%;display:inline-block}
+
+/* View tabs (Status/History) */
+.view-tabs{display:flex;gap:0;margin-bottom:12px;background:#16213e;border-radius:10px;overflow:hidden}
+.view-tab{flex:1;padding:10px;border:none;background:none;color:rgba(255,255,255,.5);cursor:pointer;font-size:13px;font-weight:600;text-align:center;transition:all .2s}
+.view-tab.active{background:rgba(0,210,255,.15);color:#00d2ff}
+
+/* Buttons */
+.btns{display:flex;flex-direction:column;gap:10px;margin-bottom:12px}
+.btn-row{display:flex;gap:10px}
+.btn{flex:1;padding:14px;border:none;border-radius:12px;color:#fff;font-weight:700;font-size:13px;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:6px}
+.btn:disabled{opacity:.4;cursor:not-allowed}
+.btn.red{background:#e94560}.btn.amber{background:#ff9800}.btn.green{background:#4caf50}.btn.blue{background:#00d2ff;color:#1a1a2e}
+
+/* Zone grid */
+.zone-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:12px}
+.zone-card{background:#16213e;border-radius:10px;padding:10px 12px;display:flex;flex-direction:column;gap:4px;position:relative}
+.zone-card.alarm-zone{background:rgba(233,69,96,.2);border:1px solid #e94560}
+.zone-card.was-alarm{background:rgba(255,152,0,.1);border:1px solid rgba(255,152,0,.3)}
+.zone-top{display:flex;align-items:center;gap:8px}
+.zone-top .dot{width:10px;height:10px;border-radius:50%;flex-shrink:0}
+.zone-top .name{flex:1;font-size:13px;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.zone-bottom{display:flex;align-items:center;justify-content:space-between;font-size:11px;opacity:.7}
+.zone-bottom .tags{display:flex;gap:4px}
+.zone-bottom .tag{padding:1px 6px;border-radius:4px;font-weight:700;font-size:10px}
+.tag.bp{background:rgba(255,152,0,.2);color:#ff9800}
+.tag.al{background:rgba(233,69,96,.3);color:#e94560}
+.zone-bottom .bp-btn{background:none;border:none;cursor:pointer;font-size:14px;padding:2px 4px;border-radius:4px;color:rgba(255,255,255,.3)}
+.zone-bottom .bp-btn.on{color:#ff9800}
+
+.section-title{font-weight:700;font-size:16px;margin:12px 0 8px}
+
+/* History */
+.hist{display:flex;align-items:center;padding:8px 12px;background:rgba(22,33,62,.6);border-radius:8px;margin-bottom:4px}
+.hist .dot{width:8px;height:8px;border-radius:50%;flex-shrink:0}
+.hist .info{flex:1;margin-left:10px}
+.hist .zn{font-size:13px}.hist .ts{font-size:11px;opacity:.4}
+.hist .ev{font-size:12px;font-weight:700}
+
+/* Modal overlay */
+.modal-overlay{position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,.7);z-index:100;display:flex;align-items:center;justify-content:center}
+.modal{background:#16213e;border-radius:16px;padding:24px;max-width:400px;width:90%;text-align:center}
+.modal h2{margin-bottom:12px;font-size:20px}
+.modal .qr-img{max-width:260px;margin:16px auto;border-radius:8px}
+.modal .code-text{font-family:monospace;font-size:14px;color:#00d2ff;word-break:break-all;margin:8px 0}
+.modal .expire{font-size:12px;opacity:.5;margin-bottom:12px}
+.modal .close-btn{margin-top:12px;background:rgba(255,255,255,.1);border:1px solid rgba(255,255,255,.2);color:#fff;padding:10px 24px;border-radius:8px;cursor:pointer;font-size:13px}
+.modal .close-btn:hover{background:rgba(255,255,255,.2)}
+
+.err{background:rgba(233,69,96,.15);color:#e94560;padding:12px;border-radius:10px;font-size:13px;margin-bottom:12px;display:none}
+.login-wrap{max-width:360px;margin:80px auto;padding:24px}
+.login-wrap h2{margin-bottom:16px;text-align:center}
+.login-wrap input{width:100%;padding:12px;margin-bottom:10px;border-radius:8px;border:1px solid rgba(255,255,255,.2);background:#16213e;color:#fff;font-size:14px}
+.code-box{text-align:center;margin:12px 0}
+.code-box input{width:200px;padding:12px;border-radius:8px;border:1px solid rgba(255,255,255,.2);background:#16213e;color:#fff;font-size:20px;text-align:center;letter-spacing:4px}
+</style>
+</head>
+<body>
+
+<div class="top">
+  <h1>Remote Paradox</h1>
+  <div class="top-btns">
+    <span class="user" id="userLabel"></span>
+    <button id="btnInvite" style="display:none" onclick="doInvite()">+ Invite</button>
+    <button onclick="doRefresh()">Refresh</button>
+    <button onclick="doLogout()">Logout</button>
+  </div>
+</div>
+
+<!-- LOGIN -->
+<div id="vLogin" class="login-wrap">
+  <h2>Login</h2>
+  <input id="inUser" placeholder="Username" autocomplete="username">
+  <input id="inPass" placeholder="Password" type="password" autocomplete="current-password">
+  <div id="loginErr" class="err"></div>
+  <button class="btn blue" style="width:100%" onclick="doLogin()">Login</button>
+</div>
+
+<!-- APP -->
+<div id="vApp" class="wrap" style="display:none">
+  <div id="elBanner" class="banner off">Connecting...</div>
+  <div id="elAlarm" style="display:none"></div>
+  <div id="elTabs" class="tabs"></div>
+  <div id="elState" class="card"></div>
+  <div id="elErr" class="err"></div>
+
+  <!-- code setup -->
+  <div id="elCodeSetup" class="code-box" style="display:none">
+    <div class="section-title">Enter your alarm code</div>
+    <div style="margin:12px 0"><input id="inCode" maxlength="6" placeholder="----"></div>
+    <button class="btn blue" style="display:inline-block;padding:12px 24px" onclick="saveCode()">Save Code</button>
+  </div>
+
+  <div id="elCtrls" class="btns"></div>
+
+  <!-- View tabs: Status / History -->
+  <div class="view-tabs">
+    <button class="view-tab active" id="vtStatus" onclick="switchView('status')">Zones</button>
+    <button class="view-tab" id="vtHistory" onclick="switchView('history')">History</button>
+  </div>
+
+  <div id="elZones"></div>
+  <div id="elHist" style="display:none"></div>
+</div>
+
+<!-- Invite QR modal -->
+<div id="inviteModal" class="modal-overlay" style="display:none" onclick="closeInvite(event)">
+  <div class="modal" onclick="event.stopPropagation()">
+    <h2>&#x1F4F1; Invite New User</h2>
+    <div id="inviteContent"></div>
+  </div>
+</div>
+
+<script>
+(function(){
+  var token = localStorage.getItem('px_token');
+  var username = localStorage.getItem('px_user');
+  var alarmCode = localStorage.getItem('px_code');
+  var userRole = localStorage.getItem('px_role');
+  var partitions = [], selectedPid = 1, histEvents = [], currentView = 'status';
+  var timer = null, pollMs = 5000;
+
+  var $ = function(id){ return document.getElementById(id); };
+
+  function api(method, path, body) {
+    var opts = { method: method, headers: { 'Content-Type': 'application/json' } };
+    if (token) opts.headers['Authorization'] = 'Bearer ' + token;
+    if (body) opts.body = JSON.stringify(body);
+    return fetch(path, opts).then(function(r) {
+      if (r.status === 401) { goLogin(); return Promise.reject('auth'); }
+      return r.json();
+    });
+  }
+
+  function needFastPoll() {
+    return partitions.some(function(p){
+      return p.mode === 'arming' || p.mode === 'triggered' || p.entry_delay;
+    });
+  }
+  function adaptPoll() {
+    var need = needFastPoll() ? 1000 : 5000;
+    if (need !== pollMs) { pollMs = need; startPoll(); }
+  }
+
+  function goLogin() {
+    stopPoll();
+    $('vLogin').style.display = '';
+    $('vApp').style.display = 'none';
+  }
+
+  function goApp() {
+    $('vLogin').style.display = 'none';
+    $('vApp').style.display = '';
+    $('userLabel').textContent = username || '';
+    $('btnInvite').style.display = (userRole === 'admin') ? '' : 'none';
+    if (alarmCode) {
+      $('elCodeSetup').style.display = 'none';
+      $('elCtrls').style.display = '';
+    } else {
+      $('elCodeSetup').style.display = '';
+      $('elCtrls').style.display = 'none';
+    }
+    doRefresh();
+    startPoll();
+  }
+
+  function startPoll() { stopPoll(); timer = setInterval(doRefresh, pollMs); }
+  function stopPoll() { if (timer) { clearInterval(timer); timer = null; } }
+
+  window.doLogin = function() {
+    var u = $('inUser').value, p = $('inPass').value;
+    $('loginErr').style.display = 'none';
+    api('POST', '/auth/login', { username: u, password: p }).then(function(d) {
+      token = d.token; username = d.username; userRole = d.role || '';
+      localStorage.setItem('px_token', token);
+      localStorage.setItem('px_user', username);
+      localStorage.setItem('px_role', userRole);
+      goApp();
+    }).catch(function() {
+      $('loginErr').textContent = 'Invalid credentials';
+      $('loginErr').style.display = '';
+    });
+  };
+
+  window.saveCode = function() {
+    var c = $('inCode').value.replace(/\D/g, '');
+    if (c.length < 4) return;
+    alarmCode = c;
+    localStorage.setItem('px_code', c);
+    $('elCodeSetup').style.display = 'none';
+    $('elCtrls').style.display = '';
+    renderCtrls();
+  };
+
+  window.doRefresh = function() {
+    api('GET', '/alarm/status').then(function(d) {
+      var b = $('elBanner');
+      if (d.connected) { b.className = 'banner on'; b.innerHTML = '&#x1F7E2; Panel connected'; }
+      else { b.className = 'banner off'; b.innerHTML = '&#x1F534; Panel offline'; }
+      partitions = d.partitions || [];
+      if (!partitions.find(function(p){ return p.id === selectedPid; }) && partitions.length)
+        selectedPid = partitions[0].id;
+      renderTabs(); renderState(); renderCtrls(); renderAlarmBanner();
+      if (currentView === 'status') renderZones();
+      adaptPoll();
+    }).catch(function(){});
+    api('GET', '/alarm/history?limit=50').then(function(d) {
+      histEvents = d.events || [];
+      if (currentView === 'history') renderHist();
+    }).catch(function(){});
+  };
+
+  window.switchView = function(view) {
+    currentView = view;
+    $('vtStatus').className = 'view-tab' + (view === 'status' ? ' active' : '');
+    $('vtHistory').className = 'view-tab' + (view === 'history' ? ' active' : '');
+    if (view === 'status') {
+      $('elZones').style.display = '';
+      $('elHist').style.display = 'none';
+      renderZones();
+    } else {
+      $('elZones').style.display = 'none';
+      $('elHist').style.display = '';
+      renderHist();
+    }
+  };
+
+  function modeColor(m) {
+    if (m === 'armed_away') return '#e94560';
+    if (m === 'armed_home') return '#ff9800';
+    if (m === 'arming') return '#ffeb3b';
+    if (m === 'triggered') return '#e94560';
+    return '#4caf50';
+  }
+
+  function renderTabs() {
+    if (partitions.length <= 1) { $('elTabs').innerHTML = ''; return; }
+    $('elTabs').innerHTML = partitions.map(function(p) {
+      var col = modeColor(p.mode);
+      var cls = p.id === selectedPid ? ' active' : '';
+      var extra = '';
+      if (p.mode === 'arming') extra = ' &#x23F3;';
+      if (p.mode === 'triggered') extra = ' &#x26A0;';
+      if (p.entry_delay) extra = ' &#x1F6AA;';
+      return '<button class="tab' + cls + '" onclick="selectPart(' + p.id + ')">' +
+        '<span class="dot" style="background:' + col + '"></span>' + p.name + extra + '</button>';
+    }).join('');
+  }
+
+  window.selectPart = function(pid) {
+    selectedPid = pid;
+    renderTabs(); renderState(); renderCtrls(); renderAlarmBanner();
+    if (currentView === 'status') renderZones();
+  };
+
+  function renderAlarmBanner() {
+    var p = partitions.find(function(x){ return x.id === selectedPid; });
+    if (!p || p.mode !== 'triggered') {
+      $('elAlarm').style.display = 'none';
+      return;
+    }
+    var triggered = (p.zones || []).filter(function(z){ return z.alarm || z.was_in_alarm; });
+    var names = triggered.map(function(z){ return z.name; }).join(', ');
+    $('elAlarm').style.display = '';
+    $('elAlarm').innerHTML =
+      '<div class="alarm-banner">' +
+      '<h2>&#x1F6A8; ALARM TRIGGERED</h2>' +
+      '<div class="zones">Zone' + (triggered.length > 1 ? 's' : '') + ': <b>' + (names || 'Unknown') + '</b></div>' +
+      '<button onclick="doArm(\'disarm\')">&#x1F513; DISARM NOW</button>' +
+      '</div>';
+  }
+
+  function renderState() {
+    var p = partitions.find(function(x){ return x.id === selectedPid; });
+    if (!p) { $('elState').innerHTML = ''; return; }
+    var m = p.mode, col, icon, label;
+    if (m === 'triggered') {
+      col = '#e94560'; icon = '&#x1F6A8;'; label = 'TRIGGERED';
+    } else if (p.entry_delay) {
+      col = '#ff5722'; icon = '&#x1F6AA;'; label = 'ENTRY DELAY';
+    } else if (m === 'arming') {
+      col = '#ffeb3b'; icon = '&#x23F3;'; label = 'ARMING...';
+    } else if (m === 'armed_away') {
+      col = '#e94560'; icon = '&#x1F6E1;'; label = 'ARMED AWAY';
+    } else if (m === 'armed_home') {
+      col = '#ff9800'; icon = '&#x1F3E0;'; label = 'ARMED HOME';
+    } else if (m === 'disarmed') {
+      col = '#4caf50'; icon = '&#x1F513;'; label = 'DISARMED';
+    } else {
+      col = 'gray'; icon = '?'; label = m.toUpperCase();
+    }
+    var zones = p.zones || [], op = 0, bp = 0, al = 0;
+    zones.forEach(function(z){ if(z.open) op++; if(z.bypassed) bp++; if(z.alarm || z.was_in_alarm) al++; });
+    var sub = p.name + ' &bull; ' + zones.length + ' zones &bull; ' + op + ' open';
+    if (bp) sub += ' &bull; ' + bp + ' bypassed';
+    if (al) sub += ' &bull; <span style="color:#e94560">' + al + ' alarm</span>';
+    if (!p.ready && m === 'disarmed') sub += ' &bull; <span style="color:#ff9800">NOT READY</span>';
+    $('elState').innerHTML =
+      '<div class="state-card"><div class="state-icon" style="background:' + col + '22;color:' + col + '">' + icon + '</div>' +
+      '<div><div class="state-label" style="color:' + col + '">' + label + '</div>' +
+      '<div class="state-sub">' + sub + '</div></div></div>';
+  }
+
+  function renderCtrls() {
+    if (!alarmCode) { $('elCtrls').innerHTML = ''; return; }
+    var p = partitions.find(function(x){ return x.id === selectedPid; });
+    if (!p) { $('elCtrls').innerHTML = ''; return; }
+    if (p.mode === 'arming') {
+      $('elCtrls').innerHTML =
+        '<button class="btn green" onclick="doArm(\'disarm\')" style="width:100%">&#x2716; CANCEL ARMING</button>';
+      return;
+    }
+    if (p.mode === 'triggered' || p.entry_delay) {
+      $('elCtrls').innerHTML =
+        '<button class="btn green" onclick="doArm(\'disarm\')" style="width:100%;font-size:16px;padding:18px">&#x1F513; DISARM NOW</button>';
+      return;
+    }
+    if (p.armed) {
+      $('elCtrls').innerHTML =
+        '<button class="btn green" onclick="doArm(\'disarm\')" style="width:100%">&#x1F513; DISARM</button>';
+      return;
+    }
+    var dis = p.ready ? '' : ' disabled';
+    var hint = p.ready ? '' : ' (not ready)';
+    $('elCtrls').innerHTML =
+      '<div class="btn-row">' +
+      '<button class="btn red" onclick="doArm(\'arm-away\')"' + dis + '>&#x1F6E1; ARM AWAY' + hint + '</button>' +
+      '<button class="btn amber" onclick="doArm(\'arm-stay\')"' + dis + '>&#x1F3E0; ARM HOME' + hint + '</button></div>' +
+      '<button class="btn green" onclick="doArm(\'disarm\')" style="width:100%">&#x1F513; DISARM</button>';
+  }
+
+  window.doArm = function(action) {
+    api('POST', '/alarm/' + action, { code: alarmCode, partition_id: selectedPid }).then(function(d) {
+      if (d.success) doRefresh(); else showErr('Action failed: ' + (d.message||''));
+    }).catch(function(e){ showErr(String(e)); });
+  };
+
+  window.doBypass = function(zoneId, bypass) {
+    api('POST', '/alarm/bypass', { zone_id: zoneId, bypass: bypass }).then(function(){ doRefresh(); })
+    .catch(function(e){ showErr(String(e)); });
+  };
+
+  function renderZones() {
+    var p = partitions.find(function(x){ return x.id === selectedPid; });
+    if (!p || !p.zones.length) { $('elZones').innerHTML = ''; return; }
+    var h = '<div class="section-title">' + p.name + ' &mdash; ' + p.zones.length + ' zones</div>';
+    h += '<div class="zone-grid">';
+    p.zones.forEach(function(z) {
+      var col = z.open ? '#ff9800' : '#4caf50';
+      var st = z.open ? 'Open' : 'Closed';
+      var dotCol = z.bypassed ? 'gray' : col;
+      var cls = 'zone-card';
+      if (z.alarm) cls += ' alarm-zone';
+      else if (z.was_in_alarm) cls += ' was-alarm';
+      var tags = '';
+      if (z.bypassed) tags += '<span class="tag bp">BYP</span>';
+      if (z.alarm) tags += '<span class="tag al">ALARM</span>';
+      else if (z.was_in_alarm) tags += '<span class="tag al">WAS ALARM</span>';
+      var bpCls = z.bypassed ? ' on' : '';
+      h += '<div class="' + cls + '">' +
+        '<div class="zone-top"><span class="dot" style="background:' + dotCol + '"></span>' +
+        '<span class="name">' + z.name + '</span></div>' +
+        '<div class="zone-bottom"><div class="tags">' + tags +
+        '<span style="color:' + col + ';font-weight:500">' + st + '</span></div>' +
+        '<button class="bp-btn' + bpCls + '" onclick="doBypass(' + z.id + ',' + (!z.bypassed) + ')" title="' + (z.bypassed?'Un-bypass':'Bypass') + '">&#x26D4;</button>' +
+        '</div></div>';
+    });
+    h += '</div>';
+    $('elZones').innerHTML = h;
+  }
+
+  function renderHist() {
+    $('elHist').style.display = '';
+    if (!histEvents.length) {
+      $('elHist').innerHTML = '<div style="opacity:.5;font-size:13px;padding:8px;text-align:center">No events yet</div>';
+      return;
+    }
+    var h = '';
+    histEvents.slice(0,40).forEach(function(e) {
+      var prop = e.property || '';
+      var val = e.value;
+      var col = '#4caf50';
+      if (prop === 'alarm' || prop === 'panic' || prop === 'audible_alarm') col = '#e94560';
+      else if (prop === 'open' && val === true) col = '#ff9800';
+      else if (prop === 'entry_delay' || prop === 'exit_delay') col = '#ffeb3b';
+      var ts = e.timestamp.substring(0,19).replace('T',' ');
+      var evLabel = prop.toUpperCase();
+      if (typeof val === 'boolean') evLabel += val ? ' ON' : ' OFF';
+      else if (val && typeof val === 'string') evLabel += ' ' + val.toUpperCase();
+      var icon = e.type === 'partition' ? '&#x1F3DB;' : '&#x1F4E1;';
+      h += '<div class="hist"><span class="dot" style="background:' + col + '"></span>' +
+        '<div class="info"><div class="zn">' + icon + ' ' + e.label + '</div><div class="ts">' + ts + '</div></div>' +
+        '<span class="ev" style="color:' + col + '">' + evLabel + '</span></div>';
+    });
+    $('elHist').innerHTML = h;
+  }
+
+  function showErr(msg) {
+    $('elErr').textContent = msg; $('elErr').style.display = '';
+    setTimeout(function(){ $('elErr').style.display = 'none'; }, 4000);
+  }
+
+  window.doLogout = function() {
+    stopPoll();
+    localStorage.removeItem('px_token'); localStorage.removeItem('px_user');
+    localStorage.removeItem('px_code'); localStorage.removeItem('px_role');
+    token = null; username = null; alarmCode = null; userRole = null;
+    goLogin();
+  };
+
+  // ---- Invite QR ----
+  window.doInvite = function() {
+    var el = $('inviteContent');
+    el.innerHTML = '<p style="opacity:.5">Generating invite…</p>';
+    $('inviteModal').style.display = '';
+    api('POST', '/auth/invite').then(function(d) {
+      var mins = Math.round(d.expires_in_seconds / 60);
+      var html = '';
+      if (d.qr_data_uri) {
+        html += '<img class="qr-img" src="' + d.qr_data_uri + '" alt="QR">';
+      }
+      html += '<div class="code-text">' + d.code + '</div>';
+      html += '<div class="expire">Expires in ' + mins + ' minutes &bull; Single use only</div>';
+      html += '<div style="font-size:11px;opacity:.4;word-break:break-all;margin-bottom:8px">' + d.uri + '</div>';
+      html += '<button class="close-btn" onclick="closeInvite()">Close</button>';
+      el.innerHTML = html;
+    }).catch(function(e) {
+      el.innerHTML = '<p class="err" style="display:block">Failed to create invite</p>'
+        + '<button class="close-btn" onclick="closeInvite()">Close</button>';
+    });
+  };
+  window.closeInvite = function(e) {
+    if (e && e.target !== $('inviteModal')) return;
+    $('inviteModal').style.display = 'none';
+  };
+
+  // INIT
+  if (token) { goApp(); } else { goLogin(); }
+})();
+</script>
+</body>
+</html>"""
+
+
+@router.get("/dashboard", response_class=HTMLResponse)
+def dashboard():
+    return DASHBOARD_HTML

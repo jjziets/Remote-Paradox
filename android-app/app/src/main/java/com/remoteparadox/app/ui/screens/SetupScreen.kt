@@ -29,6 +29,7 @@ fun SetupScreen(
     error: String?,
     onRegister: (host: String, port: Int, fingerprint: String, inviteCode: String, username: String, password: String) -> Unit,
     onScanInstead: () -> Unit,
+    onLoginInstead: () -> Unit,
 ) {
     var host by remember(serverConfig) { mutableStateOf(serverConfig?.host ?: "") }
     var port by remember(serverConfig) { mutableStateOf(serverConfig?.port?.toString() ?: "8080") }
@@ -126,7 +127,11 @@ fun SetupScreen(
             }
         }
 
-        Spacer(Modifier.height(16.dp))
+        Spacer(Modifier.height(12.dp))
+        TextButton(onClick = onLoginInstead) {
+            Text("Already have an account? Log in")
+        }
+        Spacer(Modifier.height(4.dp))
         TextButton(onClick = onScanInstead) {
             Text("Scan QR code instead")
         }

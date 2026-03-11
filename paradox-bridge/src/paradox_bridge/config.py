@@ -34,6 +34,8 @@ class AppConfig:
     tls_cert_path: str = ""
     tls_key_path: str = ""
     demo_mode: bool = False
+    public_host: str = ""
+    public_port: int = 0
 
     @property
     def db_path(self) -> str:
@@ -81,4 +83,6 @@ def load_config(path: str) -> AppConfig:
         tls_cert_path=merged.get("tls_cert_path", ""),
         tls_key_path=merged.get("tls_key_path", ""),
         demo_mode=merged.get("demo_mode", False),
+        public_host=merged.get("public_host", ""),
+        public_port=merged.get("public_port", 0),
     )

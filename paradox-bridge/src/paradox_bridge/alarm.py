@@ -1,9 +1,14 @@
-"""Alarm service — wraps PAI to provide status, arm, and disarm."""
+"""Alarm service — wraps PAI (real) or VirtualPanel (demo).
 
-import threading
+The API layer uses AlarmService exclusively. In demo mode it delegates
+to VirtualPanel which simulates a Paradox SP6000 with identical boolean
+states, timing, and behavior to the real PAI library.
+"""
+
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
 from typing import Optional
+
+from paradox_bridge.virtual_panel import VirtualPanel
 
 
 @dataclass
@@ -13,6 +18,9 @@ class ZoneInfo:
     open: bool
     bypassed: bool = False
     partition_id: int = 1
+    alarm: bool = False
+    was_in_alarm: bool = False
+    tamper: bool = False
 
 
 @dataclass
@@ -20,40 +28,15 @@ class PartitionStatus:
     id: int
     name: str
     armed: bool
-    mode: str  # "away", "stay", "disarmed"
+    mode: str       # disarmed | arming | armed_away | armed_home | triggered
+    entry_delay: bool = False
+    ready: bool = True
     zones: list[ZoneInfo] = field(default_factory=list)
 
 
 @dataclass
 class AlarmStatus:
     partitions: list[PartitionStatus] = field(default_factory=list)
-
-
-# ── Demo zone definitions ──
-
-_DEMO_INTERNAL_ZONES = [
-    ZoneInfo(id=1, name="Main Bedroom", open=False, partition_id=1),
-    ZoneInfo(id=2, name="Second Room", open=False, partition_id=1),
-    ZoneInfo(id=3, name="Third Room", open=False, partition_id=1),
-    ZoneInfo(id=4, name="Dressing Room", open=False, partition_id=1),
-    ZoneInfo(id=5, name="Kitchen", open=False, partition_id=1),
-    ZoneInfo(id=6, name="Studio", open=False, partition_id=1),
-    ZoneInfo(id=7, name="Living Room", open=False, partition_id=1),
-    ZoneInfo(id=8, name="Study", open=False, partition_id=1),
-    ZoneInfo(id=9, name="Front Door", open=False, partition_id=1),
-    ZoneInfo(id=10, name="Back Door", open=False, partition_id=1),
-    ZoneInfo(id=11, name="Main Bedroom Door", open=False, partition_id=1),
-    ZoneInfo(id=12, name="Hallway", open=False, partition_id=1),
-]
-
-_DEMO_EXTERNAL_ZONES = [
-    ZoneInfo(id=33, name="Beam West", open=False, partition_id=2),
-    ZoneInfo(id=34, name="Beam North", open=False, partition_id=2),
-    ZoneInfo(id=35, name="Beam East", open=False, partition_id=2),
-    ZoneInfo(id=36, name="Beam South", open=False, partition_id=2),
-    ZoneInfo(id=37, name="Garage", open=False, partition_id=2),
-    ZoneInfo(id=38, name="Wendy House", open=False, partition_id=2),
-]
 
 
 class AlarmService:
@@ -66,24 +49,12 @@ class AlarmService:
         self._pai = None
         self._connected = False
         self._demo_mode = demo_mode
-        self._lock = threading.Lock()
-
-        # Per-partition arm state: {partition_id: {"armed": bool, "mode": str}}
-        self._demo_partitions: dict[int, dict] = {
-            1: {"armed": False, "mode": "disarmed", "name": "Internal"},
-            2: {"armed": False, "mode": "disarmed", "name": "External"},
-        }
-        # Mutable zone state keyed by zone id
-        self._demo_zones: dict[int, ZoneInfo] = {}
-        self._demo_history: list[dict] = []
+        self._panel: Optional[VirtualPanel] = None
 
         if demo_mode:
+            self._panel = VirtualPanel()
+            self._panel.COMMAND_ACK_DELAY = 1.5  # realistic serial roundtrip
             self._connected = True
-            for z in _DEMO_INTERNAL_ZONES + _DEMO_EXTERNAL_ZONES:
-                self._demo_zones[z.id] = ZoneInfo(
-                    id=z.id, name=z.name, open=z.open,
-                    bypassed=z.bypassed, partition_id=z.partition_id,
-                )
 
     @property
     def is_connected(self) -> bool:
@@ -93,37 +64,41 @@ class AlarmService:
     def demo_mode(self) -> bool:
         return self._demo_mode
 
+    @property
+    def panel(self) -> Optional[VirtualPanel]:
+        return self._panel
+
     def _require_connection(self) -> None:
         if not self._connected and not self._demo_mode:
             raise ConnectionError("Not connected to alarm panel")
-
-    # ── Zone lookup ──
-
-    def _find_demo_zone(self, zone_id: int) -> ZoneInfo:
-        z = self._demo_zones.get(zone_id)
-        if z is None:
-            raise ValueError(f"Zone {zone_id} not found")
-        return z
 
     # ── Status ──
 
     def get_status(self) -> AlarmStatus:
         self._require_connection()
         if self._demo_mode:
-            return self._demo_status()
+            return self._status_from_virtual_panel()
 
         partitions = []
         for pid, pdata in self._pai.panel.get("partitions", {}).items():
             status = pdata.get("status", {})
             armed = status.get("armed", False)
             if armed and status.get("armed_stay", False):
-                mode = "stay"
+                mode = "armed_home"
             elif armed:
-                mode = "away"
+                mode = "armed_away"
             else:
                 mode = "disarmed"
+            if status.get("exit_delay"):
+                mode = "arming"
+            if any([status.get("audible_alarm"), status.get("silent_alarm"),
+                     status.get("fire_alarm")]):
+                mode = "triggered"
             partitions.append(PartitionStatus(
-                id=pid, name=f"Partition {pid}", armed=armed, mode=mode, zones=[],
+                id=pid, name=f"Partition {pid}", armed=armed, mode=mode,
+                entry_delay=status.get("entry_delay", False),
+                ready=status.get("ready_status", True),
+                zones=[],
             ))
 
         raw_zones = self._pai.storage.zones.select()
@@ -131,123 +106,120 @@ class AlarmService:
             zi = ZoneInfo(
                 id=z["id"], name=z.get("label", f"Zone {z['id']}"),
                 open=z.get("open", False),
+                bypassed=z.get("bypassed", False),
+                alarm=z.get("alarm", False),
+                was_in_alarm=z.get("was_in_alarm", False),
+                tamper=z.get("tamper", False),
             )
             for p in partitions:
                 p.zones.append(zi)
 
         return AlarmStatus(partitions=partitions)
 
-    def _demo_status(self) -> AlarmStatus:
-        with self._lock:
-            parts = []
-            for pid, pdata in sorted(self._demo_partitions.items()):
-                zones = [
-                    ZoneInfo(id=z.id, name=z.name, open=z.open,
-                             bypassed=z.bypassed, partition_id=z.partition_id)
-                    for z in self._demo_zones.values()
-                    if z.partition_id == pid
-                ]
-                zones.sort(key=lambda z: z.id)
-                parts.append(PartitionStatus(
-                    id=pid, name=pdata["name"],
-                    armed=pdata["armed"], mode=pdata["mode"],
-                    zones=zones,
-                ))
-            return AlarmStatus(partitions=parts)
+    def _status_from_virtual_panel(self) -> AlarmStatus:
+        vp = self._panel
+        vp.tick()
+        parts = []
+        for pid in sorted(vp.partitions):
+            p = vp.partitions[pid]
+            mode = vp.get_current_state(pid)
+            zones = [
+                ZoneInfo(
+                    id=z["id"], name=z["label"], open=z["open"],
+                    bypassed=z["bypassed"], partition_id=z["partition_id"],
+                    alarm=z["alarm"], was_in_alarm=z["was_in_alarm"],
+                    tamper=z["tamper"],
+                )
+                for z in sorted(vp.zones.values(), key=lambda x: x["id"])
+                if z["partition_id"] == pid
+            ]
+            parts.append(PartitionStatus(
+                id=pid, name=p["label"],
+                armed=p["arm"], mode=mode,
+                entry_delay=p["entry_delay"],
+                ready=p["ready_status"],
+                zones=zones,
+            ))
+        return AlarmStatus(partitions=parts)
 
-    # ── Arm / Disarm ──
+    # ── Partition control (maps to PAI commands) ──
 
     def arm_away(self, code: str, partition_id: int = 1) -> bool:
         self._require_connection()
         if self._demo_mode:
-            with self._lock:
-                p = self._demo_partitions.get(partition_id)
-                if p is None:
-                    return False
-                p["armed"] = True
-                p["mode"] = "away"
-            return True
+            return self._panel.control_partition(partition_id, "arm")
         return self._pai.control_partition(partition_id, "arm", code)
 
     def arm_stay(self, code: str, partition_id: int = 1) -> bool:
         self._require_connection()
         if self._demo_mode:
-            with self._lock:
-                p = self._demo_partitions.get(partition_id)
-                if p is None:
-                    return False
-                p["armed"] = True
-                p["mode"] = "stay"
-            return True
+            return self._panel.control_partition(partition_id, "arm_stay")
         return self._pai.control_partition(partition_id, "arm_stay", code)
+
+    def arm_force(self, code: str, partition_id: int = 1) -> bool:
+        self._require_connection()
+        if self._demo_mode:
+            return self._panel.control_partition(partition_id, "arm_force")
+        return self._pai.control_partition(partition_id, "arm_force", code)
 
     def disarm(self, code: str, partition_id: int = 1) -> bool:
         self._require_connection()
         if self._demo_mode:
-            with self._lock:
-                p = self._demo_partitions.get(partition_id)
-                if p is None:
-                    return False
-                p["armed"] = False
-                p["mode"] = "disarmed"
-            return True
+            return self._panel.control_partition(partition_id, "disarm")
         return self._pai.control_partition(partition_id, "disarm", code)
 
-    # ── Zone bypass ──
+    # ── Zone control (maps to PAI commands) ──
 
     def bypass_zone(self, zone_id: int) -> bool:
         if self._demo_mode:
-            with self._lock:
-                z = self._find_demo_zone(zone_id)
-                z.bypassed = True
-            return True
-        raise NotImplementedError("PAI bypass not yet implemented")
+            return self._panel.control_zone(zone_id, "bypass")
+        return self._pai.control_zone(zone_id, "bypass")
 
     def unbypass_zone(self, zone_id: int) -> bool:
         if self._demo_mode:
-            with self._lock:
-                z = self._find_demo_zone(zone_id)
-                z.bypassed = False
-            return True
-        raise NotImplementedError("PAI unbypass not yet implemented")
+            return self._panel.control_zone(zone_id, "clear_bypass")
+        return self._pai.control_zone(zone_id, "clear_bypass")
 
-    # ── Zone toggle (demo / debug) ──
+    # ── Zone toggle (demo only — simulates physical sensor) ──
 
     def set_zone_open(self, zone_id: int, is_open: bool) -> None:
-        with self._lock:
-            z = self._find_demo_zone(zone_id)
-            z.open = is_open
-            event = "opened" if is_open else "closed"
-            self._demo_history.insert(0, {
-                "zone_id": z.id,
-                "zone_name": z.name,
-                "partition_id": z.partition_id,
-                "event": event,
-                "timestamp": datetime.now(timezone.utc).isoformat(),
-            })
+        if not self._demo_mode:
+            raise RuntimeError("set_zone_open only available in demo mode")
+        self._panel.set_zone_open(zone_id, is_open)
+        self._panel.tick()
 
-    # ── History ──
+    # ── Panic (demo only — simulates keypad panic) ──
+
+    def send_panic(self, partition_id: int, panic_type: str) -> bool:
+        if not self._demo_mode:
+            raise RuntimeError("send_panic only available in demo mode")
+        return self._panel.send_panic(partition_id, panic_type)
+
+    # ── Event history ──
 
     def get_zone_history(self, limit: int = 50) -> list[dict]:
-        with self._lock:
-            return list(self._demo_history[:limit])
+        if self._demo_mode:
+            return self._panel.get_events(limit=limit)
+        return []
 
     # ── Zone listing (for CLI) ──
 
     def list_all_zones(self) -> list[dict]:
-        with self._lock:
+        if self._demo_mode:
             result = []
-            for z in sorted(self._demo_zones.values(), key=lambda x: x.id):
-                pname = self._demo_partitions.get(z.partition_id, {}).get("name", "?")
+            for z in sorted(self._panel.zones.values(), key=lambda x: x["id"]):
+                p = self._panel.partitions.get(z["partition_id"], {})
                 result.append({
-                    "id": z.id,
-                    "name": z.name,
-                    "partition": pname,
-                    "partition_id": z.partition_id,
-                    "open": z.open,
-                    "bypassed": z.bypassed,
+                    "id": z["id"],
+                    "name": z["label"],
+                    "partition": p.get("label", "?"),
+                    "partition_id": z["partition_id"],
+                    "open": z["open"],
+                    "bypassed": z["bypassed"],
+                    "type": z["type"],
                 })
             return result
+        return []
 
     # ── Connection ──
 

@@ -1,7 +1,14 @@
 package com.remoteparadox.app.data
 
+import kotlinx.serialization.KSerializer
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.descriptors.PrimitiveKind
+import kotlinx.serialization.descriptors.PrimitiveSerialDescriptor
+import kotlinx.serialization.encoding.Decoder
+import kotlinx.serialization.encoding.Encoder
+import kotlinx.serialization.json.JsonDecoder
+import kotlinx.serialization.json.JsonPrimitive
 
 @Serializable
 data class LoginRequest(val username: String, val password: String)
@@ -41,6 +48,9 @@ data class ZoneInfo(
     val open: Boolean,
     val bypassed: Boolean = false,
     @SerialName("partition_id") val partitionId: Int = 1,
+    val alarm: Boolean = false,
+    @SerialName("was_in_alarm") val wasInAlarm: Boolean = false,
+    val tamper: Boolean = false,
 )
 
 @Serializable
@@ -49,6 +59,8 @@ data class PartitionInfo(
     val name: String,
     val armed: Boolean,
     val mode: String,
+    @SerialName("entry_delay") val entryDelay: Boolean = false,
+    val ready: Boolean = true,
     val zones: List<ZoneInfo>,
 )
 
@@ -59,16 +71,33 @@ data class AlarmStatus(
 )
 
 @Serializable
-data class ZoneEvent(
-    @SerialName("zone_id") val zoneId: Int,
-    @SerialName("zone_name") val zoneName: String,
-    @SerialName("partition_id") val partitionId: Int,
-    val event: String,
+data class PanicRequest(
+    @SerialName("partition_id") val partitionId: Int = 1,
+    @SerialName("panic_type") val panicType: String = "emergency",
+)
+
+object AnyValueAsString : KSerializer<String> {
+    override val descriptor = PrimitiveSerialDescriptor("AnyValue", PrimitiveKind.STRING)
+    override fun serialize(encoder: Encoder, value: String) = encoder.encodeString(value)
+    override fun deserialize(decoder: Decoder): String {
+        val jsonDecoder = decoder as? JsonDecoder ?: return decoder.decodeString()
+        val element = jsonDecoder.decodeJsonElement()
+        return if (element is JsonPrimitive) element.content else element.toString()
+    }
+}
+
+@Serializable
+data class PanelEvent(
+    val type: String,
+    val label: String,
+    val property: String,
+    @Serializable(with = AnyValueAsString::class)
+    val value: String,
     val timestamp: String,
 )
 
 @Serializable
-data class ZoneHistoryResponse(val events: List<ZoneEvent>)
+data class EventHistoryResponse(val events: List<PanelEvent>)
 
 @Serializable
 data class HealthResponse(

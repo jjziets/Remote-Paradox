@@ -37,11 +37,17 @@ interface ParadoxApi {
         @Body req: BypassRequest,
     ): Response<ActionResult>
 
+    @POST("alarm/panic")
+    suspend fun panic(
+        @Header("Authorization") auth: String,
+        @Body req: PanicRequest,
+    ): Response<ActionResult>
+
     @GET("alarm/history")
-    suspend fun zoneHistory(
+    suspend fun eventHistory(
         @Header("Authorization") auth: String,
         @Query("limit") limit: Int = 50,
-    ): Response<ZoneHistoryResponse>
+    ): Response<EventHistoryResponse>
 
     @GET("alarm/logs")
     suspend fun auditLogs(

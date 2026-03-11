@@ -29,6 +29,7 @@ class InviteResponse(BaseModel):
     code: str
     uri: str
     expires_in_seconds: int
+    qr_data_uri: str = ""
 
 
 class ZoneResponse(BaseModel):
@@ -37,6 +38,9 @@ class ZoneResponse(BaseModel):
     open: bool
     bypassed: bool = False
     partition_id: int = 1
+    alarm: bool = False
+    was_in_alarm: bool = False
+    tamper: bool = False
 
 
 class PartitionResponse(BaseModel):
@@ -44,6 +48,8 @@ class PartitionResponse(BaseModel):
     name: str
     armed: bool
     mode: str
+    entry_delay: bool = False
+    ready: bool = True
     zones: list[ZoneResponse]
 
 
@@ -67,16 +73,21 @@ class ZoneToggleRequest(BaseModel):
     open: bool
 
 
-class ZoneEventResponse(BaseModel):
-    zone_id: int
-    zone_name: str
-    partition_id: int
-    event: str
+class PanicRequest(BaseModel):
+    partition_id: int = 1
+    panic_type: str = "emergency"  # emergency | fire | medical
+
+
+class EventResponse(BaseModel):
+    type: str           # "zone" | "partition"
+    label: str
+    property: str       # "open", "alarm", "entry_delay", "panic", etc.
+    value: object       # bool or str
     timestamp: str
 
 
-class ZoneHistoryResponse(BaseModel):
-    events: list[ZoneEventResponse]
+class EventHistoryResponse(BaseModel):
+    events: list[EventResponse]
 
 
 class ActionResult(BaseModel):
