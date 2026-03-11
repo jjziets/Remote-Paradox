@@ -57,6 +57,12 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;b
 .tag.bp{background:rgba(255,152,0,.2);color:#ff9800}
 .tag.al{background:rgba(233,69,96,.3);color:#e94560}
 .zone-bottom .bp-btn{background:none;border:none;cursor:pointer;font-size:14px;padding:2px 4px;border-radius:4px;color:rgba(255,255,255,.3)}
+
+.panic-section{margin:12px 0}
+.panic-row{display:flex;gap:8px}
+.btn.panic{background:#b71c1c;font-size:12px;padding:12px}
+.btn.panic.medical{background:#1565c0}
+.btn.panic.fire{background:#e65100}
 .zone-bottom .bp-btn.on{color:#ff9800}
 
 .section-title{font-weight:700;font-size:16px;margin:12px 0 8px}
@@ -80,10 +86,10 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;b
 .login-wrap{max-width:360px;margin:80px auto;padding:24px}
 .login-wrap h2{margin-bottom:16px;text-align:center}
 .login-wrap input{width:100%;padding:12px;margin-bottom:10px;border-radius:8px;border:1px solid rgba(255,255,255,.2);background:#16213e;color:#fff;font-size:14px}
+.login-wrap .hint{font-size:11px;opacity:.4;margin-bottom:8px;text-align:center}
 .login-wrap .server-row{display:flex;gap:8px;margin-bottom:10px}
 .login-wrap .server-row input:first-child{flex:2}
 .login-wrap .server-row input:last-child{flex:1;width:auto}
-.login-wrap .hint{font-size:11px;opacity:.4;margin-bottom:8px;text-align:center}
 .code-box{text-align:center;margin:12px 0}
 .code-box input{width:200px;padding:12px;border-radius:8px;border:1px solid rgba(255,255,255,.2);background:#16213e;color:#fff;font-size:20px;text-align:center;letter-spacing:4px}
 </style>
@@ -103,14 +109,17 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;b
 <!-- LOGIN -->
 <div id="vLogin" class="login-wrap">
   <h2>Remote Paradox</h2>
-  <div class="hint">Enter the server address and your credentials</div>
-  <div class="server-row">
-    <input id="inHost" placeholder="Server IP / hostname" autocomplete="url">
-    <input id="inPort" placeholder="Port" value="8080">
+  <div class="hint" id="loginHint">Log in with your credentials</div>
+  <!-- Server fields: shown when opened outside nginx (file:// or localhost dev) -->
+  <div id="serverFields" style="display:none">
+    <div class="server-row">
+      <input id="inHost" placeholder="Server IP / hostname" autocomplete="url">
+      <input id="inPort" placeholder="9433" value="9433">
+    </div>
+    <label style="display:flex;align-items:center;gap:8px;margin-bottom:10px;font-size:12px;opacity:.7;cursor:pointer">
+      <input type="checkbox" id="inHttps" checked style="width:auto;margin:0"> Use HTTPS
+    </label>
   </div>
-  <label style="display:flex;align-items:center;gap:8px;margin-bottom:10px;font-size:12px;opacity:.7;cursor:pointer">
-    <input type="checkbox" id="inHttps" checked style="width:auto;margin:0"> Use HTTPS
-  </label>
   <input id="inUser" placeholder="Username" autocomplete="username">
   <input id="inPass" placeholder="Password" type="password" autocomplete="current-password">
   <div id="loginErr" class="err"></div>
@@ -132,6 +141,14 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;b
   </div>
 
   <div id="elCtrls" class="btns"></div>
+
+  <div id="elPanic" class="panic-section" style="display:none">
+    <div class="panic-row">
+      <button class="btn panic" onclick="doPanic('emergency')">&#x1F6A8; PANIC</button>
+      <button class="btn panic medical" onclick="doPanic('medical')">&#x1F3E5; MEDICAL</button>
+      <button class="btn panic fire" onclick="doPanic('fire')">&#x1F525; FIRE</button>
+    </div>
+  </div>
 
   <div class="view-tabs">
     <button class="view-tab active" id="vtStatus" onclick="switchView('status')">Zones</button>
@@ -162,8 +179,18 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;b
 
   var $ = function(id){ return document.getElementById(id); };
 
+  // Dev mode: file:// or localhost without an API behind it
+  var isDevMode = location.protocol === 'file:' ||
+    (location.hostname === 'localhost' && location.port !== '9433');
+
+  function esc(s) {
+    var d = document.createElement('div');
+    d.textContent = s;
+    return d.innerHTML;
+  }
+
   function api(method, path, body) {
-    var url = baseUrl + path;
+    var url = (isDevMode ? baseUrl : '') + path;
     var opts = { method: method, headers: { 'Content-Type': 'application/json' } };
     if (token) opts.headers['Authorization'] = 'Bearer ' + token;
     if (body) opts.body = JSON.stringify(body);
@@ -187,26 +214,33 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;b
     stopPoll();
     $('vLogin').style.display = '';
     $('vApp').style.display = 'none';
-    if (baseUrl) {
-      try {
-        var u = new URL(baseUrl);
-        $('inHost').value = u.hostname;
-        $('inPort').value = u.port || '8080';
-      } catch(e){}
+    if (isDevMode) {
+      $('serverFields').style.display = '';
+      $('loginHint').textContent = 'Enter the server address and your credentials';
+      if (baseUrl) {
+        try {
+          var u = new URL(baseUrl);
+          $('inHost').value = u.hostname;
+          $('inPort').value = u.port || '9433';
+          $('inHttps').checked = u.protocol === 'https:';
+        } catch(e){}
+      }
     }
   }
 
   function goApp() {
     $('vLogin').style.display = 'none';
     $('vApp').style.display = '';
-    $('userLabel').textContent = username || '';
+    $('userLabel').textContent = esc(username || '');
     $('btnInvite').style.display = (userRole === 'admin') ? '' : 'none';
     if (alarmCode) {
       $('elCodeSetup').style.display = 'none';
       $('elCtrls').style.display = '';
+      $('elPanic').style.display = '';
     } else {
       $('elCodeSetup').style.display = '';
       $('elCtrls').style.display = 'none';
+      $('elPanic').style.display = 'none';
     }
     doRefresh();
     startPoll();
@@ -216,15 +250,17 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;b
   function stopPoll() { if (timer) { clearInterval(timer); timer = null; } }
 
   window.doLogin = function() {
-    var host = $('inHost').value.trim();
-    var port = $('inPort').value.trim() || '8080';
     var u = $('inUser').value, p = $('inPass').value;
-    if (!host) { $('loginErr').textContent = 'Enter a server address'; $('loginErr').style.display = ''; return; }
+    if (isDevMode) {
+      var host = $('inHost').value.trim();
+      if (!host) { $('loginErr').textContent = 'Enter a server address'; $('loginErr').style.display = ''; return; }
+      var port = $('inPort').value.trim() || '9433';
+      var scheme = $('inHttps').checked ? 'https' : 'http';
+      baseUrl = scheme + '://' + host + ':' + port;
+      localStorage.setItem('px_base_url', baseUrl);
+    }
+    if (!u || !p) { $('loginErr').textContent = 'Enter username and password'; $('loginErr').style.display = ''; return; }
     $('loginErr').style.display = 'none';
-
-    var scheme = $('inHttps').checked ? 'https' : 'http';
-    baseUrl = scheme + '://' + host + ':' + port;
-    localStorage.setItem('px_base_url', baseUrl);
 
     api('POST', '/auth/login', { username: u, password: p }).then(function(d) {
       token = d.token; username = d.username; userRole = d.role || '';
@@ -234,7 +270,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;b
       goApp();
     }).catch(function(e) {
       if (e === 'auth') return;
-      $('loginErr').textContent = 'Connection failed — check server address';
+      $('loginErr').textContent = 'Login failed — check credentials';
       $('loginErr').style.display = '';
     });
   };
@@ -246,6 +282,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;b
     localStorage.setItem('px_code', c);
     $('elCodeSetup').style.display = 'none';
     $('elCtrls').style.display = '';
+    $('elPanic').style.display = '';
     renderCtrls();
   };
 
@@ -299,8 +336,8 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;b
       if (p.mode === 'arming') extra = ' &#x23F3;';
       if (p.mode === 'triggered') extra = ' &#x26A0;';
       if (p.entry_delay) extra = ' &#x1F6AA;';
-      return '<button class="tab' + cls + '" onclick="selectPart(' + p.id + ')">' +
-        '<span class="dot" style="background:' + col + '"></span>' + p.name + extra + '</button>';
+      return '<button class="tab' + cls + '" onclick="selectPart(' + parseInt(p.id) + ')">' +
+        '<span class="dot" style="background:' + col + '"></span>' + esc(p.name) + extra + '</button>';
     }).join('');
   }
 
@@ -317,7 +354,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;b
       return;
     }
     var triggered = (p.zones || []).filter(function(z){ return z.alarm || z.was_in_alarm; });
-    var names = triggered.map(function(z){ return z.name; }).join(', ');
+    var names = triggered.map(function(z){ return esc(z.name); }).join(', ');
     $('elAlarm').style.display = '';
     $('elAlarm').innerHTML =
       '<div class="alarm-banner">' +
@@ -344,11 +381,11 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;b
     } else if (m === 'disarmed') {
       col = '#4caf50'; icon = '&#x1F513;'; label = 'DISARMED';
     } else {
-      col = 'gray'; icon = '?'; label = m.toUpperCase();
+      col = 'gray'; icon = '?'; label = esc(m).toUpperCase();
     }
     var zones = p.zones || [], op = 0, bp = 0, al = 0;
     zones.forEach(function(z){ if(z.open) op++; if(z.bypassed) bp++; if(z.alarm || z.was_in_alarm) al++; });
-    var sub = p.name + ' &bull; ' + zones.length + ' zones &bull; ' + op + ' open';
+    var sub = esc(p.name) + ' &bull; ' + zones.length + ' zones &bull; ' + op + ' open';
     if (bp) sub += ' &bull; ' + bp + ' bypassed';
     if (al) sub += ' &bull; <span style="color:#e94560">' + al + ' alarm</span>';
     if (!p.ready && m === 'disarmed') sub += ' &bull; <span style="color:#ff9800">NOT READY</span>';
@@ -388,19 +425,26 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;b
 
   window.doArm = function(action) {
     api('POST', '/alarm/' + action, { code: alarmCode, partition_id: selectedPid }).then(function(d) {
-      if (d.success) doRefresh(); else showErr('Action failed: ' + (d.message||''));
-    }).catch(function(e){ showErr(String(e)); });
+      if (d.success) doRefresh(); else showErr('Action failed: ' + esc(d.message||''));
+    }).catch(function(e){ showErr(esc(String(e))); });
+  };
+
+  window.doPanic = function(type) {
+    if (!confirm('Send ' + type.toUpperCase() + ' panic alert?')) return;
+    api('POST', '/alarm/panic', { partition_id: selectedPid, panic_type: type }).then(function(d) {
+      if (d.success) doRefresh(); else showErr('Panic failed');
+    }).catch(function(e){ showErr(esc(String(e))); });
   };
 
   window.doBypass = function(zoneId, bypass) {
     api('POST', '/alarm/bypass', { zone_id: zoneId, bypass: bypass }).then(function(){ doRefresh(); })
-    .catch(function(e){ showErr(String(e)); });
+    .catch(function(e){ showErr(esc(String(e))); });
   };
 
   function renderZones() {
     var p = partitions.find(function(x){ return x.id === selectedPid; });
     if (!p || !p.zones.length) { $('elZones').innerHTML = ''; return; }
-    var h = '<div class="section-title">' + p.name + ' &mdash; ' + p.zones.length + ' zones</div>';
+    var h = '<div class="section-title">' + esc(p.name) + ' &mdash; ' + p.zones.length + ' zones</div>';
     h += '<div class="zone-grid">';
     p.zones.forEach(function(z) {
       var col = z.open ? '#ff9800' : '#4caf50';
@@ -416,10 +460,10 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;b
       var bpCls = z.bypassed ? ' on' : '';
       h += '<div class="' + cls + '">' +
         '<div class="zone-top"><span class="dot" style="background:' + dotCol + '"></span>' +
-        '<span class="name">' + z.name + '</span></div>' +
+        '<span class="name">' + esc(z.name) + '</span></div>' +
         '<div class="zone-bottom"><div class="tags">' + tags +
         '<span style="color:' + col + ';font-weight:500">' + st + '</span></div>' +
-        '<button class="bp-btn' + bpCls + '" onclick="doBypass(' + z.id + ',' + (!z.bypassed) + ')" title="' + (z.bypassed?'Un-bypass':'Bypass') + '">&#x26D4;</button>' +
+        '<button class="bp-btn' + bpCls + '" onclick="doBypass(' + parseInt(z.id) + ',' + (!z.bypassed) + ')" title="' + (z.bypassed?'Un-bypass':'Bypass') + '">&#x26D4;</button>' +
         '</div></div>';
     });
     h += '</div>';
@@ -441,12 +485,12 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;b
       else if (prop === 'open' && val === true) col = '#ff9800';
       else if (prop === 'entry_delay' || prop === 'exit_delay') col = '#ffeb3b';
       var ts = e.timestamp.substring(0,19).replace('T',' ');
-      var evLabel = prop.toUpperCase();
+      var evLabel = esc(prop).toUpperCase();
       if (typeof val === 'boolean') evLabel += val ? ' ON' : ' OFF';
-      else if (val && typeof val === 'string') evLabel += ' ' + val.toUpperCase();
+      else if (val && typeof val === 'string') evLabel += ' ' + esc(val).toUpperCase();
       var icon = e.type === 'partition' ? '&#x1F3DB;' : '&#x1F4E1;';
       h += '<div class="hist"><span class="dot" style="background:' + col + '"></span>' +
-        '<div class="info"><div class="zn">' + icon + ' ' + e.label + '</div><div class="ts">' + ts + '</div></div>' +
+        '<div class="info"><div class="zn">' + icon + ' ' + esc(e.label) + '</div><div class="ts">' + esc(ts) + '</div></div>' +
         '<span class="ev" style="color:' + col + '">' + evLabel + '</span></div>';
     });
     $('elHist').innerHTML = h;
@@ -476,9 +520,9 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;b
       if (d.qr_data_uri) {
         html += '<img class="qr-img" src="' + d.qr_data_uri + '" alt="QR">';
       }
-      html += '<div class="code-text">' + d.code + '</div>';
+      html += '<div class="code-text">' + esc(d.code) + '</div>';
       html += '<div class="expire">Expires in ' + mins + ' minutes &bull; Single use only</div>';
-      html += '<div style="font-size:11px;opacity:.4;word-break:break-all;margin-bottom:8px">' + d.uri + '</div>';
+      html += '<div style="font-size:11px;opacity:.4;word-break:break-all;margin-bottom:8px">' + esc(d.uri) + '</div>';
       html += '<button class="close-btn" onclick="closeInvite()">Close</button>';
       el.innerHTML = html;
     }).catch(function(e) {
@@ -491,8 +535,8 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;b
     $('inviteModal').style.display = 'none';
   };
 
-  // INIT — restore saved server URL into login fields
-  if (token && baseUrl) { goApp(); } else { goLogin(); }
+  // INIT
+  if (token) { goApp(); } else { goLogin(); }
 })();
 </script>
 </body>

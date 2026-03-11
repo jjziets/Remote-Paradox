@@ -107,10 +107,14 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     // ── Login ──
 
-    fun login(username: String, password: String) {
+    fun login(host: String, port: Int, username: String, password: String) {
         _state.update { it.copy(isLoading = true, error = null) }
         viewModelScope.launch(Dispatchers.IO) {
             try {
+                if (host.isNotBlank()) {
+                    tokenStore.serverHost = host
+                    tokenStore.serverPort = port
+                }
                 connectApi()
                 val a = api ?: run {
                     _state.update { it.copy(isLoading = false, error = "No server configured") }
@@ -161,6 +165,11 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     fun bypassZone(zoneId: Int, bypass: Boolean) =
         alarmAction(if (bypass) "bypass" else "unbypass") {
             it.bypassZone(tokenStore.bearerHeader, BypassRequest(zoneId, bypass))
+        }
+
+    fun sendPanic(panicType: String, partitionId: Int) =
+        alarmAction("panic") {
+            it.panic(tokenStore.bearerHeader, PanicRequest(partitionId, panicType))
         }
 
     private fun alarmAction(name: String, call: suspend (ParadoxApi) -> retrofit2.Response<ActionResult>) {

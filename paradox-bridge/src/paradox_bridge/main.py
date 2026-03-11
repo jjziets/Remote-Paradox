@@ -193,15 +193,30 @@ async def lifespan(application: FastAPI):
 
 app = FastAPI(title="Paradox Bridge", version="0.3.0", lifespan=lifespan)
 
-from fastapi.middleware.cors import CORSMiddleware
 
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+def _maybe_add_cors() -> None:
+    """Add CORS middleware in demo mode only (local dev testing).
+    In production, nginx handles CORS."""
+    cfg_path = os.environ.get("PARADOX_CONFIG", _CONFIG_PATH)
+    try:
+        import json
+        from pathlib import Path
+        p = Path(cfg_path)
+        if p.exists():
+            data = json.loads(p.read_text())
+            if data.get("demo_mode"):
+                from fastapi.middleware.cors import CORSMiddleware
+                app.add_middleware(
+                    CORSMiddleware,
+                    allow_origins=["*"],
+                    allow_methods=["*"],
+                    allow_headers=["*"],
+                )
+    except Exception:
+        pass
+
+
+_maybe_add_cors()
 
 app.include_router(dashboard_router)
 
@@ -410,7 +425,9 @@ def bypass_zone(
 @app.post("/alarm/zone-toggle", response_model=ActionResult)
 def zone_toggle(
     req: ZoneToggleRequest,
+    user: Annotated[dict, Depends(get_current_user)],
     alarm: Annotated[AlarmService, Depends(get_alarm)],
+    audit: Annotated[AuditService, Depends(get_audit)],
 ):
     if not alarm.demo_mode:
         raise HTTPException(status_code=403, detail="Zone toggle only available in demo mode")
@@ -419,10 +436,11 @@ def zone_toggle(
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
     action = "zone_opened" if req.open else "zone_closed"
+    audit.record(user["sub"], action, f"zone={req.zone_id}")
     return ActionResult(success=True, action=action, message=f"Zone {req.zone_id}")
 
 
-# ── Panic (demo) ──
+# ── Panic ──
 
 @app.post("/alarm/panic", response_model=ActionResult)
 def panic(
@@ -431,8 +449,8 @@ def panic(
     alarm: Annotated[AlarmService, Depends(get_alarm)],
     audit: Annotated[AuditService, Depends(get_audit)],
 ):
-    if not alarm.demo_mode:
-        raise HTTPException(status_code=403, detail="Panic only available in demo mode")
+    if not alarm.is_connected:
+        raise HTTPException(status_code=503, detail="Alarm not connected")
     ok = alarm.send_panic(partition_id=req.partition_id, panic_type=req.panic_type)
     audit.record(user["sub"], "panic", f"partition={req.partition_id} type={req.panic_type}")
     return ActionResult(success=ok, action="panic")

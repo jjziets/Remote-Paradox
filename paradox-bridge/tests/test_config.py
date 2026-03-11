@@ -41,8 +41,8 @@ class TestGenerateDefaultConfig:
         assert data["serial_port"] == "/dev/serial0"
         assert data["serial_baud"] == 9600
         assert data["api_port"] == 8080
-        assert data["api_host"] == "0.0.0.0"
-        assert data["jwt_expiry_hours"] == 720
+        assert data["api_host"] == "127.0.0.1"
+        assert data["jwt_expiry_hours"] == 72
         assert data["panel_pc_password"] == "0000"
         assert data["invite_expiry_seconds"] == 900
 

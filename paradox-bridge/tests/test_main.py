@@ -219,7 +219,8 @@ class TestAlarmDemo:
                      headers=auth_header(admin_token))
         alarm = app_module._alarm
         alarm.panel._force_exit_delay_done(1)
-        client.post("/alarm/zone-toggle", json={"zone_id": 1, "open": True})
+        client.post("/alarm/zone-toggle", json={"zone_id": 1, "open": True},
+                     headers=auth_header(admin_token))
         st = client.get("/alarm/status", headers=auth_header(admin_token)).json()
         p1 = [p for p in st["partitions"] if p["id"] == 1][0]
         assert p1["mode"] == "triggered"
@@ -233,7 +234,8 @@ class TestAlarmDemo:
                      headers=auth_header(admin_token))
         alarm = app_module._alarm
         alarm.panel._force_exit_delay_done(1)
-        client.post("/alarm/zone-toggle", json={"zone_id": 9, "open": True})
+        client.post("/alarm/zone-toggle", json={"zone_id": 9, "open": True},
+                     headers=auth_header(admin_token))
         st = client.get("/alarm/status", headers=auth_header(admin_token)).json()
         p1 = [p for p in st["partitions"] if p["id"] == 1][0]
         assert p1["entry_delay"] is True
@@ -274,20 +276,31 @@ class TestAlarmDemo:
         resp = client.post(
             "/alarm/zone-toggle",
             json={"zone_id": 1, "open": True},
+            headers=auth_header(admin_token),
         )
         assert resp.status_code == 200
         assert resp.json()["action"] == "zone_opened"
+
+    def test_zone_toggle_requires_auth(self, client, demo_app):
+        resp = client.post(
+            "/alarm/zone-toggle",
+            json={"zone_id": 1, "open": True},
+        )
+        assert resp.status_code in (401, 403)
 
     def test_zone_toggle_not_in_non_demo(self, client, admin_token):
         resp = client.post(
             "/alarm/zone-toggle",
             json={"zone_id": 1, "open": True},
+            headers=auth_header(admin_token),
         )
         assert resp.status_code == 403
 
     def test_event_history(self, client, demo_app, admin_token):
-        client.post("/alarm/zone-toggle", json={"zone_id": 1, "open": True})
-        client.post("/alarm/zone-toggle", json={"zone_id": 1, "open": False})
+        client.post("/alarm/zone-toggle", json={"zone_id": 1, "open": True},
+                     headers=auth_header(admin_token))
+        client.post("/alarm/zone-toggle", json={"zone_id": 1, "open": False},
+                     headers=auth_header(admin_token))
         resp = client.get("/alarm/history", headers=auth_header(admin_token))
         assert resp.status_code == 200
         events = resp.json()["events"]
@@ -307,8 +320,16 @@ class TestAlarmDemo:
         p1 = [p for p in st["partitions"] if p["id"] == 1][0]
         assert p1["mode"] == "triggered"
 
+    def test_panic_requires_auth(self, client, demo_app):
+        resp = client.post(
+            "/alarm/panic",
+            json={"partition_id": 1, "panic_type": "emergency"},
+        )
+        assert resp.status_code in (401, 403)
+
     def test_not_ready_prevents_arm(self, client, demo_app, admin_token):
-        client.post("/alarm/zone-toggle", json={"zone_id": 9, "open": True})
+        client.post("/alarm/zone-toggle", json={"zone_id": 9, "open": True},
+                     headers=auth_header(admin_token))
         st = client.get("/alarm/status", headers=auth_header(admin_token)).json()
         p1 = [p for p in st["partitions"] if p["id"] == 1][0]
         assert p1["ready"] is False
@@ -333,17 +354,9 @@ class TestAuditLogs:
         assert resp.status_code in (401, 403)
 
 
-class TestCORS:
-    def test_cors_preflight(self, client):
-        resp = client.options(
-            "/health",
-            headers={
-                "Origin": "http://localhost:3000",
-                "Access-Control-Request-Method": "GET",
-            },
-        )
-        assert "access-control-allow-origin" in resp.headers
+class TestNoCORS:
+    """FastAPI should NOT set CORS headers — nginx handles that."""
 
-    def test_cors_on_response(self, client):
+    def test_no_cors_header_on_response(self, client):
         resp = client.get("/health", headers={"Origin": "http://localhost:3000"})
-        assert "access-control-allow-origin" in resp.headers
+        assert "access-control-allow-origin" not in resp.headers

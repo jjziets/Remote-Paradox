@@ -2,6 +2,7 @@ package com.remoteparadox.app.ui.screens
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Visibility
@@ -12,6 +13,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextAlign
@@ -21,11 +23,15 @@ import androidx.compose.ui.unit.sp
 @Composable
 fun LoginScreen(
     savedUsername: String?,
+    savedHost: String?,
+    savedPort: Int,
     isLoading: Boolean,
     error: String?,
-    onLogin: (username: String, password: String) -> Unit,
+    onLogin: (host: String, port: Int, username: String, password: String) -> Unit,
     onSwitchServer: () -> Unit,
 ) {
+    var host by remember { mutableStateOf(savedHost ?: "") }
+    var port by remember { mutableStateOf(savedPort.toString()) }
     var username by remember { mutableStateOf(savedUsername ?: "") }
     var password by remember { mutableStateOf("") }
     var showPassword by remember { mutableStateOf(false) }
@@ -42,8 +48,28 @@ fun LoginScreen(
         Spacer(Modifier.height(12.dp))
         Text("Welcome Back", style = MaterialTheme.typography.headlineMedium, color = Color.White, fontWeight = FontWeight.Bold)
         Spacer(Modifier.height(8.dp))
-        Text("Session expired — log in again", color = Color.White.copy(alpha = 0.7f), fontSize = 14.sp)
-        Spacer(Modifier.height(32.dp))
+        Text("Log in to your alarm panel", color = Color.White.copy(alpha = 0.7f), fontSize = 14.sp)
+        Spacer(Modifier.height(24.dp))
+
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            OutlinedTextField(
+                value = host,
+                onValueChange = { host = it },
+                label = { Text("Server IP") },
+                modifier = Modifier.weight(2f),
+                singleLine = true,
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri),
+            )
+            OutlinedTextField(
+                value = port,
+                onValueChange = { port = it.filter { c -> c.isDigit() }.take(5) },
+                label = { Text("Port") },
+                modifier = Modifier.weight(1f),
+                singleLine = true,
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+            )
+        }
+        Spacer(Modifier.height(12.dp))
 
         OutlinedTextField(
             value = username,
@@ -76,9 +102,12 @@ fun LoginScreen(
 
         Spacer(Modifier.height(8.dp))
         Button(
-            onClick = { onLogin(username, password) },
+            onClick = {
+                val p = port.toIntOrNull() ?: 443
+                onLogin(host, p, username, password)
+            },
             modifier = Modifier.fillMaxWidth().height(50.dp),
-            enabled = !isLoading && username.isNotBlank() && password.isNotBlank(),
+            enabled = !isLoading && host.isNotBlank() && username.isNotBlank() && password.isNotBlank(),
         ) {
             if (isLoading) {
                 CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp)
