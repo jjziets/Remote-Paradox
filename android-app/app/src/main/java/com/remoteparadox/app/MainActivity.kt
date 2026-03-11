@@ -75,9 +75,11 @@ class MainActivity : ComponentActivity() {
 
                     Screen.Login -> LoginScreen(
                         savedUsername = vm.tokenStore.username,
+                        savedHost = vm.tokenStore.serverHost,
+                        savedPort = vm.tokenStore.serverPort,
                         isLoading = state.isLoading,
                         error = state.error,
-                        onLogin = { u, p -> vm.login(u, p) },
+                        onLogin = { h, p, u, pw -> vm.login(h, p, u, pw) },
                         onSwitchServer = { vm.switchServer() },
                     )
 

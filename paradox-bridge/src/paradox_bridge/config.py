@@ -10,8 +10,8 @@ _DEFAULTS = {
     "serial_port": "/dev/serial0",
     "serial_baud": 9600,
     "api_port": 8080,
-    "api_host": "0.0.0.0",
-    "jwt_expiry_hours": 720,  # 30 days
+    "api_host": "127.0.0.1",
+    "jwt_expiry_hours": 72,  # 3 days
     "panel_pc_password": "0000",
     "invite_expiry_seconds": 900,  # 15 min
     "tls_cert_path": "",
