@@ -31,6 +31,18 @@ interface ParadoxApi {
         @Body req: ArmRequest,
     ): Response<ActionResult>
 
+    @POST("alarm/bypass")
+    suspend fun bypassZone(
+        @Header("Authorization") auth: String,
+        @Body req: BypassRequest,
+    ): Response<ActionResult>
+
+    @GET("alarm/history")
+    suspend fun zoneHistory(
+        @Header("Authorization") auth: String,
+        @Query("limit") limit: Int = 50,
+    ): Response<ZoneHistoryResponse>
+
     @GET("alarm/logs")
     suspend fun auditLogs(
         @Header("Authorization") auth: String,

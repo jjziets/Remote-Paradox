@@ -32,6 +32,7 @@ dev = [
 
 [project.scripts]
 paradox-invite = "paradox_bridge.cli:main"
+paradox-demo = "paradox_bridge.demo_cli:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

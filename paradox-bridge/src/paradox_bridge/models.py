@@ -35,17 +35,48 @@ class ZoneResponse(BaseModel):
     id: int
     name: str
     open: bool
+    bypassed: bool = False
+    partition_id: int = 1
 
 
-class AlarmStatusResponse(BaseModel):
+class PartitionResponse(BaseModel):
+    id: int
+    name: str
     armed: bool
     mode: str
     zones: list[ZoneResponse]
+
+
+class AlarmStatusResponse(BaseModel):
+    partitions: list[PartitionResponse]
     connected: bool
 
 
 class ArmRequest(BaseModel):
     code: str
+    partition_id: int = 1
+
+
+class BypassRequest(BaseModel):
+    zone_id: int
+    bypass: bool
+
+
+class ZoneToggleRequest(BaseModel):
+    zone_id: int
+    open: bool
+
+
+class ZoneEventResponse(BaseModel):
+    zone_id: int
+    zone_name: str
+    partition_id: int
+    event: str
+    timestamp: str
+
+
+class ZoneHistoryResponse(BaseModel):
+    events: list[ZoneEventResponse]
 
 
 class ActionResult(BaseModel):
@@ -69,6 +100,7 @@ class HealthResponse(BaseModel):
     status: str
     alarm_connected: bool
     websocket_clients: int
+    demo_mode: bool = False
 
 
 class UserInfo(BaseModel):

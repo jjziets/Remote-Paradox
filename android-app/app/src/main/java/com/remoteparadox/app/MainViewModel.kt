@@ -12,6 +12,8 @@ import kotlinx.coroutines.flow.update
 data class AppState(
     val screen: Screen = Screen.Loading,
     val alarmStatus: AlarmStatus? = null,
+    val zoneHistory: List<ZoneEvent> = emptyList(),
+    val selectedPartition: Int = 1,
     val isLoading: Boolean = false,
     val actionInProgress: String? = null,
     val error: String? = null,
@@ -116,11 +118,27 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
+    // ── Partition selection ──
+
+    fun selectPartition(partitionId: Int) {
+        _state.update { it.copy(selectedPartition = partitionId) }
+    }
+
     // ── Alarm actions ──
 
-    fun armAway(code: String) = alarmAction("arm_away") { it.armAway(tokenStore.bearerHeader, ArmRequest(code)) }
-    fun armStay(code: String) = alarmAction("arm_stay") { it.armStay(tokenStore.bearerHeader, ArmRequest(code)) }
-    fun disarm(code: String) = alarmAction("disarm") { it.disarm(tokenStore.bearerHeader, ArmRequest(code)) }
+    fun armAway(code: String, partitionId: Int) =
+        alarmAction("arm_away") { it.armAway(tokenStore.bearerHeader, ArmRequest(code, partitionId)) }
+
+    fun armStay(code: String, partitionId: Int) =
+        alarmAction("arm_stay") { it.armStay(tokenStore.bearerHeader, ArmRequest(code, partitionId)) }
+
+    fun disarm(code: String, partitionId: Int) =
+        alarmAction("disarm") { it.disarm(tokenStore.bearerHeader, ArmRequest(code, partitionId)) }
+
+    fun bypassZone(zoneId: Int, bypass: Boolean) =
+        alarmAction(if (bypass) "bypass" else "unbypass") {
+            it.bypassZone(tokenStore.bearerHeader, BypassRequest(zoneId, bypass))
+        }
 
     private fun alarmAction(name: String, call: suspend (ParadoxApi) -> retrofit2.Response<ActionResult>) {
         val a = api ?: return
@@ -161,6 +179,18 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
+    fun refreshHistory() {
+        val a = api ?: return
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val resp = a.zoneHistory(tokenStore.bearerHeader, limit = 50)
+                if (resp.isSuccessful && resp.body() != null) {
+                    _state.update { it.copy(zoneHistory = resp.body()!!.events) }
+                }
+            } catch (_: Exception) { }
+        }
+    }
+
     // ── Polling (foreground only) ──
 
     fun startPolling() {
@@ -168,6 +198,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         pollJob = viewModelScope.launch(Dispatchers.IO) {
             while (isActive) {
                 refreshStatus()
+                refreshHistory()
                 delay(5_000)
             }
         }

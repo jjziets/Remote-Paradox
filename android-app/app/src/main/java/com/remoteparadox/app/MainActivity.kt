@@ -30,19 +30,16 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
 
-        // Handle paradox:// deep link
         intent?.data?.toString()?.let { uri ->
             ServerConfig.fromUri(uri)?.let { vm.onQrScanned(it) }
         }
 
-        // Request camera permission early
         if (ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA)
             != PackageManager.PERMISSION_GRANTED
         ) {
             cameraPermission.launch(Manifest.permission.CAMERA)
         }
 
-        // Lifecycle-aware polling: only poll when RESUMED
         lifecycleScope.launch {
             repeatOnLifecycle(Lifecycle.State.RESUMED) {
                 if (vm.state.value.screen == Screen.Dashboard) {
@@ -83,13 +80,17 @@ class MainActivity : ComponentActivity() {
 
                     Screen.Dashboard -> DashboardScreen(
                         alarmStatus = state.alarmStatus,
+                        zoneHistory = state.zoneHistory,
+                        selectedPartition = state.selectedPartition,
                         isLoading = state.isLoading,
                         actionInProgress = state.actionInProgress,
                         error = state.error,
                         username = vm.tokenStore.username,
-                        onArmAway = { vm.armAway(it) },
-                        onArmStay = { vm.armStay(it) },
-                        onDisarm = { vm.disarm(it) },
+                        onSelectPartition = { vm.selectPartition(it) },
+                        onArmAway = { code, pid -> vm.armAway(code, pid) },
+                        onArmStay = { code, pid -> vm.armStay(code, pid) },
+                        onDisarm = { code, pid -> vm.disarm(code, pid) },
+                        onBypass = { zoneId, bypass -> vm.bypassZone(zoneId, bypass) },
                         onRefresh = { vm.refreshStatus() },
                         onLogout = { vm.logout() },
                     )

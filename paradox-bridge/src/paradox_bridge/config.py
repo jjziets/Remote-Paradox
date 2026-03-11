@@ -65,17 +65,20 @@ def load_config(path: str) -> AppConfig:
         generate_default_config(path)
     with open(p) as f:
         data = json.load(f)
+    merged = {**_DEFAULTS, **data}
+    if "jwt_secret" not in merged:
+        merged["jwt_secret"] = secrets.token_hex(32)
     return AppConfig(
-        serial_port=data["serial_port"],
-        serial_baud=data["serial_baud"],
-        api_port=data["api_port"],
-        api_host=data["api_host"],
-        jwt_secret=data["jwt_secret"],
-        jwt_expiry_hours=data["jwt_expiry_hours"],
-        panel_pc_password=data["panel_pc_password"],
-        invite_expiry_seconds=data["invite_expiry_seconds"],
+        serial_port=merged["serial_port"],
+        serial_baud=merged["serial_baud"],
+        api_port=merged["api_port"],
+        api_host=merged["api_host"],
+        jwt_secret=merged["jwt_secret"],
+        jwt_expiry_hours=merged["jwt_expiry_hours"],
+        panel_pc_password=merged["panel_pc_password"],
+        invite_expiry_seconds=merged["invite_expiry_seconds"],
         config_path=path,
-        tls_cert_path=data.get("tls_cert_path", ""),
-        tls_key_path=data.get("tls_key_path", ""),
-        demo_mode=data.get("demo_mode", False),
+        tls_cert_path=merged.get("tls_cert_path", ""),
+        tls_key_path=merged.get("tls_key_path", ""),
+        demo_mode=merged.get("demo_mode", False),
     )

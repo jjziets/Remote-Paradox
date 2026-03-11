@@ -20,27 +20,62 @@ data class RegisterRequest(
 data class RegisterResponse(val token: String, val username: String)
 
 @Serializable
-data class ArmRequest(val code: String)
+data class ArmRequest(
+    val code: String,
+    @SerialName("partition_id") val partitionId: Int = 1,
+)
+
+@Serializable
+data class BypassRequest(
+    @SerialName("zone_id") val zoneId: Int,
+    val bypass: Boolean,
+)
 
 @Serializable
 data class ActionResult(val success: Boolean, val action: String, val message: String = "")
 
 @Serializable
-data class ZoneInfo(val id: Int, val name: String, val open: Boolean)
+data class ZoneInfo(
+    val id: Int,
+    val name: String,
+    val open: Boolean,
+    val bypassed: Boolean = false,
+    @SerialName("partition_id") val partitionId: Int = 1,
+)
 
 @Serializable
-data class AlarmStatus(
+data class PartitionInfo(
+    val id: Int,
+    val name: String,
     val armed: Boolean,
     val mode: String,
     val zones: List<ZoneInfo>,
+)
+
+@Serializable
+data class AlarmStatus(
+    val partitions: List<PartitionInfo>,
     val connected: Boolean,
 )
+
+@Serializable
+data class ZoneEvent(
+    @SerialName("zone_id") val zoneId: Int,
+    @SerialName("zone_name") val zoneName: String,
+    @SerialName("partition_id") val partitionId: Int,
+    val event: String,
+    val timestamp: String,
+)
+
+@Serializable
+data class ZoneHistoryResponse(val events: List<ZoneEvent>)
 
 @Serializable
 data class HealthResponse(
     val status: String,
     @SerialName("alarm_connected") val alarmConnected: Boolean,
     @SerialName("websocket_clients") val websocketClients: Int,
+    @SerialName("demo_mode") val demoMode: Boolean = false,
 )
 
 @Serializable

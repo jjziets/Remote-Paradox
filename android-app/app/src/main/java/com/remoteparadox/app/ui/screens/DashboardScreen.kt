@@ -16,10 +16,11 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.remoteparadox.app.data.AlarmStatus
+import com.remoteparadox.app.data.PartitionInfo
+import com.remoteparadox.app.data.ZoneEvent
 import com.remoteparadox.app.data.ZoneInfo
 import com.remoteparadox.app.ui.theme.*
 
@@ -27,17 +28,25 @@ import com.remoteparadox.app.ui.theme.*
 @Composable
 fun DashboardScreen(
     alarmStatus: AlarmStatus?,
+    zoneHistory: List<ZoneEvent>,
+    selectedPartition: Int,
     isLoading: Boolean,
     actionInProgress: String?,
     error: String?,
     username: String?,
-    onArmAway: (code: String) -> Unit,
-    onArmStay: (code: String) -> Unit,
-    onDisarm: (code: String) -> Unit,
+    onSelectPartition: (Int) -> Unit,
+    onArmAway: (code: String, partitionId: Int) -> Unit,
+    onArmStay: (code: String, partitionId: Int) -> Unit,
+    onDisarm: (code: String, partitionId: Int) -> Unit,
+    onBypass: (zoneId: Int, bypass: Boolean) -> Unit,
     onRefresh: () -> Unit,
     onLogout: () -> Unit,
 ) {
     var showCodeDialog by remember { mutableStateOf<String?>(null) }
+    var showHistory by remember { mutableStateOf(false) }
+
+    val partitions = alarmStatus?.partitions.orEmpty()
+    val currentPartition = partitions.find { it.id == selectedPartition } ?: partitions.firstOrNull()
 
     Scaffold(
         topBar = {
@@ -50,6 +59,9 @@ fun DashboardScreen(
                 actions = {
                     if (username != null) {
                         Text(username, fontSize = 12.sp, color = Color.White.copy(alpha = 0.6f), modifier = Modifier.padding(end = 4.dp))
+                    }
+                    IconButton(onClick = { showHistory = !showHistory }) {
+                        Icon(Icons.Default.History, "History", tint = if (showHistory) MaterialTheme.colorScheme.primary else Color.White)
                     }
                     IconButton(onClick = onRefresh) {
                         Icon(Icons.Default.Refresh, "Refresh", tint = Color.White)
@@ -68,14 +80,24 @@ fun DashboardScreen(
         ) {
             item { Spacer(Modifier.height(4.dp)) }
 
-            // Connection status
             item {
                 ConnectionBanner(alarmStatus?.connected ?: false, isLoading)
             }
 
-            // Alarm state card
+            // Partition tabs
+            if (partitions.size > 1) {
+                item {
+                    PartitionTabs(
+                        partitions = partitions,
+                        selectedId = currentPartition?.id ?: 1,
+                        onSelect = onSelectPartition,
+                    )
+                }
+            }
+
+            // Partition arm state card
             item {
-                AlarmStateCard(alarmStatus)
+                PartitionStateCard(currentPartition)
             }
 
             // Error
@@ -98,7 +120,7 @@ fun DashboardScreen(
             // Control buttons
             item {
                 ControlButtons(
-                    armed = alarmStatus?.armed ?: false,
+                    armed = currentPartition?.armed ?: false,
                     connected = alarmStatus?.connected ?: false,
                     actionInProgress = actionInProgress,
                     onArmAway = { showCodeDialog = "arm_away" },
@@ -108,12 +130,33 @@ fun DashboardScreen(
             }
 
             // Zone list
-            if (!alarmStatus?.zones.isNullOrEmpty()) {
+            val zones = currentPartition?.zones.orEmpty()
+            if (zones.isNotEmpty()) {
                 item {
-                    Text("Zones", fontWeight = FontWeight.Bold, color = Color.White, fontSize = 16.sp, modifier = Modifier.padding(top = 4.dp))
+                    Text(
+                        "${currentPartition?.name ?: "Zones"} — ${zones.size} zones",
+                        fontWeight = FontWeight.Bold,
+                        color = Color.White, fontSize = 16.sp,
+                        modifier = Modifier.padding(top = 4.dp),
+                    )
                 }
-                items(alarmStatus!!.zones) { zone ->
-                    ZoneRow(zone)
+                items(zones) { zone ->
+                    ZoneRow(zone, onBypass = { onBypass(zone.id, !zone.bypassed) })
+                }
+            }
+
+            // History section
+            if (showHistory && zoneHistory.isNotEmpty()) {
+                item {
+                    Spacer(Modifier.height(8.dp))
+                    Text(
+                        "Zone History",
+                        fontWeight = FontWeight.Bold,
+                        color = Color.White, fontSize = 16.sp,
+                    )
+                }
+                items(zoneHistory.take(20)) { event ->
+                    HistoryRow(event)
                 }
             }
 
@@ -125,15 +168,54 @@ fun DashboardScreen(
         AlarmCodeDialog(
             action = showCodeDialog!!,
             onConfirm = { code ->
+                val pid = currentPartition?.id ?: 1
                 when (showCodeDialog) {
-                    "arm_away" -> onArmAway(code)
-                    "arm_stay" -> onArmStay(code)
-                    "disarm" -> onDisarm(code)
+                    "arm_away" -> onArmAway(code, pid)
+                    "arm_stay" -> onArmStay(code, pid)
+                    "disarm" -> onDisarm(code, pid)
                 }
                 showCodeDialog = null
             },
             onDismiss = { showCodeDialog = null },
         )
+    }
+}
+
+@Composable
+private fun PartitionTabs(
+    partitions: List<PartitionInfo>,
+    selectedId: Int,
+    onSelect: (Int) -> Unit,
+) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        partitions.forEach { p ->
+            val isSelected = p.id == selectedId
+            val (modeColor, _) = partitionModeStyle(p)
+            FilterChip(
+                selected = isSelected,
+                onClick = { onSelect(p.id) },
+                label = {
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        Box(Modifier.size(8.dp).clip(CircleShape).background(modeColor))
+                        Text(p.name, fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal)
+                    }
+                },
+                modifier = Modifier.weight(1f),
+            )
+        }
+    }
+}
+
+@Composable
+private fun partitionModeStyle(p: PartitionInfo): Pair<Color, String> {
+    return when (p.mode) {
+        "away" -> AlarmArmed to "ARMED AWAY"
+        "stay" -> AlarmStay to "ARMED STAY"
+        "disarmed" -> AlarmDisarmed to "DISARMED"
+        else -> Color.Gray to "UNKNOWN"
     }
 }
 
@@ -166,14 +248,15 @@ private fun ConnectionBanner(connected: Boolean, loading: Boolean) {
 }
 
 @Composable
-private fun AlarmStateCard(status: AlarmStatus?) {
-    val mode = status?.mode ?: "unknown"
+private fun PartitionStateCard(partition: PartitionInfo?) {
+    val mode = partition?.mode ?: "unknown"
     val (color, label, icon) = when (mode) {
         "away" -> Triple(AlarmArmed, "ARMED AWAY", Icons.Default.Shield)
         "stay" -> Triple(AlarmStay, "ARMED STAY", Icons.Default.Home)
         "disarmed" -> Triple(AlarmDisarmed, "DISARMED", Icons.Default.LockOpen)
         else -> Triple(Color.Gray, "UNKNOWN", Icons.Default.HelpOutline)
     }
+    val zones = partition?.zones.orEmpty()
     Card(
         modifier = Modifier.fillMaxWidth(),
         shape = RoundedCornerShape(16.dp),
@@ -192,11 +275,17 @@ private fun AlarmStateCard(status: AlarmStatus?) {
             }
             Column {
                 Text(label, fontSize = 22.sp, fontWeight = FontWeight.ExtraBold, color = color)
-                if (status != null) {
+                Text(
+                    "${partition?.name ?: "—"}  •  ${zones.size} zones  •  ${zones.count { it.open }} open",
+                    fontSize = 13.sp,
+                    color = Color.White.copy(alpha = 0.6f),
+                )
+                val bypassed = zones.count { it.bypassed }
+                if (bypassed > 0) {
                     Text(
-                        "${status.zones.size} zones  •  ${status.zones.count { it.open }} open",
-                        fontSize = 13.sp,
-                        color = Color.White.copy(alpha = 0.6f),
+                        "$bypassed bypassed",
+                        fontSize = 12.sp,
+                        color = AlarmStay.copy(alpha = 0.8f),
                     )
                 }
             }
@@ -265,26 +354,68 @@ private fun ControlButtons(
 }
 
 @Composable
-private fun ZoneRow(zone: ZoneInfo) {
+private fun ZoneRow(zone: ZoneInfo, onBypass: () -> Unit) {
     val (statusColor, statusText) = if (zone.open) ZoneOpen to "Open" else ZoneClosed to "Closed"
     Card(
         shape = RoundedCornerShape(10.dp),
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
     ) {
         Row(
-            modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp),
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Box(
-                Modifier.size(10.dp).clip(CircleShape).background(statusColor)
+                Modifier.size(10.dp).clip(CircleShape).background(if (zone.bypassed) Color.Gray else statusColor)
             )
             Spacer(Modifier.width(12.dp))
-            Text(zone.name, color = Color.White, modifier = Modifier.weight(1f), fontSize = 14.sp)
+            Column(Modifier.weight(1f)) {
+                Text(zone.name, color = Color.White, fontSize = 14.sp)
+                if (zone.bypassed) {
+                    Text("BYPASSED", color = AlarmStay, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                }
+            }
             Text(statusText, color = statusColor, fontSize = 13.sp, fontWeight = FontWeight.Medium)
             if (zone.open) {
                 Spacer(Modifier.width(4.dp))
                 Icon(Icons.Default.Warning, null, tint = ZoneOpen, modifier = Modifier.size(16.dp))
             }
+            Spacer(Modifier.width(8.dp))
+            IconButton(onClick = onBypass, modifier = Modifier.size(32.dp)) {
+                Icon(
+                    if (zone.bypassed) Icons.Default.RemoveCircleOutline else Icons.Default.DoNotDisturb,
+                    contentDescription = if (zone.bypassed) "Un-bypass" else "Bypass",
+                    tint = if (zone.bypassed) AlarmStay else Color.White.copy(alpha = 0.4f),
+                    modifier = Modifier.size(18.dp),
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun HistoryRow(event: ZoneEvent) {
+    val color = if (event.event == "opened") ZoneOpen else ZoneClosed
+    val ts = event.timestamp.take(19).replace("T", " ")
+    Card(
+        shape = RoundedCornerShape(8.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.6f)),
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Box(Modifier.size(8.dp).clip(CircleShape).background(color))
+            Spacer(Modifier.width(10.dp))
+            Column(Modifier.weight(1f)) {
+                Text(event.zoneName, color = Color.White, fontSize = 13.sp)
+                Text(ts, color = Color.White.copy(alpha = 0.4f), fontSize = 11.sp)
+            }
+            Text(
+                event.event.uppercase(),
+                color = color,
+                fontSize = 12.sp,
+                fontWeight = FontWeight.Bold,
+            )
         }
     }
 }

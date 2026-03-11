@@ -1,7 +1,9 @@
 """FastAPI application — routes, dependency injection, lifespan."""
 
+import asyncio
 import logging
 import os
+import random
 import socket
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -21,16 +23,21 @@ from paradox_bridge.models import (
     ArmRequest,
     AuditEntry,
     AuditLogResponse,
+    BypassRequest,
     ErrorResponse,
     HealthResponse,
     InviteResponse,
     LoginRequest,
     LoginResponse,
+    PartitionResponse,
     RegisterRequest,
     RegisterResponse,
     UserInfo,
     UserListResponse,
+    ZoneEventResponse,
+    ZoneHistoryResponse,
     ZoneResponse,
+    ZoneToggleRequest,
 )
 from paradox_bridge.tls import generate_self_signed_cert, get_cert_fingerprint
 from paradox_bridge.ws import ConnectionManager
@@ -46,6 +53,7 @@ _audit: AuditService | None = None
 _alarm: AlarmService | None = None
 _ws_manager: ConnectionManager | None = None
 _cert_fingerprint: str = ""
+_demo_trigger_task: asyncio.Task | None = None
 
 
 def get_db() -> Database:
@@ -147,18 +155,41 @@ def shutdown_services() -> None:
     _alarm = None
 
 
+async def _demo_zone_trigger_loop() -> None:
+    """In demo mode, randomly trigger a zone every ~30s to simulate activity."""
+    assert _alarm is not None
+    zone_ids = [z["id"] for z in _alarm.list_all_zones()]
+    while True:
+        await asyncio.sleep(30)
+        zid = random.choice(zone_ids)
+        try:
+            _alarm.set_zone_open(zid, True)
+            logger.info("Demo trigger: zone %d opened", zid)
+            await asyncio.sleep(5)
+            _alarm.set_zone_open(zid, False)
+            logger.info("Demo trigger: zone %d closed", zid)
+        except Exception:
+            pass
+
+
 @asynccontextmanager
 async def lifespan(application: FastAPI):
+    global _demo_trigger_task
     init_services()
     admin_user = os.environ.get("PARADOX_ADMIN_USER", "admin")
     admin_pass = os.environ.get("PARADOX_ADMIN_PASS")
     if admin_pass and _auth:
         _auth.setup_admin(admin_user, admin_pass)
+    if _alarm and _alarm.demo_mode:
+        _demo_trigger_task = asyncio.create_task(_demo_zone_trigger_loop())
     yield
+    if _demo_trigger_task:
+        _demo_trigger_task.cancel()
+        _demo_trigger_task = None
     shutdown_services()
 
 
-app = FastAPI(title="Paradox Bridge", version="0.1.0", lifespan=lifespan)
+app = FastAPI(title="Paradox Bridge", version="0.2.0", lifespan=lifespan)
 
 
 # ── Auth routes ──
@@ -234,23 +265,37 @@ def delete_user(
 
 # ── Alarm routes ──
 
+def _build_status_response(alarm: AlarmService) -> AlarmStatusResponse:
+    st = alarm.get_status()
+    return AlarmStatusResponse(
+        partitions=[
+            PartitionResponse(
+                id=p.id, name=p.name, armed=p.armed, mode=p.mode,
+                zones=[
+                    ZoneResponse(
+                        id=z.id, name=z.name, open=z.open,
+                        bypassed=z.bypassed, partition_id=z.partition_id,
+                    )
+                    for z in p.zones
+                ],
+            )
+            for p in st.partitions
+        ],
+        connected=True,
+    )
+
+
 @app.get("/alarm/status", response_model=AlarmStatusResponse)
 def alarm_status(
     user: Annotated[dict, Depends(get_current_user)],
     alarm: Annotated[AlarmService, Depends(get_alarm)],
 ):
     if not alarm.is_connected:
-        return AlarmStatusResponse(armed=False, mode="unknown", zones=[], connected=False)
+        return AlarmStatusResponse(partitions=[], connected=False)
     try:
-        st = alarm.get_status()
+        return _build_status_response(alarm)
     except Exception as exc:
         raise HTTPException(status_code=503, detail=f"Alarm error: {exc}")
-    return AlarmStatusResponse(
-        armed=st.armed,
-        mode=st.mode,
-        zones=[ZoneResponse(id=z.id, name=z.name, open=z.open) for z in st.zones],
-        connected=True,
-    )
 
 
 @app.post("/alarm/arm-away", response_model=ActionResult)
@@ -262,8 +307,8 @@ def arm_away(
 ):
     if not alarm.is_connected:
         raise HTTPException(status_code=503, detail="Alarm not connected")
-    ok = alarm.arm_away(code=req.code)
-    audit.record(user["sub"], "arm_away", f"success={ok}")
+    ok = alarm.arm_away(code=req.code, partition_id=req.partition_id)
+    audit.record(user["sub"], "arm_away", f"partition={req.partition_id} success={ok}")
     return ActionResult(success=ok, action="arm_away")
 
 
@@ -276,8 +321,8 @@ def arm_stay(
 ):
     if not alarm.is_connected:
         raise HTTPException(status_code=503, detail="Alarm not connected")
-    ok = alarm.arm_stay(code=req.code)
-    audit.record(user["sub"], "arm_stay", f"success={ok}")
+    ok = alarm.arm_stay(code=req.code, partition_id=req.partition_id)
+    audit.record(user["sub"], "arm_stay", f"partition={req.partition_id} success={ok}")
     return ActionResult(success=ok, action="arm_stay")
 
 
@@ -290,9 +335,61 @@ def disarm(
 ):
     if not alarm.is_connected:
         raise HTTPException(status_code=503, detail="Alarm not connected")
-    ok = alarm.disarm(code=req.code)
-    audit.record(user["sub"], "disarm", f"success={ok}")
+    ok = alarm.disarm(code=req.code, partition_id=req.partition_id)
+    audit.record(user["sub"], "disarm", f"partition={req.partition_id} success={ok}")
     return ActionResult(success=ok, action="disarm")
+
+
+# ── Bypass ──
+
+@app.post("/alarm/bypass", response_model=ActionResult)
+def bypass_zone(
+    req: BypassRequest,
+    user: Annotated[dict, Depends(get_current_user)],
+    alarm: Annotated[AlarmService, Depends(get_alarm)],
+    audit: Annotated[AuditService, Depends(get_audit)],
+):
+    try:
+        if req.bypass:
+            alarm.bypass_zone(req.zone_id)
+        else:
+            alarm.unbypass_zone(req.zone_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    action = "bypass" if req.bypass else "unbypass"
+    audit.record(user["sub"], action, f"zone={req.zone_id}")
+    return ActionResult(success=True, action=action)
+
+
+# ── Zone toggle (demo debug) ──
+
+@app.post("/alarm/zone-toggle", response_model=ActionResult)
+def zone_toggle(
+    req: ZoneToggleRequest,
+    alarm: Annotated[AlarmService, Depends(get_alarm)],
+):
+    if not alarm.demo_mode:
+        raise HTTPException(status_code=403, detail="Zone toggle only available in demo mode")
+    try:
+        alarm.set_zone_open(req.zone_id, req.open)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    action = "zone_opened" if req.open else "zone_closed"
+    return ActionResult(success=True, action=action, message=f"Zone {req.zone_id}")
+
+
+# ── Zone history ──
+
+@app.get("/alarm/history", response_model=ZoneHistoryResponse)
+def zone_history(
+    user: Annotated[dict, Depends(get_current_user)],
+    alarm: Annotated[AlarmService, Depends(get_alarm)],
+    limit: int = Query(default=50, le=200),
+):
+    events = alarm.get_zone_history(limit=limit)
+    return ZoneHistoryResponse(
+        events=[ZoneEventResponse(**e) for e in events]
+    )
 
 
 # ── Audit ──
@@ -341,4 +438,5 @@ def health():
         status="ok",
         alarm_connected=alarm.is_connected,
         websocket_clients=mgr.active_count,
+        demo_mode=alarm.demo_mode,
     )
