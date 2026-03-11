@@ -87,6 +87,9 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;b
 .login-wrap h2{margin-bottom:16px;text-align:center}
 .login-wrap input{width:100%;padding:12px;margin-bottom:10px;border-radius:8px;border:1px solid rgba(255,255,255,.2);background:#16213e;color:#fff;font-size:14px}
 .login-wrap .hint{font-size:11px;opacity:.4;margin-bottom:8px;text-align:center}
+.login-wrap .server-row{display:flex;gap:8px;margin-bottom:10px}
+.login-wrap .server-row input:first-child{flex:2}
+.login-wrap .server-row input:last-child{flex:1;width:auto}
 .code-box{text-align:center;margin:12px 0}
 .code-box input{width:200px;padding:12px;border-radius:8px;border:1px solid rgba(255,255,255,.2);background:#16213e;color:#fff;font-size:20px;text-align:center;letter-spacing:4px}
 </style>
@@ -103,10 +106,20 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;b
   </div>
 </div>
 
-<!-- LOGIN (same-origin: no server fields needed) -->
+<!-- LOGIN -->
 <div id="vLogin" class="login-wrap">
   <h2>Remote Paradox</h2>
-  <div class="hint">Log in with your credentials</div>
+  <div class="hint" id="loginHint">Log in with your credentials</div>
+  <!-- Server fields: shown when opened outside nginx (file:// or localhost dev) -->
+  <div id="serverFields" style="display:none">
+    <div class="server-row">
+      <input id="inHost" placeholder="Server IP / hostname" autocomplete="url">
+      <input id="inPort" placeholder="9433" value="9433">
+    </div>
+    <label style="display:flex;align-items:center;gap:8px;margin-bottom:10px;font-size:12px;opacity:.7;cursor:pointer">
+      <input type="checkbox" id="inHttps" checked style="width:auto;margin:0"> Use HTTPS
+    </label>
+  </div>
   <input id="inUser" placeholder="Username" autocomplete="username">
   <input id="inPass" placeholder="Password" type="password" autocomplete="current-password">
   <div id="loginErr" class="err"></div>
@@ -160,10 +173,15 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;b
   var username = localStorage.getItem('px_user');
   var alarmCode = localStorage.getItem('px_code');
   var userRole = localStorage.getItem('px_role');
+  var baseUrl = localStorage.getItem('px_base_url') || '';
   var partitions = [], selectedPid = 1, histEvents = [], currentView = 'status';
   var timer = null, pollMs = 5000;
 
   var $ = function(id){ return document.getElementById(id); };
+
+  // Dev mode: file:// or localhost without an API behind it
+  var isDevMode = location.protocol === 'file:' ||
+    (location.hostname === 'localhost' && location.port !== '9433');
 
   function esc(s) {
     var d = document.createElement('div');
@@ -172,10 +190,11 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;b
   }
 
   function api(method, path, body) {
+    var url = (isDevMode ? baseUrl : '') + path;
     var opts = { method: method, headers: { 'Content-Type': 'application/json' } };
     if (token) opts.headers['Authorization'] = 'Bearer ' + token;
     if (body) opts.body = JSON.stringify(body);
-    return fetch(path, opts).then(function(r) {
+    return fetch(url, opts).then(function(r) {
       if (r.status === 401) { goLogin(); return Promise.reject('auth'); }
       return r.json();
     });
@@ -195,6 +214,18 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;b
     stopPoll();
     $('vLogin').style.display = '';
     $('vApp').style.display = 'none';
+    if (isDevMode) {
+      $('serverFields').style.display = '';
+      $('loginHint').textContent = 'Enter the server address and your credentials';
+      if (baseUrl) {
+        try {
+          var u = new URL(baseUrl);
+          $('inHost').value = u.hostname;
+          $('inPort').value = u.port || '9433';
+          $('inHttps').checked = u.protocol === 'https:';
+        } catch(e){}
+      }
+    }
   }
 
   function goApp() {
@@ -220,6 +251,14 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;b
 
   window.doLogin = function() {
     var u = $('inUser').value, p = $('inPass').value;
+    if (isDevMode) {
+      var host = $('inHost').value.trim();
+      if (!host) { $('loginErr').textContent = 'Enter a server address'; $('loginErr').style.display = ''; return; }
+      var port = $('inPort').value.trim() || '9433';
+      var scheme = $('inHttps').checked ? 'https' : 'http';
+      baseUrl = scheme + '://' + host + ':' + port;
+      localStorage.setItem('px_base_url', baseUrl);
+    }
     if (!u || !p) { $('loginErr').textContent = 'Enter username and password'; $('loginErr').style.display = ''; return; }
     $('loginErr').style.display = 'none';
 

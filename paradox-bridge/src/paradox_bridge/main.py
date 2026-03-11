@@ -193,6 +193,31 @@ async def lifespan(application: FastAPI):
 
 app = FastAPI(title="Paradox Bridge", version="0.2.0", lifespan=lifespan)
 
+
+def _maybe_add_cors() -> None:
+    """Add CORS middleware in demo mode only (local dev testing).
+    In production, nginx handles CORS."""
+    cfg_path = os.environ.get("PARADOX_CONFIG", _CONFIG_PATH)
+    try:
+        import json
+        from pathlib import Path
+        p = Path(cfg_path)
+        if p.exists():
+            data = json.loads(p.read_text())
+            if data.get("demo_mode"):
+                from fastapi.middleware.cors import CORSMiddleware
+                app.add_middleware(
+                    CORSMiddleware,
+                    allow_origins=["*"],
+                    allow_methods=["*"],
+                    allow_headers=["*"],
+                )
+    except Exception:
+        pass
+
+
+_maybe_add_cors()
+
 app.include_router(dashboard_router)
 
 
