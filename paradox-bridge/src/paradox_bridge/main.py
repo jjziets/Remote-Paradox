@@ -286,7 +286,7 @@ async def lifespan(application: FastAPI):
     shutdown_services()
 
 
-app = FastAPI(title="Paradox Bridge", version="0.5.0", lifespan=lifespan)
+app = FastAPI(title="Paradox Bridge", version="0.5.1", lifespan=lifespan)
 
 
 def _maybe_add_cors() -> None:
