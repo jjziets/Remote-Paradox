@@ -13,6 +13,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
+import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -39,6 +40,7 @@ fun DashboardScreen(
     error: String?,
     username: String?,
     savedAlarmCode: String?,
+    wsConnected: Boolean,
     onSelectPartition: (Int) -> Unit,
     onArmAway: (code: String, partitionId: Int) -> Unit,
     onArmStay: (code: String, partitionId: Int) -> Unit,
@@ -46,10 +48,10 @@ fun DashboardScreen(
     onBypass: (zoneId: Int, bypass: Boolean) -> Unit,
     onPanic: (panicType: String, partitionId: Int) -> Unit,
     onRefresh: () -> Unit,
-    onLogout: () -> Unit,
+    onSettings: () -> Unit,
 ) {
     var showCodeDialog by remember { mutableStateOf<String?>(null) }
-    var currentTab by remember { mutableIntStateOf(0) } // 0=Zones, 1=History
+    var currentTab by remember { mutableIntStateOf(0) }
 
     val partitions = alarmStatus?.partitions.orEmpty()
     val currentPartition = partitions.find { it.id == selectedPartition } ?: partitions.firstOrNull()
@@ -63,22 +65,28 @@ fun DashboardScreen(
                     titleContentColor = Color.White,
                 ),
                 actions = {
+                    if (wsConnected) {
+                        Icon(Icons.Default.Bolt, "Live", tint = Color(0xFF4CAF50), modifier = Modifier.size(16.dp))
+                        Spacer(Modifier.width(4.dp))
+                    }
                     if (username != null) {
                         Text(username, fontSize = 12.sp, color = Color.White.copy(alpha = 0.6f), modifier = Modifier.padding(end = 4.dp))
                     }
-                    IconButton(onClick = onRefresh) {
-                        Icon(Icons.Default.Refresh, "Refresh", tint = Color.White)
-                    }
-                    IconButton(onClick = onLogout) {
-                        Icon(Icons.Default.Logout, "Logout", tint = Color.White)
+                    IconButton(onClick = onSettings) {
+                        Icon(Icons.Default.Settings, "Settings", tint = Color.White)
                     }
                 },
             )
         },
         containerColor = MaterialTheme.colorScheme.background,
     ) { padding ->
+        PullToRefreshBox(
+            isRefreshing = isLoading,
+            onRefresh = onRefresh,
+            modifier = Modifier.fillMaxSize().padding(padding),
+        ) {
         LazyColumn(
-            modifier = Modifier.fillMaxSize().padding(padding).padding(horizontal = 16.dp),
+            modifier = Modifier.fillMaxSize().padding(horizontal = 16.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
             item { Spacer(Modifier.height(4.dp)) }
@@ -187,6 +195,7 @@ fun DashboardScreen(
             }
 
             item { Spacer(Modifier.height(16.dp)) }
+        }
         }
     }
 

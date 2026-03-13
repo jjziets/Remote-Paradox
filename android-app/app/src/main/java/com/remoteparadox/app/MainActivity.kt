@@ -2,6 +2,7 @@ package com.remoteparadox.app
 
 import android.Manifest
 import android.content.pm.PackageManager
+import android.os.Build
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -38,6 +39,13 @@ class MainActivity : ComponentActivity() {
             != PackageManager.PERMISSION_GRANTED
         ) {
             cameraPermission.launch(Manifest.permission.CAMERA)
+        }
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+            ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS)
+            != PackageManager.PERMISSION_GRANTED
+        ) {
+            cameraPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
         }
 
         lifecycleScope.launch {
@@ -92,14 +100,28 @@ class MainActivity : ComponentActivity() {
                         error = state.error,
                         username = vm.tokenStore.username,
                         savedAlarmCode = vm.savedAlarmCode,
+                        wsConnected = state.wsConnected,
                         onSelectPartition = { vm.selectPartition(it) },
                         onArmAway = { code, pid -> vm.armAway(code, pid) },
                         onArmStay = { code, pid -> vm.armStay(code, pid) },
                         onDisarm = { code, pid -> vm.disarm(code, pid) },
                         onBypass = { zoneId, bypass -> vm.bypassZone(zoneId, bypass) },
                         onPanic = { type, pid -> vm.sendPanic(type, pid) },
-                        onRefresh = { vm.refreshStatus() },
+                        onRefresh = { vm.refreshStatus(); vm.refreshHistory() },
+                        onSettings = { vm.goToSettings() },
+                    )
+
+                    Screen.Settings -> SettingsScreen(
+                        username = vm.tokenStore.username,
+                        serverHost = vm.tokenStore.serverHost,
+                        serverPort = vm.tokenStore.serverPort,
+                        soundEnabled = state.soundEnabled,
+                        notificationsEnabled = state.notificationsEnabled,
+                        onSoundToggle = { vm.setSoundEnabled(it) },
+                        onNotificationsToggle = { vm.setNotificationsEnabled(it) },
                         onLogout = { vm.logout() },
+                        onSwitchServer = { vm.switchServer() },
+                        onBack = { vm.goBackToDashboard() },
                     )
                 }
             }
