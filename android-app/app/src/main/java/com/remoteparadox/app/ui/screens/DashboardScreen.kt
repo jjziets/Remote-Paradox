@@ -4,13 +4,14 @@ import androidx.compose.animation.*
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
-import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.pager.HorizontalPager
+import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -22,7 +23,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -58,7 +58,24 @@ fun DashboardScreen(
     var currentTab by remember { mutableIntStateOf(0) }
 
     val partitions = alarmStatus?.partitions.orEmpty()
-    val currentPartition = partitions.find { it.id == selectedPartition } ?: partitions.firstOrNull()
+    val pageCount = maxOf(partitions.size, 1)
+    val pagerState = rememberPagerState(pageCount = { pageCount })
+
+    val selectedIndex = partitions.indexOfFirst { it.id == selectedPartition }.coerceAtLeast(0)
+    LaunchedEffect(selectedIndex) {
+        if (pagerState.currentPage != selectedIndex) {
+            pagerState.animateScrollToPage(selectedIndex)
+        }
+    }
+    LaunchedEffect(pagerState.currentPage) {
+        val p = partitions.getOrNull(pagerState.currentPage)
+        if (p != null && p.id != selectedPartition) {
+            onSelectPartition(p.id)
+        }
+    }
+
+    val currentPartition = partitions.getOrNull(pagerState.currentPage)
+        ?: partitions.firstOrNull()
 
     Scaffold(
         topBar = {
@@ -84,49 +101,26 @@ fun DashboardScreen(
         },
         containerColor = MaterialTheme.colorScheme.background,
     ) { padding ->
-        val swipeThreshold = 80f
         PullToRefreshBox(
             isRefreshing = isLoading,
             onRefresh = onRefresh,
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(padding)
-                .pointerInput(partitions) {
-                    if (partitions.size <= 1) return@pointerInput
-                    var totalDrag = 0f
-                    detectHorizontalDragGestures(
-                        onDragStart = { totalDrag = 0f },
-                        onDragEnd = {
-                            if (totalDrag > swipeThreshold) {
-                                val idx = partitions.indexOfFirst { it.id == selectedPartition }
-                                if (idx > 0) onSelectPartition(partitions[idx - 1].id)
-                            } else if (totalDrag < -swipeThreshold) {
-                                val idx = partitions.indexOfFirst { it.id == selectedPartition }
-                                if (idx < partitions.size - 1) onSelectPartition(partitions[idx + 1].id)
-                            }
-                        },
-                        onHorizontalDrag = { _, dragAmount -> totalDrag += dragAmount },
-                    )
-                },
+            modifier = Modifier.fillMaxSize().padding(padding),
         ) {
-        LazyColumn(
-            modifier = Modifier.fillMaxSize().padding(horizontal = 16.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp),
-        ) {
-            item { Spacer(Modifier.height(4.dp)) }
+        Column(modifier = Modifier.fillMaxSize()) {
+            // Fixed top: connection banner + partition tabs
+            Column(modifier = Modifier.padding(horizontal = 16.dp)) {
+                Spacer(Modifier.height(8.dp))
+                ConnectionBanner(alarmStatus?.connected ?: false, isLoading)
 
-            item { ConnectionBanner(alarmStatus?.connected ?: false, isLoading) }
+                if (currentPartition?.mode == "triggered") {
+                    Spacer(Modifier.height(12.dp))
+                    AlarmBanner(currentPartition, onDisarm = { code ->
+                        onDisarm(code, currentPartition.id)
+                    }, savedCode = savedAlarmCode)
+                }
 
-            // Triggered alarm banner
-            if (currentPartition?.mode == "triggered") {
-                item { AlarmBanner(currentPartition, onDisarm = { code ->
-                    onDisarm(code, currentPartition.id)
-                }, savedCode = savedAlarmCode) }
-            }
-
-            // Partition tabs
-            if (partitions.size > 1) {
-                item {
+                if (partitions.size > 1) {
+                    Spacer(Modifier.height(12.dp))
                     PartitionTabs(
                         partitions = partitions,
                         selectedId = currentPartition?.id ?: 1,
@@ -135,90 +129,98 @@ fun DashboardScreen(
                 }
             }
 
-            // Partition state card
-            item { PartitionStateCard(currentPartition) }
-
-            // Error
-            if (error != null) {
-                item {
-                    Card(
-                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.error.copy(alpha = 0.15f)),
-                        shape = RoundedCornerShape(12.dp),
-                    ) {
-                        Text(error, modifier = Modifier.padding(16.dp), color = MaterialTheme.colorScheme.error, fontSize = 13.sp)
-                    }
-                }
-            }
-
-            // Control buttons
-            item {
-                val pid = currentPartition?.id ?: 1
-                ControlButtons(
-                    partition = currentPartition,
-                    connected = alarmStatus?.connected ?: false,
-                    actionInProgress = actionInProgress,
-                    savedCode = savedAlarmCode,
-                    onArmAway = { if (savedAlarmCode != null) onArmAway(savedAlarmCode, pid) else showCodeDialog = "arm_away" },
-                    onArmStay = { if (savedAlarmCode != null) onArmStay(savedAlarmCode, pid) else showCodeDialog = "arm_stay" },
-                    onDisarm = { if (savedAlarmCode != null) onDisarm(savedAlarmCode, pid) else showCodeDialog = "disarm" },
-                )
-            }
-
-            // Panic buttons
-            item {
-                val pid = currentPartition?.id ?: 1
-                PanicButtons(
-                    connected = alarmStatus?.connected ?: false,
-                    actionInProgress = actionInProgress,
-                    onPanic = { type -> onPanic(type, pid) },
-                )
-            }
-
-            // View tabs: Zones / History
-            item {
-                TabRow(
-                    selectedTabIndex = currentTab,
-                    containerColor = MaterialTheme.colorScheme.surface,
-                    contentColor = Color.White,
-                    modifier = Modifier.clip(RoundedCornerShape(10.dp)),
+            // Swipeable pager for partition content
+            HorizontalPager(
+                state = pagerState,
+                modifier = Modifier.fillMaxSize(),
+                beyondViewportPageCount = 1,
+            ) { pageIndex ->
+                val partition = partitions.getOrNull(pageIndex)
+                LazyColumn(
+                    modifier = Modifier.fillMaxSize().padding(horizontal = 16.dp),
+                    verticalArrangement = Arrangement.spacedBy(12.dp),
                 ) {
-                    Tab(selected = currentTab == 0, onClick = { currentTab = 0 },
-                        text = { Text("Zones", fontWeight = FontWeight.SemiBold) })
-                    Tab(selected = currentTab == 1, onClick = { currentTab = 1 },
-                        text = { Text("History", fontWeight = FontWeight.SemiBold) })
-                }
-            }
+                    item { Spacer(Modifier.height(4.dp)) }
 
-            if (currentTab == 0) {
-                // Zone grid
-                val zones = currentPartition?.zones.orEmpty()
-                if (zones.isNotEmpty()) {
+                    item { PartitionStateCard(partition) }
+
+                    if (error != null) {
+                        item {
+                            Card(
+                                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.error.copy(alpha = 0.15f)),
+                                shape = RoundedCornerShape(12.dp),
+                            ) {
+                                Text(error, modifier = Modifier.padding(16.dp), color = MaterialTheme.colorScheme.error, fontSize = 13.sp)
+                            }
+                        }
+                    }
+
                     item {
-                        Text(
-                            "${currentPartition?.name ?: "Zones"} — ${zones.size} zones",
-                            fontWeight = FontWeight.Bold, color = Color.White, fontSize = 16.sp,
-                            modifier = Modifier.padding(top = 4.dp),
+                        val pid = partition?.id ?: 1
+                        ControlButtons(
+                            partition = partition,
+                            connected = alarmStatus?.connected ?: false,
+                            actionInProgress = actionInProgress,
+                            savedCode = savedAlarmCode,
+                            onArmAway = { if (savedAlarmCode != null) onArmAway(savedAlarmCode, pid) else showCodeDialog = "arm_away" },
+                            onArmStay = { if (savedAlarmCode != null) onArmStay(savedAlarmCode, pid) else showCodeDialog = "arm_stay" },
+                            onDisarm = { if (savedAlarmCode != null) onDisarm(savedAlarmCode, pid) else showCodeDialog = "disarm" },
                         )
                     }
+
                     item {
-                        ZoneGrid(zones = zones, onBypass = { zoneId, bypass -> onBypass(zoneId, bypass) })
+                        val pid = partition?.id ?: 1
+                        PanicButtons(
+                            connected = alarmStatus?.connected ?: false,
+                            actionInProgress = actionInProgress,
+                            onPanic = { type -> onPanic(type, pid) },
+                        )
                     }
-                }
-            } else {
-                // History
-                if (eventHistory.isNotEmpty()) {
-                    items(eventHistory.take(30)) { event ->
-                        HistoryRow(event)
-                    }
-                } else {
+
                     item {
-                        Text("No events yet", color = Color.White.copy(alpha = 0.5f), fontSize = 13.sp,
-                            modifier = Modifier.fillMaxWidth().padding(16.dp))
+                        TabRow(
+                            selectedTabIndex = currentTab,
+                            containerColor = MaterialTheme.colorScheme.surface,
+                            contentColor = Color.White,
+                            modifier = Modifier.clip(RoundedCornerShape(10.dp)),
+                        ) {
+                            Tab(selected = currentTab == 0, onClick = { currentTab = 0 },
+                                text = { Text("Zones", fontWeight = FontWeight.SemiBold) })
+                            Tab(selected = currentTab == 1, onClick = { currentTab = 1 },
+                                text = { Text("History", fontWeight = FontWeight.SemiBold) })
+                        }
                     }
+
+                    if (currentTab == 0) {
+                        val zones = partition?.zones.orEmpty()
+                        if (zones.isNotEmpty()) {
+                            item {
+                                Text(
+                                    "${partition?.name ?: "Zones"} — ${zones.size} zones",
+                                    fontWeight = FontWeight.Bold, color = Color.White, fontSize = 16.sp,
+                                    modifier = Modifier.padding(top = 4.dp),
+                                )
+                            }
+                            item {
+                                ZoneGrid(zones = zones, onBypass = { zoneId, bypass -> onBypass(zoneId, bypass) })
+                            }
+                        }
+                    } else {
+                        if (eventHistory.isNotEmpty()) {
+                            items(eventHistory.take(30)) { event ->
+                                HistoryRow(event)
+                            }
+                        } else {
+                            item {
+                                Text("No events yet", color = Color.White.copy(alpha = 0.5f), fontSize = 13.sp,
+                                    modifier = Modifier.fillMaxWidth().padding(16.dp))
+                            }
+                        }
+                    }
+
+                    item { Spacer(Modifier.height(16.dp)) }
                 }
             }
-
-            item { Spacer(Modifier.height(16.dp)) }
         }
         }
     }
