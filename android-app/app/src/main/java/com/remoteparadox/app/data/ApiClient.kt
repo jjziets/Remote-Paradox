@@ -36,16 +36,28 @@ object ApiClient {
             .writeTimeout(10, TimeUnit.SECONDS)
             .pingInterval(15, TimeUnit.SECONDS)
 
-        if (fingerprint.isNotBlank()) {
-            val trustManager = FingerprintTrustManager(fingerprint)
-            val sslContext = SSLContext.getInstance("TLS")
-            sslContext.init(null, arrayOf<TrustManager>(trustManager), null)
-            builder.sslSocketFactory(sslContext.socketFactory, trustManager)
-            builder.hostnameVerifier { _, _ -> true }
+        val trustManager: X509TrustManager = if (fingerprint.isNotBlank()) {
+            FingerprintTrustManager(fingerprint)
+        } else {
+            TrustAllManager()
         }
+        val sslContext = SSLContext.getInstance("TLS")
+        sslContext.init(null, arrayOf<TrustManager>(trustManager), null)
+        builder.sslSocketFactory(sslContext.socketFactory, trustManager)
+        builder.hostnameVerifier { _, _ -> true }
 
         return builder.build()
     }
+}
+
+/**
+ * TrustManager that accepts any certificate. Used when the user logs in
+ * directly (without QR) against a self-signed server.
+ */
+private class TrustAllManager : X509TrustManager {
+    override fun checkClientTrusted(chain: Array<out X509Certificate>?, authType: String?) {}
+    override fun checkServerTrusted(chain: Array<out X509Certificate>?, authType: String?) {}
+    override fun getAcceptedIssuers(): Array<X509Certificate> = arrayOf()
 }
 
 /**
