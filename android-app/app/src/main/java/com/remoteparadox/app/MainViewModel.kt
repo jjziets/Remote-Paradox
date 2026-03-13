@@ -75,7 +75,12 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     private var notificationId = 100
     private var lastTriggeredPartition: Int? = null
     private var lastArmedState = mutableMapOf<Int, Boolean>()
+    private var lastPartitionMode = mutableMapOf<Int, String>()
+    private var lastZoneOpen = mutableMapOf<Int, Boolean>()
+    private var lastZoneAlarm = mutableMapOf<Int, Boolean>()
+    private var stateInitialized = false
     private var mediaPlayer: MediaPlayer? = null
+    private var permissionRequester: (() -> Unit)? = null
 
     companion object {
         private const val CHANNEL_ID = "alarm_events"
@@ -398,7 +403,14 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         _state.update { it.copy(soundEnabled = enabled) }
     }
 
+    fun setPermissionRequester(requester: () -> Unit) {
+        permissionRequester = requester
+    }
+
     fun setNotificationsEnabled(enabled: Boolean) {
+        if (enabled) {
+            permissionRequester?.invoke()
+        }
         tokenStore.notificationsEnabled = enabled
         _state.update { it.copy(notificationsEnabled = enabled) }
     }
@@ -562,25 +574,95 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     fun checkStatusChanges(newStatus: AlarmStatus?) {
         val parts = newStatus?.partitions ?: return
+
+        if (!stateInitialized) {
+            for (p in parts) {
+                lastArmedState[p.id] = p.armed
+                lastPartitionMode[p.id] = p.mode
+                for (z in p.zones) {
+                    lastZoneOpen[z.id] = z.open
+                    lastZoneAlarm[z.id] = z.alarm
+                }
+            }
+            stateInitialized = true
+            return
+        }
+
+        val user = tokenStore.username ?: "Someone"
+
         for (p in parts) {
-            if (p.mode == "triggered" && lastTriggeredPartition != p.id) {
-                lastTriggeredPartition = p.id
-                val alarmZones = p.zones.filter { it.alarm || it.wasInAlarm }.joinToString(", ") { it.name }
-                sendNotification("ALARM TRIGGERED — ${p.name}", "Zones: $alarmZones")
+            val prevMode = lastPartitionMode[p.id] ?: "disarmed"
+            val wasArmed = lastArmedState[p.id] ?: false
+
+            // Alarm triggered
+            if (p.mode == "triggered" && prevMode != "triggered") {
+                val alarmZones = p.zones
+                    .filter { it.alarm || it.wasInAlarm }
+                    .joinToString(", ") { it.name }
+                sendNotification(
+                    "ALARM TRIGGERED — ${p.name}",
+                    if (alarmZones.isNotBlank()) "Zones: $alarmZones" else "Alarm activated"
+                )
                 playAlarmSound()
-            } else if (p.mode != "triggered" && lastTriggeredPartition == p.id) {
-                lastTriggeredPartition = null
             }
 
-            val wasArmed = lastArmedState[p.id] ?: false
+            // Armed (away or stay)
             if (p.armed && !wasArmed) {
-                sendNotification("${p.name} Armed", "${p.mode.replace("_", " ").uppercase()}")
-                playBeep()
-            } else if (!p.armed && wasArmed) {
-                sendNotification("${p.name} Disarmed", "System disarmed")
+                val modeLabel = when (p.mode) {
+                    "armed_away" -> "Armed Away"
+                    "armed_home" -> "Armed Home"
+                    else -> "Armed"
+                }
+                sendNotification("${p.name}: $modeLabel", "$user armed the system")
                 playBeep()
             }
+
+            // Arming started
+            if (p.mode == "arming" && prevMode != "arming") {
+                sendNotification("${p.name}: Arming...", "$user is arming the system")
+            }
+
+            // Disarmed
+            if (!p.armed && wasArmed && p.mode == "disarmed") {
+                sendNotification("${p.name}: Disarmed", "$user disarmed the system")
+                playBeep()
+            }
+
+            // Zone trips while armed — only notify when armed
+            if (p.armed || p.mode == "triggered") {
+                for (z in p.zones) {
+                    val wasOpen = lastZoneOpen[z.id] ?: false
+                    val wasAlarm = lastZoneAlarm[z.id] ?: false
+
+                    if (z.alarm && !wasAlarm) {
+                        sendNotification(
+                            "Zone Alarm: ${z.name}",
+                            "${p.name} — zone triggered alarm"
+                        )
+                    } else if (z.open && !wasOpen && !z.bypassed) {
+                        sendNotification(
+                            "Zone Trip: ${z.name}",
+                            "${p.name} — zone opened while armed"
+                        )
+                    }
+                }
+            }
+
+            // Panic — always notify (detected via mode or event)
+            if (p.mode == "triggered" && prevMode != "triggered") {
+                val panicZones = p.zones.filter { it.alarm }
+                if (panicZones.isEmpty()) {
+                    sendNotification("PANIC — ${p.name}", "Panic alarm activated")
+                    playAlarmSound()
+                }
+            }
+
             lastArmedState[p.id] = p.armed
+            lastPartitionMode[p.id] = p.mode
+            for (z in p.zones) {
+                lastZoneOpen[z.id] = z.open
+                lastZoneAlarm[z.id] = z.alarm
+            }
         }
     }
 
