@@ -19,19 +19,11 @@ import sys
 
 import urllib.request
 import urllib.error
-import ssl
 
 
 def _api_base() -> str:
     port = os.environ.get("PARADOX_API_PORT", "8080")
-    return f"https://127.0.0.1:{port}"
-
-
-def _ssl_context() -> ssl.SSLContext:
-    ctx = ssl.create_default_context()
-    ctx.check_hostname = False
-    ctx.verify_mode = ssl.CERT_NONE
-    return ctx
+    return f"http://127.0.0.1:{port}"
 
 
 def _request(method: str, path: str, body: dict | None = None, token: str | None = None) -> dict:
@@ -43,7 +35,7 @@ def _request(method: str, path: str, body: dict | None = None, token: str | None
     if token:
         req.add_header("Authorization", f"Bearer {token}")
     try:
-        with urllib.request.urlopen(req, context=_ssl_context()) as resp:
+        with urllib.request.urlopen(req) as resp:
             return json.loads(resp.read())
     except urllib.error.HTTPError as e:
         detail = e.read().decode()
@@ -124,12 +116,20 @@ def cmd_status(_args: argparse.Namespace) -> None:
 
 
 def cmd_open(args: argparse.Namespace) -> None:
-    result = _request("POST", "/alarm/zone-toggle", {"zone_id": args.zone_id, "open": True})
+    token = _get_admin_token()
+    if not token:
+        print("Cannot get admin token. Set PARADOX_ADMIN_PASS.", file=sys.stderr)
+        sys.exit(1)
+    result = _request("POST", "/alarm/zone-toggle", {"zone_id": args.zone_id, "open": True}, token=token)
     print(f"Zone {args.zone_id}: {result.get('action', 'done')}")
 
 
 def cmd_close(args: argparse.Namespace) -> None:
-    result = _request("POST", "/alarm/zone-toggle", {"zone_id": args.zone_id, "open": False})
+    token = _get_admin_token()
+    if not token:
+        print("Cannot get admin token. Set PARADOX_ADMIN_PASS.", file=sys.stderr)
+        sys.exit(1)
+    result = _request("POST", "/alarm/zone-toggle", {"zone_id": args.zone_id, "open": False}, token=token)
     print(f"Zone {args.zone_id}: {result.get('action', 'done')}")
 
 

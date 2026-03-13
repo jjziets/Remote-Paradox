@@ -102,17 +102,15 @@ fun ScanScreen(
         Spacer(Modifier.height(16.dp))
         OutlinedButton(
             onClick = onManualEntry,
-            modifier = Modifier.padding(bottom = if (hasServerConfig) 8.dp else 32.dp),
+            modifier = Modifier.padding(bottom = 8.dp),
         ) {
             Text("Enter code manually")
         }
-        if (hasServerConfig) {
-            TextButton(
-                onClick = onLogin,
-                modifier = Modifier.padding(bottom = 24.dp),
-            ) {
-                Text("Already registered? Log in")
-            }
+        TextButton(
+            onClick = onLogin,
+            modifier = Modifier.padding(bottom = 24.dp),
+        ) {
+            Text("Already registered? Log in")
         }
     }
 }
