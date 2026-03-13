@@ -593,18 +593,20 @@ private fun ZoneCard(zone: ZoneInfo, onBypass: () -> Unit) {
     }
 
     val flashAlpha = remember { Animatable(0f) }
-    val flashColor = if (zone.alarm) Color(0xFFE94560) else ZoneOpen
+    val flashColor = if (zone.alarm) Color(0xFFFF1744) else Color(0xFF76FF03)
 
-    var prevOpen by remember { mutableStateOf(zone.open) }
-    var prevAlarm by remember { mutableStateOf(zone.alarm) }
-    if ((zone.open && !prevOpen) || (zone.alarm && !prevAlarm)) {
-        LaunchedEffect(zone.open, zone.alarm) {
-            flashAlpha.snapTo(0.5f)
-            flashAlpha.animateTo(0f, animationSpec = tween(500))
+    val prevOpen = remember { mutableStateOf(zone.open) }
+    val prevAlarm = remember { mutableStateOf(zone.alarm) }
+
+    LaunchedEffect(zone.open, zone.alarm) {
+        val shouldFlash = (zone.open && !prevOpen.value) || (zone.alarm && !prevAlarm.value)
+        prevOpen.value = zone.open
+        prevAlarm.value = zone.alarm
+        if (shouldFlash) {
+            flashAlpha.snapTo(0.7f)
+            flashAlpha.animateTo(0f, animationSpec = tween(800))
         }
     }
-    prevOpen = zone.open
-    prevAlarm = zone.alarm
 
     val bgColor = androidx.compose.ui.graphics.lerp(baseBgColor, flashColor, flashAlpha.value)
 
