@@ -1,7 +1,10 @@
 package com.remoteparadox.app.ui.screens
 
 import androidx.compose.animation.*
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
+import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.grid.GridCells
@@ -19,6 +22,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -80,10 +84,30 @@ fun DashboardScreen(
         },
         containerColor = MaterialTheme.colorScheme.background,
     ) { padding ->
+        val swipeThreshold = 80f
         PullToRefreshBox(
             isRefreshing = isLoading,
             onRefresh = onRefresh,
-            modifier = Modifier.fillMaxSize().padding(padding),
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(padding)
+                .pointerInput(partitions) {
+                    if (partitions.size <= 1) return@pointerInput
+                    var totalDrag = 0f
+                    detectHorizontalDragGestures(
+                        onDragStart = { totalDrag = 0f },
+                        onDragEnd = {
+                            if (totalDrag > swipeThreshold) {
+                                val idx = partitions.indexOfFirst { it.id == selectedPartition }
+                                if (idx > 0) onSelectPartition(partitions[idx - 1].id)
+                            } else if (totalDrag < -swipeThreshold) {
+                                val idx = partitions.indexOfFirst { it.id == selectedPartition }
+                                if (idx < partitions.size - 1) onSelectPartition(partitions[idx + 1].id)
+                            }
+                        },
+                        onHorizontalDrag = { _, dragAmount -> totalDrag += dragAmount },
+                    )
+                },
         ) {
         LazyColumn(
             modifier = Modifier.fillMaxSize().padding(horizontal = 16.dp),
@@ -555,7 +579,7 @@ private fun ZoneGrid(zones: List<ZoneInfo>, onBypass: (Int, Boolean) -> Unit) {
 private fun ZoneCard(zone: ZoneInfo, onBypass: () -> Unit) {
     val statusColor = if (zone.open) ZoneOpen else ZoneClosed
     val dotColor = if (zone.bypassed) Color.Gray else statusColor
-    val bgColor = when {
+    val baseBgColor = when {
         zone.alarm -> Color(0xFFE94560).copy(alpha = 0.2f)
         zone.wasInAlarm -> AlarmStay.copy(alpha = 0.1f)
         else -> MaterialTheme.colorScheme.surface
@@ -565,6 +589,23 @@ private fun ZoneCard(zone: ZoneInfo, onBypass: () -> Unit) {
         zone.wasInAlarm -> AlarmStay.copy(alpha = 0.3f)
         else -> Color.Transparent
     }
+
+    val flashAlpha = remember { Animatable(0f) }
+    val flashColor = if (zone.alarm) Color(0xFFE94560) else ZoneOpen
+
+    var prevOpen by remember { mutableStateOf(zone.open) }
+    var prevAlarm by remember { mutableStateOf(zone.alarm) }
+    if ((zone.open && !prevOpen) || (zone.alarm && !prevAlarm)) {
+        LaunchedEffect(zone.open, zone.alarm) {
+            flashAlpha.snapTo(0.5f)
+            flashAlpha.animateTo(0f, animationSpec = tween(500))
+        }
+    }
+    prevOpen = zone.open
+    prevAlarm = zone.alarm
+
+    val bgColor = androidx.compose.ui.graphics.lerp(baseBgColor, flashColor, flashAlpha.value)
+
     Card(
         shape = RoundedCornerShape(10.dp),
         colors = CardDefaults.cardColors(containerColor = bgColor),
