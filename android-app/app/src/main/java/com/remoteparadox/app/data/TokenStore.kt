@@ -53,6 +53,14 @@ class TokenStore(context: Context) {
         get() = prefs.getString(KEY_ALARM_CODE, null)
         set(value) = prefs.edit().putString(KEY_ALARM_CODE, value).apply()
 
+    var soundEnabled: Boolean
+        get() = prefs.getBoolean(KEY_SOUND, true)
+        set(value) = prefs.edit().putBoolean(KEY_SOUND, value).apply()
+
+    var notificationsEnabled: Boolean
+        get() = prefs.getBoolean(KEY_NOTIFICATIONS, true)
+        set(value) = prefs.edit().putBoolean(KEY_NOTIFICATIONS, value).apply()
+
     val bearerHeader: String get() = "Bearer ${token.orEmpty()}"
 
     fun saveLogin(host: String, port: Int, fingerprint: String, loginResp: LoginResponse) {
@@ -96,5 +104,7 @@ class TokenStore(context: Context) {
         private const val KEY_PORT = "server_port"
         private const val KEY_FINGERPRINT = "cert_fingerprint"
         private const val KEY_ALARM_CODE = "alarm_code"
+        private const val KEY_SOUND = "sound_enabled"
+        private const val KEY_NOTIFICATIONS = "notifications_enabled"
     }
 }

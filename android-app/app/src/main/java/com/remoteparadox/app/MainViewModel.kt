@@ -1,7 +1,15 @@
 package com.remoteparadox.app
 
 import android.app.Application
+import android.app.NotificationChannel
+import android.app.NotificationManager
+import android.content.Context
+import android.media.AudioAttributes
+import android.media.MediaPlayer
+import android.media.RingtoneManager
+import android.os.Build
 import android.util.Log
+import androidx.core.app.NotificationCompat
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.remoteparadox.app.data.*
@@ -32,9 +40,11 @@ data class AppState(
     val error: String? = null,
     val pendingServerConfig: ServerConfig? = null,
     val wsConnected: Boolean = false,
+    val soundEnabled: Boolean = true,
+    val notificationsEnabled: Boolean = true,
 )
 
-enum class Screen { Loading, Scan, Setup, Login, Dashboard }
+enum class Screen { Loading, Scan, Setup, Login, Dashboard, Settings }
 
 class MainViewModel(app: Application) : AndroidViewModel(app) {
     val tokenStore = TokenStore(app)
@@ -46,8 +56,23 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     private var wsJob: Job? = null
     private var webSocket: WebSocket? = null
     private val json = Json { ignoreUnknownKeys = true; isLenient = true }
+    private var notificationId = 100
+    private var lastTriggeredPartition: Int? = null
+    private var lastArmedState = mutableMapOf<Int, Boolean>()
+    private var mediaPlayer: MediaPlayer? = null
+
+    companion object {
+        private const val CHANNEL_ID = "alarm_events"
+    }
 
     init {
+        createNotificationChannel()
+        _state.update {
+            it.copy(
+                soundEnabled = tokenStore.soundEnabled,
+                notificationsEnabled = tokenStore.notificationsEnabled,
+            )
+        }
         decideInitialScreen()
     }
 
@@ -218,7 +243,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 _state.update { it.copy(isLoading = true) }
                 val resp = a.alarmStatus(tokenStore.bearerHeader)
                 if (resp.isSuccessful && resp.body() != null) {
-                    _state.update { it.copy(alarmStatus = resp.body(), isLoading = false, error = null) }
+                    val body = resp.body()!!
+                    checkStatusChanges(body)
+                    _state.update { it.copy(alarmStatus = body, isLoading = false, error = null) }
                 } else if (resp.code() == 401) {
                     handleTokenExpired()
                 } else {
@@ -294,6 +321,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                     val events = obj["events"]?.jsonArray?.map {
                         json.decodeFromString<PanelEvent>(it.toString())
                     } ?: emptyList()
+                    checkStatusChanges(status)
                     _state.update {
                         it.copy(alarmStatus = status, eventHistory = events, isLoading = false, error = null)
                     }
@@ -339,11 +367,123 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         disconnectWebSocket()
     }
 
-    @Deprecated("Use startRealtimeUpdates()", replaceWith = ReplaceWith("startRealtimeUpdates()"))
-    fun startPolling() = startRealtimeUpdates()
+    // ── Settings ──
 
-    @Deprecated("Use stopRealtimeUpdates()", replaceWith = ReplaceWith("stopRealtimeUpdates()"))
-    fun stopPolling() = stopRealtimeUpdates()
+    fun goToSettings() {
+        _state.update { it.copy(screen = Screen.Settings) }
+    }
+
+    fun goBackToDashboard() {
+        _state.update { it.copy(screen = Screen.Dashboard) }
+    }
+
+    fun setSoundEnabled(enabled: Boolean) {
+        tokenStore.soundEnabled = enabled
+        _state.update { it.copy(soundEnabled = enabled) }
+    }
+
+    fun setNotificationsEnabled(enabled: Boolean) {
+        tokenStore.notificationsEnabled = enabled
+        _state.update { it.copy(notificationsEnabled = enabled) }
+    }
+
+    // ── Notifications & Sound ──
+
+    private fun createNotificationChannel() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            val channel = NotificationChannel(
+                CHANNEL_ID, "Alarm Events", NotificationManager.IMPORTANCE_HIGH,
+            ).apply {
+                description = "Alarm trigger, arm, and disarm events"
+                enableVibration(true)
+            }
+            val nm = getApplication<Application>().getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+            nm.createNotificationChannel(channel)
+        }
+    }
+
+    private fun sendNotification(title: String, body: String) {
+        if (!_state.value.notificationsEnabled) return
+        try {
+            val ctx = getApplication<Application>()
+            val nm = ctx.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+            val notification = NotificationCompat.Builder(ctx, CHANNEL_ID)
+                .setSmallIcon(android.R.drawable.ic_dialog_alert)
+                .setContentTitle(title)
+                .setContentText(body)
+                .setPriority(NotificationCompat.PRIORITY_HIGH)
+                .setAutoCancel(true)
+                .build()
+            nm.notify(notificationId++, notification)
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to send notification: ${e.message}")
+        }
+    }
+
+    private fun playAlarmSound() {
+        if (!_state.value.soundEnabled) return
+        try {
+            mediaPlayer?.release()
+            val uri = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_ALARM)
+                ?: RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION)
+            mediaPlayer = MediaPlayer().apply {
+                setAudioAttributes(AudioAttributes.Builder()
+                    .setUsage(AudioAttributes.USAGE_ALARM)
+                    .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
+                    .build())
+                setDataSource(getApplication<Application>(), uri)
+                isLooping = false
+                prepare()
+                start()
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to play alarm sound: ${e.message}")
+        }
+    }
+
+    private fun playBeep() {
+        if (!_state.value.soundEnabled) return
+        try {
+            mediaPlayer?.release()
+            val uri = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION)
+            mediaPlayer = MediaPlayer().apply {
+                setAudioAttributes(AudioAttributes.Builder()
+                    .setUsage(AudioAttributes.USAGE_NOTIFICATION)
+                    .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
+                    .build())
+                setDataSource(getApplication<Application>(), uri)
+                isLooping = false
+                prepare()
+                start()
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to play beep: ${e.message}")
+        }
+    }
+
+    fun checkStatusChanges(newStatus: AlarmStatus?) {
+        val parts = newStatus?.partitions ?: return
+        for (p in parts) {
+            if (p.mode == "triggered" && lastTriggeredPartition != p.id) {
+                lastTriggeredPartition = p.id
+                val alarmZones = p.zones.filter { it.alarm || it.wasInAlarm }.joinToString(", ") { it.name }
+                sendNotification("ALARM TRIGGERED — ${p.name}", "Zones: $alarmZones")
+                playAlarmSound()
+            } else if (p.mode != "triggered" && lastTriggeredPartition == p.id) {
+                lastTriggeredPartition = null
+            }
+
+            val wasArmed = lastArmedState[p.id] ?: false
+            if (p.armed && !wasArmed) {
+                sendNotification("${p.name} Armed", "${p.mode.replace("_", " ").uppercase()}")
+                playBeep()
+            } else if (!p.armed && wasArmed) {
+                sendNotification("${p.name} Disarmed", "System disarmed")
+                playBeep()
+            }
+            lastArmedState[p.id] = p.armed
+        }
+    }
 
     // ── Session ──
 
@@ -363,5 +503,11 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         tokenStore.clear()
         api = null
         _state.update { AppState(screen = Screen.Scan) }
+    }
+
+    override fun onCleared() {
+        super.onCleared()
+        mediaPlayer?.release()
+        mediaPlayer = null
     }
 }
