@@ -20,7 +20,7 @@ import okhttp3.WebSocketListener
 
 private const val TAG = "MainViewModel"
 private const val WS_RECONNECT_DELAY_MS = 3_000L
-private const val FALLBACK_POLL_INTERVAL_MS = 15_000L
+private const val FALLBACK_POLL_INTERVAL_MS = 5_000L
 
 data class AppState(
     val screen: Screen = Screen.Loading,
@@ -197,6 +197,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 val resp = call(a)
                 if (resp.isSuccessful) {
                     _state.update { it.copy(actionInProgress = null) }
+                    delay(500)
+                    refreshStatus()
+                    refreshHistory()
                 } else if (resp.code() == 401) {
                     handleTokenExpired()
                 } else {
@@ -319,11 +322,11 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             while (isActive) {
                 delay(FALLBACK_POLL_INTERVAL_MS)
                 if (!_state.value.wsConnected) {
-                    Log.d(TAG, "WS disconnected — reconnecting + HTTP fallback poll")
+                    Log.d(TAG, "WS disconnected — reconnecting")
                     connectWebSocket()
-                    refreshStatus()
-                    refreshHistory()
                 }
+                refreshStatus()
+                refreshHistory()
             }
         }
     }
