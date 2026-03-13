@@ -4,14 +4,18 @@ import android.app.Application
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.content.Context
+import android.content.Intent
 import android.media.AudioAttributes
 import android.media.MediaPlayer
 import android.media.RingtoneManager
+import android.net.Uri
 import android.os.Build
 import android.util.Log
 import androidx.core.app.NotificationCompat
+import androidx.core.content.FileProvider
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import com.remoteparadox.app.BuildConfig
 import com.remoteparadox.app.data.*
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -30,6 +34,17 @@ private const val TAG = "MainViewModel"
 private const val WS_RECONNECT_DELAY_MS = 3_000L
 private const val FALLBACK_POLL_INTERVAL_MS = 5_000L
 
+data class UpdateState(
+    val checking: Boolean = false,
+    val downloading: Boolean = false,
+    val downloadProgress: Float = 0f,
+    val updateAvailable: Boolean = false,
+    val latestVersion: String? = null,
+    val releaseNotes: String? = null,
+    val downloadUrl: String? = null,
+    val error: String? = null,
+)
+
 data class AppState(
     val screen: Screen = Screen.Loading,
     val alarmStatus: AlarmStatus? = null,
@@ -42,6 +57,7 @@ data class AppState(
     val wsConnected: Boolean = false,
     val soundEnabled: Boolean = true,
     val notificationsEnabled: Boolean = true,
+    val update: UpdateState = UpdateState(),
 )
 
 enum class Screen { Loading, Scan, Setup, Login, Dashboard, Settings }
@@ -385,6 +401,89 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     fun setNotificationsEnabled(enabled: Boolean) {
         tokenStore.notificationsEnabled = enabled
         _state.update { it.copy(notificationsEnabled = enabled) }
+    }
+
+    // ── Update checker ──
+
+    fun checkForUpdate() {
+        _state.update { it.copy(update = it.update.copy(checking = true, error = null)) }
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val info = UpdateChecker.check()
+                _state.update {
+                    it.copy(update = UpdateState(
+                        checking = false,
+                        updateAvailable = info.hasUpdate,
+                        latestVersion = info.latestVersion,
+                        releaseNotes = info.releaseNotes,
+                        downloadUrl = info.downloadUrl,
+                    ))
+                }
+            } catch (e: Exception) {
+                Log.w(TAG, "Update check failed: ${e.message}")
+                _state.update {
+                    it.copy(update = it.update.copy(checking = false, error = "Check failed: ${e.message}"))
+                }
+            }
+        }
+    }
+
+    fun downloadAndInstallUpdate() {
+        val url = _state.value.update.downloadUrl ?: return
+        _state.update { it.copy(update = it.update.copy(downloading = true, downloadProgress = 0f, error = null)) }
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val ctx = getApplication<Application>()
+                val updatesDir = java.io.File(ctx.getExternalFilesDir(null), "updates")
+                updatesDir.mkdirs()
+                val apkFile = java.io.File(updatesDir, "update.apk")
+
+                val request = okhttp3.Request.Builder().url(url).build()
+                val client = okhttp3.OkHttpClient.Builder()
+                    .connectTimeout(30, java.util.concurrent.TimeUnit.SECONDS)
+                    .readTimeout(5, java.util.concurrent.TimeUnit.MINUTES)
+                    .build()
+                val response = client.newCall(request).execute()
+                if (!response.isSuccessful) throw Exception("Download failed: ${response.code}")
+
+                val body = response.body ?: throw Exception("Empty download")
+                val totalBytes = body.contentLength()
+                var bytesRead = 0L
+
+                body.byteStream().use { input ->
+                    apkFile.outputStream().use { output ->
+                        val buffer = ByteArray(8192)
+                        var read: Int
+                        while (input.read(buffer).also { read = it } != -1) {
+                            output.write(buffer, 0, read)
+                            bytesRead += read
+                            if (totalBytes > 0) {
+                                val progress = bytesRead.toFloat() / totalBytes
+                                _state.update { it.copy(update = it.update.copy(downloadProgress = progress)) }
+                            }
+                        }
+                    }
+                }
+
+                _state.update { it.copy(update = it.update.copy(downloading = false, downloadProgress = 1f)) }
+
+                val contentUri = FileProvider.getUriForFile(
+                    ctx, "${ctx.packageName}.fileprovider", apkFile
+                )
+                val installIntent = Intent(Intent.ACTION_VIEW).apply {
+                    setDataAndType(contentUri, "application/vnd.android.package-archive")
+                    addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                }
+                ctx.startActivity(installIntent)
+
+            } catch (e: Exception) {
+                Log.e(TAG, "Update download failed", e)
+                _state.update {
+                    it.copy(update = it.update.copy(downloading = false, error = "Download failed: ${e.message}"))
+                }
+            }
+        }
     }
 
     // ── Notifications & Sound ──
