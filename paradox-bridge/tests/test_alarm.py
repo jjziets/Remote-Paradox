@@ -12,7 +12,7 @@ from paradox_bridge.alarm import AlarmService, AlarmStatus, PartitionStatus, Zon
 
 
 class TestAlarmServiceWithMock:
-    """Real PAI path — uses mocks."""
+    """Real PAI path — uses mocks to simulate PAI storage containers."""
 
     @pytest.fixture()
     def alarm(self):
@@ -21,42 +21,134 @@ class TestAlarmServiceWithMock:
         svc._connected = True
         return svc
 
+    def _setup_storage(self, alarm, partitions, zones):
+        part_container = MagicMock()
+        part_container.items.return_value = list(partitions.items())
+        zone_container = MagicMock()
+        zone_container.items.return_value = list(zones.items())
+        alarm._pai.storage.get_container.side_effect = lambda name: {
+            "partition": part_container,
+            "zone": zone_container,
+        }[name]
+
     def test_get_status_armed_away(self, alarm):
-        alarm._pai.panel = {
-            "partitions": {
-                1: {"status": {"armed": True, "armed_away": True, "armed_stay": False}},
-            },
-        }
-        alarm._pai.storage.zones = MagicMock()
-        alarm._pai.storage.zones.select.return_value = []
+        self._setup_storage(alarm, {
+            1: {"label": "Partition 1", "arm": True, "arm_stay": False,
+                "exit_delay": False, "entry_delay": False, "ready_status": True},
+        }, {})
         status = alarm.get_status()
         assert isinstance(status, AlarmStatus)
         assert status.partitions[0].mode == "armed_away"
 
     def test_get_status_armed_home(self, alarm):
-        alarm._pai.panel = {
-            "partitions": {
-                1: {"status": {"armed": True, "armed_away": False, "armed_stay": True}},
-            },
-        }
-        alarm._pai.storage.zones = MagicMock()
-        alarm._pai.storage.zones.select.return_value = []
+        self._setup_storage(alarm, {
+            1: {"label": "Partition 1", "arm": True, "arm_stay": True,
+                "exit_delay": False, "entry_delay": False, "ready_status": True},
+        }, {})
         assert alarm.get_status().partitions[0].mode == "armed_home"
 
     def test_get_status_disarmed(self, alarm):
-        alarm._pai.panel = {
-            "partitions": {
-                1: {"status": {"armed": False}},
-            },
-        }
-        alarm._pai.storage.zones = MagicMock()
-        alarm._pai.storage.zones.select.return_value = []
+        self._setup_storage(alarm, {
+            1: {"label": "Partition 1", "arm": False, "exit_delay": False,
+                "entry_delay": False, "ready_status": True},
+        }, {})
         assert alarm.get_status().partitions[0].mode == "disarmed"
 
     def test_not_connected_raises(self):
         svc = AlarmService(serial_port="/dev/null", baud=9600, pc_password="0000")
         with pytest.raises(ConnectionError):
             svc.get_status()
+
+
+class TestStatusChangeCallback:
+    """Verify the callback fires on status changes and not on steady state."""
+
+    @pytest.fixture()
+    def alarm(self):
+        svc = AlarmService(serial_port="/dev/null", baud=9600, pc_password="0000")
+        svc._pai = MagicMock()
+        svc._connected = True
+        return svc
+
+    def _setup_storage(self, alarm, partitions, zones):
+        part_container = MagicMock()
+        part_container.items.return_value = list(partitions.items())
+        zone_container = MagicMock()
+        zone_container.items.return_value = list(zones.items())
+        alarm._pai.storage.get_container.side_effect = lambda name: {
+            "partition": part_container,
+            "zone": zone_container,
+        }[name]
+
+    def test_callback_fires_on_partition_change(self, alarm):
+        cb = MagicMock()
+        alarm.set_status_change_callback(cb)
+        self._setup_storage(alarm, {
+            1: {"label": "Area 1", "arm": False, "exit_delay": False,
+                "entry_delay": False, "ready_status": True},
+        }, {})
+        alarm.get_status()
+        cb.assert_not_called()
+
+        self._setup_storage(alarm, {
+            1: {"label": "Area 1", "arm": True, "arm_stay": False,
+                "exit_delay": False, "entry_delay": False, "ready_status": True},
+        }, {})
+        alarm.get_status()
+        cb.assert_called_once()
+
+    def test_callback_fires_on_zone_change(self, alarm):
+        cb = MagicMock()
+        alarm.set_status_change_callback(cb)
+        self._setup_storage(alarm, {
+            1: {"label": "Area 1", "arm": False, "exit_delay": False,
+                "entry_delay": False, "ready_status": True},
+        }, {
+            1: {"label": "Front Door", "open": False, "bypassed": False,
+                "alarm": False, "was_in_alarm": False, "tamper": False, "partition": 1},
+        })
+        alarm.get_status()
+        cb.assert_not_called()
+
+        self._setup_storage(alarm, {
+            1: {"label": "Area 1", "arm": False, "exit_delay": False,
+                "entry_delay": False, "ready_status": True},
+        }, {
+            1: {"label": "Front Door", "open": True, "bypassed": False,
+                "alarm": False, "was_in_alarm": False, "tamper": False, "partition": 1},
+        })
+        alarm.get_status()
+        cb.assert_called_once()
+
+    def test_no_callback_on_steady_state(self, alarm):
+        cb = MagicMock()
+        alarm.set_status_change_callback(cb)
+        self._setup_storage(alarm, {
+            1: {"label": "Area 1", "arm": False, "exit_delay": False,
+                "entry_delay": False, "ready_status": True},
+        }, {})
+        alarm.get_status()
+        alarm.get_status()
+        alarm.get_status()
+        cb.assert_not_called()
+
+    def test_callback_not_set_no_error(self, alarm):
+        self._setup_storage(alarm, {
+            1: {"label": "Area 1", "arm": False, "exit_delay": False,
+                "entry_delay": False, "ready_status": True},
+        }, {
+            1: {"label": "Zone 1", "open": False, "bypassed": False,
+                "alarm": False, "was_in_alarm": False, "tamper": False, "partition": 1},
+        })
+        alarm.get_status()
+        self._setup_storage(alarm, {
+            1: {"label": "Area 1", "arm": False, "exit_delay": False,
+                "entry_delay": False, "ready_status": True},
+        }, {
+            1: {"label": "Zone 1", "open": True, "bypassed": False,
+                "alarm": False, "was_in_alarm": False, "tamper": False, "partition": 1},
+        })
+        alarm.get_status()
 
 
 class TestDemoMode:
@@ -94,72 +186,82 @@ class TestDemoMode:
         zones = svc.list_all_zones()
         assert all("type" in z for z in zones)
 
-    def test_arm_away_starts_arming(self, svc):
-        svc.arm_away(code="1234", partition_id=1)
+    @pytest.mark.asyncio
+    async def test_arm_away_starts_arming(self, svc):
+        await svc.arm_away(code="1234", partition_id=1)
         st = svc.get_status()
         p = [p for p in st.partitions if p.id == 1][0]
         assert p.mode == "arming"
 
-    def test_arm_stay_starts_arming(self, svc):
-        svc.arm_stay(code="1234", partition_id=1)
+    @pytest.mark.asyncio
+    async def test_arm_stay_starts_arming(self, svc):
+        await svc.arm_stay(code="1234", partition_id=1)
         st = svc.get_status()
         p = [p for p in st.partitions if p.id == 1][0]
         assert p.mode == "arming"
 
-    def test_arm_transitions_to_armed(self, svc):
-        svc.arm_away(code="1234", partition_id=1)
+    @pytest.mark.asyncio
+    async def test_arm_transitions_to_armed(self, svc):
+        await svc.arm_away(code="1234", partition_id=1)
         svc.panel._force_exit_delay_done(1)
         st = svc.get_status()
         p = [p for p in st.partitions if p.id == 1][0]
         assert p.mode == "armed_away"
         assert p.armed is True
 
-    def test_arm_stay_transitions_to_armed_home(self, svc):
-        svc.arm_stay(code="1234", partition_id=1)
+    @pytest.mark.asyncio
+    async def test_arm_stay_transitions_to_armed_home(self, svc):
+        await svc.arm_stay(code="1234", partition_id=1)
         svc.panel._force_exit_delay_done(1)
         st = svc.get_status()
         p = [p for p in st.partitions if p.id == 1][0]
         assert p.mode == "armed_home"
 
-    def test_disarm(self, svc):
-        svc.arm_away(code="1234", partition_id=1)
-        svc.disarm(code="1234", partition_id=1)
+    @pytest.mark.asyncio
+    async def test_disarm(self, svc):
+        await svc.arm_away(code="1234", partition_id=1)
+        await svc.disarm(code="1234", partition_id=1)
         st = svc.get_status()
         p = [p for p in st.partitions if p.id == 1][0]
         assert p.mode == "disarmed"
 
-    def test_bypass_zone(self, svc):
-        svc.bypass_zone(zone_id=1)
+    @pytest.mark.asyncio
+    async def test_bypass_zone(self, svc):
+        await svc.bypass_zone(zone_id=1)
         st = svc.get_status()
         z = [z for p in st.partitions for z in p.zones if z.id == 1][0]
         assert z.bypassed is True
 
-    def test_unbypass_zone(self, svc):
-        svc.bypass_zone(zone_id=1)
-        svc.unbypass_zone(zone_id=1)
+    @pytest.mark.asyncio
+    async def test_unbypass_zone(self, svc):
+        await svc.bypass_zone(zone_id=1)
+        await svc.unbypass_zone(zone_id=1)
         st = svc.get_status()
         z = [z for p in st.partitions for z in p.zones if z.id == 1][0]
         assert z.bypassed is False
 
-    def test_instant_zone_triggers_alarm(self, svc):
-        svc.arm_away(code="1234", partition_id=1)
+    @pytest.mark.asyncio
+    async def test_instant_zone_triggers_alarm(self, svc):
+        await svc.arm_away(code="1234", partition_id=1)
         svc.panel._force_exit_delay_done(1)
-        svc.set_zone_open(zone_id=1, is_open=True)  # Main Bedroom = instant
+        svc.set_zone_open(zone_id=1, is_open=True)
         st = svc.get_status()
         p = [p for p in st.partitions if p.id == 1][0]
         assert p.mode == "triggered"
 
-    def test_entry_zone_starts_entry_delay(self, svc):
-        svc.arm_away(code="1234", partition_id=1)
+    @pytest.mark.asyncio
+    async def test_entry_zone_starts_entry_delay(self, svc):
+        await svc.arm_away(code="1234", partition_id=1)
         svc.panel._force_exit_delay_done(1)
-        svc.set_zone_open(zone_id=9, is_open=True)  # Front Door = entry_exit
+        svc.set_zone_open(zone_id=9, is_open=True)
         st = svc.get_status()
         p = [p for p in st.partitions if p.id == 1][0]
         assert p.entry_delay is True
-        assert p.mode == "armed_away"  # not triggered yet
+        assert p.mode == "armed_away"
 
-    def test_entry_delay_then_triggered(self, svc):
-        svc.arm_away(code="1234", partition_id=1)
+    @pytest.mark.asyncio
+    async def test_entry_delay_then_triggered(self, svc):
+        await svc.arm_away(code="1234", partition_id=1)
         svc.panel._force_exit_delay_done(1)
         svc.set_zone_open(zone_id=9, is_open=True)
         svc.panel._force_entry_delay_done(1)
@@ -167,18 +269,20 @@ class TestDemoMode:
         p = [p for p in st.partitions if p.id == 1][0]
         assert p.mode == "triggered"
 
-    def test_disarm_during_entry_delay(self, svc):
-        svc.arm_away(code="1234", partition_id=1)
+    @pytest.mark.asyncio
+    async def test_disarm_during_entry_delay(self, svc):
+        await svc.arm_away(code="1234", partition_id=1)
         svc.panel._force_exit_delay_done(1)
         svc.set_zone_open(zone_id=9, is_open=True)
-        svc.disarm(code="1234", partition_id=1)
+        await svc.disarm(code="1234", partition_id=1)
         st = svc.get_status()
         p = [p for p in st.partitions if p.id == 1][0]
         assert p.mode == "disarmed"
         assert p.entry_delay is False
 
-    def test_panic(self, svc):
-        svc.send_panic(partition_id=1, panic_type="fire")
+    @pytest.mark.asyncio
+    async def test_panic(self, svc):
+        await svc.send_panic(partition_id=1, panic_type="fire")
         st = svc.get_status()
         p = [p for p in st.partitions if p.id == 1][0]
         assert p.mode == "triggered"
@@ -197,9 +301,10 @@ class TestDemoMode:
                 assert hasattr(z, "was_in_alarm")
                 assert hasattr(z, "tamper")
 
-    def test_not_ready_prevents_arm(self, svc):
+    @pytest.mark.asyncio
+    async def test_not_ready_prevents_arm(self, svc):
         svc.set_zone_open(zone_id=9, is_open=True)
-        result = svc.arm_away(code="1234", partition_id=1)
+        result = await svc.arm_away(code="1234", partition_id=1)
         assert result is False
 
     def test_ready_field_in_status(self, svc):

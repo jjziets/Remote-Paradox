@@ -13,10 +13,14 @@ import javax.net.ssl.TrustManager
 import javax.net.ssl.X509TrustManager
 
 object ApiClient {
-    private val json = Json { ignoreUnknownKeys = true; isLenient = true }
+    val json = Json { ignoreUnknownKeys = true; isLenient = true }
+
+    private var _httpClient: OkHttpClient? = null
+    val httpClient: OkHttpClient get() = _httpClient ?: OkHttpClient()
 
     fun create(baseUrl: String, fingerprint: String = ""): ParadoxApi {
         val client = buildOkHttp(fingerprint)
+        _httpClient = client
         return Retrofit.Builder()
             .baseUrl(baseUrl)
             .client(client)
@@ -30,6 +34,7 @@ object ApiClient {
             .connectTimeout(5, TimeUnit.SECONDS)
             .readTimeout(10, TimeUnit.SECONDS)
             .writeTimeout(10, TimeUnit.SECONDS)
+            .pingInterval(15, TimeUnit.SECONDS)
 
         if (fingerprint.isNotBlank()) {
             val trustManager = FingerprintTrustManager(fingerprint)

@@ -134,14 +134,38 @@ class TestInviteAndRegister:
         with pytest.raises(ValueError, match="Invalid or expired invite"):
             auth.register(invite_code="FAKE-CODE", username="john", password="pass")
 
-    def test_register_duplicate_username(self, auth_env):
+    def test_reregister_existing_user_correct_password(self, auth_env):
+        """Existing user + correct password + valid invite → token (acts as login)."""
         auth, db = auth_env
         auth.setup_admin("admin", "secret123")
-        code = auth.generate_invite("admin")
-        auth.register(invite_code=code, username="john", password="pass1")
+        code1 = auth.generate_invite("admin")
+        auth.register(invite_code=code1, username="john", password="pass1")
         code2 = auth.generate_invite("admin")
-        with pytest.raises(ValueError, match="already exists"):
-            auth.register(invite_code=code2, username="john", password="pass2")
+        token = auth.register(invite_code=code2, username="john", password="pass1")
+        assert isinstance(token, str)
+        payload = auth.decode_token(token)
+        assert payload["sub"] == "john"
+        assert db.validate_invite(code2) is False  # invite consumed
+
+    def test_reregister_existing_user_wrong_password(self, auth_env):
+        """Existing user + wrong password + valid invite → rejected."""
+        auth, db = auth_env
+        auth.setup_admin("admin", "secret123")
+        code1 = auth.generate_invite("admin")
+        auth.register(invite_code=code1, username="john", password="pass1")
+        code2 = auth.generate_invite("admin")
+        with pytest.raises(ValueError, match="Incorrect password"):
+            auth.register(invite_code=code2, username="john", password="wrong")
+        assert db.validate_invite(code2) is True  # invite NOT consumed
+
+    def test_reregister_existing_user_invalid_invite(self, auth_env):
+        """Existing user + correct password + bad invite → rejected."""
+        auth, db = auth_env
+        auth.setup_admin("admin", "secret123")
+        code1 = auth.generate_invite("admin")
+        auth.register(invite_code=code1, username="john", password="pass1")
+        with pytest.raises(ValueError, match="Invalid or expired invite"):
+            auth.register(invite_code="FAKE-CODE", username="john", password="pass1")
 
     def test_register_consumed_invite_fails(self, auth_env):
         auth, _ = auth_env

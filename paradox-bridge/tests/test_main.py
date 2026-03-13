@@ -1,12 +1,15 @@
 """Integration tests for the FastAPI app using httpx TestClient."""
 
+import asyncio
 import json
 import time
+from unittest.mock import AsyncMock, patch
 
 import pytest
 from fastapi.testclient import TestClient
 
 import paradox_bridge.main as app_module
+from paradox_bridge.alarm import AlarmService
 from paradox_bridge.main import app, init_services, shutdown_services
 
 
@@ -360,3 +363,83 @@ class TestNoCORS:
     def test_no_cors_header_on_response(self, client):
         resp = client.get("/health", headers={"Origin": "http://localhost:3000"})
         assert "access-control-allow-origin" not in resp.headers
+
+
+class TestRealModeLifespan:
+    """Tests for real-mode (non-demo) alarm connect/disconnect in lifespan."""
+
+    def _run_lifespan(self, tmp_path, config_overrides=None):
+        """Helper: sets up real-mode config and returns a context for lifespan."""
+        config_path = tmp_path / "real_config.json"
+        config_path.write_text(json.dumps(config_overrides or {"demo_mode": False}))
+        return str(config_path)
+
+    def test_lifespan_calls_connect_in_real_mode(self, tmp_path):
+        cfg_path = self._run_lifespan(tmp_path)
+        with patch.object(AlarmService, "connect", new_callable=AsyncMock) as mock_connect:
+            init_services(config_path=cfg_path)
+            app_module._auth.setup_admin("admin", "secret123")
+            loop = asyncio.new_event_loop()
+            try:
+                async def _test():
+                    from paradox_bridge.main import _connect_alarm
+                    await _connect_alarm()
+                loop.run_until_complete(_test())
+            finally:
+                loop.close()
+            mock_connect.assert_awaited()
+        shutdown_services()
+
+    def test_lifespan_calls_disconnect_on_shutdown(self, tmp_path):
+        cfg_path = self._run_lifespan(tmp_path)
+        with patch.object(AlarmService, "connect", new_callable=AsyncMock), \
+             patch.object(AlarmService, "disconnect", new_callable=AsyncMock) as mock_disconnect:
+            init_services(config_path=cfg_path)
+            app_module._auth.setup_admin("admin", "secret123")
+            app_module._alarm._connected = True
+            loop = asyncio.new_event_loop()
+            try:
+                async def _test():
+                    from paradox_bridge.main import _disconnect_alarm
+                    await _disconnect_alarm()
+                loop.run_until_complete(_test())
+            finally:
+                loop.close()
+            mock_disconnect.assert_awaited_once()
+        shutdown_services()
+
+    def test_connect_retries_on_failure(self, tmp_path):
+        cfg_path = self._run_lifespan(tmp_path)
+        call_count = 0
+
+        async def flaky_connect(self_alarm):
+            nonlocal call_count
+            call_count += 1
+            if call_count < 3:
+                raise ConnectionError("Serial port busy")
+            self_alarm._connected = True
+
+        with patch.object(AlarmService, "connect", flaky_connect):
+            init_services(config_path=cfg_path)
+            app_module._auth.setup_admin("admin", "secret123")
+            loop = asyncio.new_event_loop()
+            try:
+                async def _test():
+                    from paradox_bridge.main import _connect_alarm
+                    await _connect_alarm()
+                loop.run_until_complete(_test())
+            finally:
+                loop.close()
+            assert call_count >= 3
+            assert app_module._alarm.is_connected
+        shutdown_services()
+
+    def test_health_shows_not_connected_before_connect(self, tmp_path, client):
+        cfg_path = self._run_lifespan(tmp_path)
+        init_services(config_path=cfg_path)
+        app_module._auth.setup_admin("admin", "secret123")
+        resp = client.get("/health")
+        assert resp.status_code == 200
+        assert resp.json()["alarm_connected"] is False
+        assert resp.json()["demo_mode"] is False
+        shutdown_services()

@@ -90,6 +90,12 @@ class AuthService:
     def register(self, invite_code: str, username: str, password: str) -> str:
         if not self._db.validate_invite(invite_code):
             raise ValueError("Invalid or expired invite")
+        existing = self._db.get_user(username)
+        if existing is not None:
+            if not self.verify_password(password, existing["password_hash"]):
+                raise ValueError("Incorrect password for existing user")
+            self._db.consume_invite(invite_code, used_by=username)
+            return self._create_token(username, existing["role"])
         self._db.create_user(username, self.hash_password(password), role="user")
         self._db.consume_invite(invite_code, used_by=username)
         return self._create_token(username, "user")

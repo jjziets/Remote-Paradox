@@ -1,6 +1,7 @@
 package com.remoteparadox.app
 
 import android.app.Application
+import android.util.Log
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.remoteparadox.app.data.*
@@ -8,6 +9,18 @@ import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.jsonArray
+import kotlinx.serialization.json.jsonPrimitive
+import okhttp3.Request
+import okhttp3.Response
+import okhttp3.WebSocket
+import okhttp3.WebSocketListener
+
+private const val TAG = "MainViewModel"
+private const val WS_RECONNECT_DELAY_MS = 3_000L
+private const val FALLBACK_POLL_INTERVAL_MS = 15_000L
 
 data class AppState(
     val screen: Screen = Screen.Loading,
@@ -18,6 +31,7 @@ data class AppState(
     val actionInProgress: String? = null,
     val error: String? = null,
     val pendingServerConfig: ServerConfig? = null,
+    val wsConnected: Boolean = false,
 )
 
 enum class Screen { Loading, Scan, Setup, Login, Dashboard }
@@ -29,6 +43,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     private var api: ParadoxApi? = null
     private var pollJob: Job? = null
+    private var wsJob: Job? = null
+    private var webSocket: WebSocket? = null
+    private val json = Json { ignoreUnknownKeys = true; isLenient = true }
 
     init {
         decideInitialScreen()
@@ -38,7 +55,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         if (tokenStore.isLoggedIn) {
             connectApi()
             _state.update { it.copy(screen = Screen.Dashboard) }
-            startPolling()
+            startRealtimeUpdates()
         } else {
             _state.update { it.copy(screen = Screen.Scan) }
         }
@@ -94,7 +111,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                     tokenStore.saveRegister(host, port, fingerprint, resp.body()!!)
                     api = tempApi
                     _state.update { it.copy(screen = Screen.Dashboard, isLoading = false) }
-                    startPolling()
+                    startRealtimeUpdates()
                 } else {
                     val detail = resp.errorBody()?.string() ?: "Registration failed"
                     _state.update { it.copy(isLoading = false, error = detail) }
@@ -127,7 +144,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                     tokenStore.username = body.username
                     tokenStore.role = body.role
                     _state.update { it.copy(screen = Screen.Dashboard, isLoading = false) }
-                    startPolling()
+                    startRealtimeUpdates()
                 } else {
                     _state.update { it.copy(isLoading = false, error = "Invalid credentials") }
                 }
@@ -180,7 +197,6 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 val resp = call(a)
                 if (resp.isSuccessful) {
                     _state.update { it.copy(actionInProgress = null) }
-                    refreshStatus()
                 } else if (resp.code() == 401) {
                     handleTokenExpired()
                 } else {
@@ -223,44 +239,124 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    private fun needsFastPoll(): Boolean {
-        val parts = _state.value.alarmStatus?.partitions.orEmpty()
-        return parts.any { it.mode == "arming" || it.mode == "triggered" || it.entryDelay }
+    // ── WebSocket real-time updates ──
+
+    private fun buildWsUrl(): String? {
+        val host = tokenStore.serverHost ?: return null
+        val port = tokenStore.serverPort ?: return null
+        val token = tokenStore.token ?: return null
+        return "wss://$host:$port/ws?token=$token"
     }
 
-    // ── Polling (foreground only) ──
+    private fun connectWebSocket() {
+        val url = buildWsUrl() ?: return
+        webSocket?.cancel()
+        val request = Request.Builder().url(url).build()
+        webSocket = ApiClient.httpClient.newWebSocket(request, object : WebSocketListener() {
+            override fun onOpen(ws: WebSocket, response: Response) {
+                Log.i(TAG, "WebSocket connected")
+                _state.update { it.copy(wsConnected = true, error = null) }
+            }
 
-    fun startPolling() {
-        pollJob?.cancel()
-        pollJob = viewModelScope.launch(Dispatchers.IO) {
+            override fun onMessage(ws: WebSocket, text: String) {
+                handleWsMessage(text)
+            }
+
+            override fun onClosing(ws: WebSocket, code: Int, reason: String) {
+                Log.i(TAG, "WebSocket closing: $code $reason")
+                ws.close(1000, null)
+            }
+
+            override fun onClosed(ws: WebSocket, code: Int, reason: String) {
+                Log.i(TAG, "WebSocket closed: $code")
+                _state.update { it.copy(wsConnected = false) }
+            }
+
+            override fun onFailure(ws: WebSocket, t: Throwable, response: Response?) {
+                Log.w(TAG, "WebSocket failure: ${t.message}")
+                _state.update { it.copy(wsConnected = false) }
+            }
+        })
+    }
+
+    private fun handleWsMessage(text: String) {
+        try {
+            val obj = json.decodeFromString<JsonObject>(text)
+            val type = obj["type"]?.jsonPrimitive?.content ?: return
+            when (type) {
+                "status" -> {
+                    val status = json.decodeFromString<AlarmStatus>(
+                        JsonObject(obj.filterKeys { it in setOf("partitions", "connected") }).toString()
+                    )
+                    val events = obj["events"]?.jsonArray?.map {
+                        json.decodeFromString<PanelEvent>(it.toString())
+                    } ?: emptyList()
+                    _state.update {
+                        it.copy(alarmStatus = status, eventHistory = events, isLoading = false, error = null)
+                    }
+                }
+                "pong" -> { /* keepalive ack */ }
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to parse WS message: ${e.message}")
+        }
+    }
+
+    private fun disconnectWebSocket() {
+        webSocket?.close(1000, "bye")
+        webSocket = null
+        _state.update { it.copy(wsConnected = false) }
+    }
+
+    // ── Start/stop real-time: WS primary + HTTP fallback ──
+
+    fun startRealtimeUpdates() {
+        stopRealtimeUpdates()
+        refreshStatus()
+        refreshHistory()
+        connectWebSocket()
+        wsJob = viewModelScope.launch(Dispatchers.IO) {
             while (isActive) {
-                refreshStatus()
-                refreshHistory()
-                delay(if (needsFastPoll()) 1_000 else 5_000)
+                delay(FALLBACK_POLL_INTERVAL_MS)
+                if (!_state.value.wsConnected) {
+                    Log.d(TAG, "WS disconnected — reconnecting + HTTP fallback poll")
+                    connectWebSocket()
+                    refreshStatus()
+                    refreshHistory()
+                }
             }
         }
     }
 
-    fun stopPolling() {
+    fun stopRealtimeUpdates() {
+        wsJob?.cancel()
+        wsJob = null
         pollJob?.cancel()
         pollJob = null
+        disconnectWebSocket()
     }
+
+    @Deprecated("Use startRealtimeUpdates()", replaceWith = ReplaceWith("startRealtimeUpdates()"))
+    fun startPolling() = startRealtimeUpdates()
+
+    @Deprecated("Use stopRealtimeUpdates()", replaceWith = ReplaceWith("stopRealtimeUpdates()"))
+    fun stopPolling() = stopRealtimeUpdates()
 
     // ── Session ──
 
     private fun handleTokenExpired() {
-        stopPolling()
+        stopRealtimeUpdates()
         _state.update { it.copy(screen = Screen.Login, isLoading = false, error = null) }
     }
 
     fun logout() {
-        stopPolling()
+        stopRealtimeUpdates()
         tokenStore.clearAuth()
         _state.update { AppState(screen = Screen.Login) }
     }
 
     fun switchServer() {
-        stopPolling()
+        stopRealtimeUpdates()
         tokenStore.clear()
         api = null
         _state.update { AppState(screen = Screen.Scan) }

@@ -56,6 +56,12 @@ _alarm: AlarmService | None = None
 _ws_manager: ConnectionManager | None = None
 _cert_fingerprint: str = ""
 _demo_trigger_task: asyncio.Task | None = None
+_reconnect_task: asyncio.Task | None = None
+_ws_heartbeat_task: asyncio.Task | None = None
+
+_CONNECT_RETRY_DELAY = 30  # seconds between reconnection attempts
+_CONNECT_MAX_RETRIES = 3   # limit retries per cycle to avoid panel lockout
+_RECONNECT_CHECK_INTERVAL = 15  # seconds between connection health checks
 
 
 def get_db() -> Database:
@@ -157,6 +163,47 @@ def shutdown_services() -> None:
     _alarm = None
 
 
+def _on_alarm_status_changed() -> None:
+    """Called (synchronously) by AlarmService when PAI status changes.
+    Schedules an async broadcast to all WebSocket clients."""
+    if not _ws_manager or _ws_manager.active_count == 0:
+        return
+    try:
+        asyncio.ensure_future(_broadcast_status())
+    except RuntimeError:
+        pass
+
+
+async def _broadcast_status() -> None:
+    """Build a full status snapshot and push it to all WebSocket clients."""
+    if not _alarm or not _ws_manager:
+        return
+    try:
+        resp = _build_status_response(_alarm)
+        events = _alarm.get_zone_history(limit=20)
+        payload = {
+            "type": "status",
+            "partitions": [p.model_dump() for p in resp.partitions],
+            "connected": resp.connected,
+            "events": events,
+        }
+        await _ws_manager.broadcast(payload)
+    except Exception:
+        logger.debug("WS broadcast failed", exc_info=True)
+
+
+_WS_HEARTBEAT_INTERVAL = 5  # seconds — fallback push even without PAI pubsub events
+
+
+async def _ws_heartbeat_loop() -> None:
+    """Periodically push status to WS clients as a fallback heartbeat.
+    For demo mode this is the primary push mechanism."""
+    while True:
+        await asyncio.sleep(_WS_HEARTBEAT_INTERVAL)
+        if _ws_manager and _ws_manager.active_count > 0:
+            await _broadcast_status()
+
+
 async def _demo_zone_trigger_loop() -> None:
     """In demo mode, randomly trigger a zone every ~30s to simulate activity."""
     assert _alarm is not None
@@ -174,20 +221,68 @@ async def _demo_zone_trigger_loop() -> None:
             pass
 
 
+async def _connect_alarm() -> None:
+    """Connect to the real alarm panel, then monitor and auto-reconnect on drop."""
+    if _alarm is None or _alarm.demo_mode:
+        return
+
+    async def _try_connect() -> bool:
+        for attempt in range(1, _CONNECT_MAX_RETRIES + 1):
+            try:
+                await _alarm.disconnect()
+                await _alarm.connect()
+                logger.info("Connected to alarm panel on attempt %d", attempt)
+                return True
+            except Exception as exc:
+                logger.warning("Alarm connect attempt %d failed: %s", attempt, exc)
+                if attempt < _CONNECT_MAX_RETRIES:
+                    await asyncio.sleep(_CONNECT_RETRY_DELAY)
+        return False
+
+    await _try_connect()
+
+    while True:
+        await asyncio.sleep(_RECONNECT_CHECK_INTERVAL)
+        if not _alarm.is_connected:
+            logger.warning("Connection lost — attempting reconnect...")
+            await _try_connect()
+
+
+async def _disconnect_alarm() -> None:
+    """Disconnect from the real alarm panel."""
+    if _alarm is None or _alarm.demo_mode:
+        return
+    await _alarm.disconnect()
+    logger.info("Disconnected from alarm panel")
+
+
 @asynccontextmanager
 async def lifespan(application: FastAPI):
-    global _demo_trigger_task
+    global _demo_trigger_task, _reconnect_task, _ws_heartbeat_task
     init_services()
     admin_user = os.environ.get("PARADOX_ADMIN_USER", "admin")
     admin_pass = os.environ.get("PARADOX_ADMIN_PASS")
     if admin_pass and _auth:
         _auth.setup_admin(admin_user, admin_pass)
+    if _alarm:
+        _alarm.set_status_change_callback(_on_alarm_status_changed)
+    _ws_heartbeat_task = asyncio.create_task(_ws_heartbeat_loop())
     if _alarm and _alarm.demo_mode:
         _demo_trigger_task = asyncio.create_task(_demo_zone_trigger_loop())
+    elif _alarm and not _alarm.demo_mode:
+        _reconnect_task = asyncio.create_task(_connect_alarm())
     yield
+    if _ws_heartbeat_task:
+        _ws_heartbeat_task.cancel()
+        _ws_heartbeat_task = None
     if _demo_trigger_task:
         _demo_trigger_task.cancel()
         _demo_trigger_task = None
+    if _reconnect_task:
+        _reconnect_task.cancel()
+        _reconnect_task = None
+    if _alarm and not _alarm.demo_mode:
+        await _disconnect_alarm()
     shutdown_services()
 
 
@@ -358,7 +453,7 @@ def alarm_status(
 
 
 @app.post("/alarm/arm-away", response_model=ActionResult)
-def arm_away(
+async def arm_away(
     req: ArmRequest,
     user: Annotated[dict, Depends(get_current_user)],
     alarm: Annotated[AlarmService, Depends(get_alarm)],
@@ -366,13 +461,16 @@ def arm_away(
 ):
     if not alarm.is_connected:
         raise HTTPException(status_code=503, detail="Alarm not connected")
-    ok = alarm.arm_away(code=req.code, partition_id=req.partition_id)
+    try:
+        ok = await alarm.arm_away(code=req.code, partition_id=req.partition_id)
+    except ConnectionError:
+        raise HTTPException(status_code=503, detail="Alarm connection lost")
     audit.record(user["sub"], "arm_away", f"partition={req.partition_id} success={ok}")
     return ActionResult(success=ok, action="arm_away")
 
 
 @app.post("/alarm/arm-stay", response_model=ActionResult)
-def arm_stay(
+async def arm_stay(
     req: ArmRequest,
     user: Annotated[dict, Depends(get_current_user)],
     alarm: Annotated[AlarmService, Depends(get_alarm)],
@@ -380,13 +478,16 @@ def arm_stay(
 ):
     if not alarm.is_connected:
         raise HTTPException(status_code=503, detail="Alarm not connected")
-    ok = alarm.arm_stay(code=req.code, partition_id=req.partition_id)
+    try:
+        ok = await alarm.arm_stay(code=req.code, partition_id=req.partition_id)
+    except ConnectionError:
+        raise HTTPException(status_code=503, detail="Alarm connection lost")
     audit.record(user["sub"], "arm_stay", f"partition={req.partition_id} success={ok}")
     return ActionResult(success=ok, action="arm_stay")
 
 
 @app.post("/alarm/disarm", response_model=ActionResult)
-def disarm(
+async def disarm(
     req: ArmRequest,
     user: Annotated[dict, Depends(get_current_user)],
     alarm: Annotated[AlarmService, Depends(get_alarm)],
@@ -394,7 +495,10 @@ def disarm(
 ):
     if not alarm.is_connected:
         raise HTTPException(status_code=503, detail="Alarm not connected")
-    ok = alarm.disarm(code=req.code, partition_id=req.partition_id)
+    try:
+        ok = await alarm.disarm(code=req.code, partition_id=req.partition_id)
+    except ConnectionError:
+        raise HTTPException(status_code=503, detail="Alarm connection lost")
     audit.record(user["sub"], "disarm", f"partition={req.partition_id} success={ok}")
     return ActionResult(success=ok, action="disarm")
 
@@ -402,7 +506,7 @@ def disarm(
 # ── Bypass ──
 
 @app.post("/alarm/bypass", response_model=ActionResult)
-def bypass_zone(
+async def bypass_zone(
     req: BypassRequest,
     user: Annotated[dict, Depends(get_current_user)],
     alarm: Annotated[AlarmService, Depends(get_alarm)],
@@ -410,9 +514,9 @@ def bypass_zone(
 ):
     try:
         if req.bypass:
-            alarm.bypass_zone(req.zone_id)
+            await alarm.bypass_zone(req.zone_id)
         else:
-            alarm.unbypass_zone(req.zone_id)
+            await alarm.unbypass_zone(req.zone_id)
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
     action = "bypass" if req.bypass else "unbypass"
@@ -443,7 +547,7 @@ def zone_toggle(
 # ── Panic ──
 
 @app.post("/alarm/panic", response_model=ActionResult)
-def panic(
+async def panic(
     req: PanicRequest,
     user: Annotated[dict, Depends(get_current_user)],
     alarm: Annotated[AlarmService, Depends(get_alarm)],
@@ -451,7 +555,10 @@ def panic(
 ):
     if not alarm.is_connected:
         raise HTTPException(status_code=503, detail="Alarm not connected")
-    ok = alarm.send_panic(partition_id=req.partition_id, panic_type=req.panic_type)
+    try:
+        ok = await alarm.send_panic(partition_id=req.partition_id, panic_type=req.panic_type)
+    except ConnectionError:
+        raise HTTPException(status_code=503, detail="Alarm connection lost")
     audit.record(user["sub"], "panic", f"partition={req.partition_id} type={req.panic_type}")
     return ActionResult(success=ok, action="panic")
 
@@ -499,11 +606,28 @@ async def websocket_endpoint(
         await websocket.close(code=4001, reason="Invalid token")
         return
     await mgr.connect(websocket, username=payload["sub"])
+    logger.info("WS client connected: %s (total: %d)", payload["sub"], mgr.active_count)
+    try:
+        alarm = get_alarm()
+        if alarm.is_connected:
+            resp = _build_status_response(alarm)
+            events = alarm.get_zone_history(limit=20)
+            await websocket.send_json({
+                "type": "status",
+                "partitions": [p.model_dump() for p in resp.partitions],
+                "connected": resp.connected,
+                "events": events,
+            })
+    except Exception:
+        logger.debug("Failed to send initial WS status", exc_info=True)
     try:
         while True:
-            await websocket.receive_text()
+            data = await websocket.receive_text()
+            if data == "ping":
+                await websocket.send_json({"type": "pong"})
     except WebSocketDisconnect:
         mgr.disconnect(websocket)
+        logger.info("WS client disconnected (remaining: %d)", mgr.active_count)
 
 
 # ── Health ──
@@ -518,3 +642,20 @@ def health():
         websocket_clients=mgr.active_count,
         demo_mode=alarm.demo_mode,
     )
+
+
+@app.get("/debug/zone-raw")
+def debug_zone_raw(
+    _user: Annotated[dict, Depends(require_admin)],
+    alarm: Annotated[AlarmService, Depends(get_alarm)],
+):
+    if alarm.demo_mode or not alarm._pai:
+        return {"error": "only available in real mode with active connection"}
+    zc = alarm._pai.storage.get_container("zone")
+    result = {}
+    for zid, zdata in zc.items():
+        result[str(zid)] = {k: str(v) for k, v in zdata.items()}
+    pc = alarm._pai.storage.get_container("partition")
+    for pid, pdata in pc.items():
+        result[f"part_{pid}"] = {k: str(v) for k, v in pdata.items()}
+    return result

@@ -43,7 +43,7 @@ class MainActivity : ComponentActivity() {
         lifecycleScope.launch {
             repeatOnLifecycle(Lifecycle.State.RESUMED) {
                 if (vm.state.value.screen == Screen.Dashboard) {
-                    vm.startPolling()
+                    vm.startRealtimeUpdates()
                 }
             }
         }
@@ -108,13 +108,13 @@ class MainActivity : ComponentActivity() {
 
     override fun onPause() {
         super.onPause()
-        vm.stopPolling()
+        vm.stopRealtimeUpdates()
     }
 
     override fun onResume() {
         super.onResume()
         if (vm.state.value.screen == Screen.Dashboard) {
-            vm.startPolling()
+            vm.startRealtimeUpdates()
         }
     }
 }
