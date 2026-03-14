@@ -45,6 +45,7 @@ fun DashboardScreen(
     username: String?,
     savedAlarmCode: String?,
     wsConnected: Boolean,
+    requestHistoryTab: Boolean = false,
     onSelectPartition: (Int) -> Unit,
     onArmAway: (code: String, partitionId: Int) -> Unit,
     onArmStay: (code: String, partitionId: Int) -> Unit,
@@ -53,9 +54,17 @@ fun DashboardScreen(
     onPanic: (panicType: String, partitionId: Int) -> Unit,
     onRefresh: () -> Unit,
     onSettings: () -> Unit,
+    onHistoryTabShown: () -> Unit = {},
 ) {
     var showCodeDialog by remember { mutableStateOf<String?>(null) }
     var currentTab by remember { mutableIntStateOf(0) }
+
+    LaunchedEffect(requestHistoryTab) {
+        if (requestHistoryTab) {
+            currentTab = 1
+            onHistoryTabShown()
+        }
+    }
 
     val partitions = alarmStatus?.partitions.orEmpty()
     val pageCount = maxOf(partitions.size, 1)
@@ -509,37 +518,34 @@ private fun PanicButtons(
 ) {
     var showConfirm by remember { mutableStateOf<String?>(null) }
 
-    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        OutlinedButton(
+    Row(
+        Modifier.fillMaxWidth().height(IntrinsicSize.Max),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        PanicButton(
+            icon = "\uD83D\uDEA8",
+            label = "PANIC",
+            color = Color(0xFFE94560),
+            enabled = connected && actionInProgress == null,
             onClick = { showConfirm = "emergency" },
-            modifier = Modifier.weight(1f).height(46.dp),
+            modifier = Modifier.weight(1f).fillMaxHeight(),
+        )
+        PanicButton(
+            icon = "\uD83C\uDFE5",
+            label = "MEDICAL",
+            color = Color(0xFF42A5F5),
             enabled = connected && actionInProgress == null,
-            colors = ButtonDefaults.outlinedButtonColors(contentColor = Color(0xFFE94560)),
-            border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFFE94560).copy(alpha = 0.5f)),
-            shape = RoundedCornerShape(12.dp),
-        ) {
-            Text("\uD83D\uDEA8 PANIC", fontWeight = FontWeight.Bold, fontSize = 12.sp)
-        }
-        OutlinedButton(
             onClick = { showConfirm = "medical" },
-            modifier = Modifier.weight(1f).height(46.dp),
+            modifier = Modifier.weight(1f).fillMaxHeight(),
+        )
+        PanicButton(
+            icon = "\uD83D\uDD25",
+            label = "FIRE",
+            color = Color(0xFFFF7043),
             enabled = connected && actionInProgress == null,
-            colors = ButtonDefaults.outlinedButtonColors(contentColor = Color(0xFF42A5F5)),
-            border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFF42A5F5).copy(alpha = 0.5f)),
-            shape = RoundedCornerShape(12.dp),
-        ) {
-            Text("\uD83C\uDFE5 MEDICAL", fontWeight = FontWeight.Bold, fontSize = 12.sp)
-        }
-        OutlinedButton(
             onClick = { showConfirm = "fire" },
-            modifier = Modifier.weight(1f).height(46.dp),
-            enabled = connected && actionInProgress == null,
-            colors = ButtonDefaults.outlinedButtonColors(contentColor = Color(0xFFFF7043)),
-            border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFFFF7043).copy(alpha = 0.5f)),
-            shape = RoundedCornerShape(12.dp),
-        ) {
-            Text("\uD83D\uDD25 FIRE", fontWeight = FontWeight.Bold, fontSize = 12.sp)
-        }
+            modifier = Modifier.weight(1f).fillMaxHeight(),
+        )
     }
 
     if (showConfirm != null) {
@@ -557,6 +563,32 @@ private fun PanicButtons(
                 TextButton(onClick = { showConfirm = null }) { Text("Cancel") }
             },
         )
+    }
+}
+
+@Composable
+private fun PanicButton(
+    icon: String,
+    label: String,
+    color: Color,
+    enabled: Boolean,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    OutlinedButton(
+        onClick = onClick,
+        modifier = modifier.defaultMinSize(minHeight = 64.dp),
+        enabled = enabled,
+        colors = ButtonDefaults.outlinedButtonColors(contentColor = color),
+        border = androidx.compose.foundation.BorderStroke(1.dp, color.copy(alpha = 0.5f)),
+        shape = RoundedCornerShape(12.dp),
+        contentPadding = PaddingValues(horizontal = 4.dp, vertical = 8.dp),
+    ) {
+        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+            Text(icon, fontSize = 20.sp)
+            Spacer(Modifier.height(2.dp))
+            Text(label, fontWeight = FontWeight.Bold, fontSize = 11.sp, maxLines = 1)
+        }
     }
 }
 
@@ -685,7 +717,18 @@ private fun HistoryRow(event: PanelEvent) {
             Box(Modifier.size(8.dp).clip(CircleShape).background(color))
             Spacer(Modifier.width(10.dp))
             Column(Modifier.weight(1f)) {
-                Text("$typeIcon ${event.label}", color = Color.White, fontSize = 13.sp)
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text("$typeIcon ${event.label}", color = Color.White, fontSize = 13.sp)
+                    if (event.user != null) {
+                        Spacer(Modifier.width(6.dp))
+                        Text(
+                            "by ${event.user}",
+                            color = Color(0xFF64B5F6),
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Medium,
+                        )
+                    }
+                }
                 Text(ts, color = Color.White.copy(alpha = 0.4f), fontSize = 11.sp)
             }
             Text(evLabel, color = color, fontSize = 12.sp, fontWeight = FontWeight.Bold)

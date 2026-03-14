@@ -3,6 +3,7 @@ package com.remoteparadox.app
 import android.app.Application
 import android.app.NotificationChannel
 import android.app.NotificationManager
+import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
 import android.media.AudioAttributes
@@ -58,6 +59,7 @@ data class AppState(
     val soundEnabled: Boolean = true,
     val notificationsEnabled: Boolean = true,
     val update: UpdateState = UpdateState(),
+    val requestHistoryTab: Boolean = false,
 )
 
 enum class Screen { Loading, Scan, Setup, Login, Dashboard, Settings }
@@ -282,12 +284,56 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         val a = api ?: return
         viewModelScope.launch(Dispatchers.IO) {
             try {
-                val resp = a.eventHistory(tokenStore.bearerHeader, limit = 50)
-                if (resp.isSuccessful && resp.body() != null) {
-                    _state.update { it.copy(eventHistory = resp.body()!!.events) }
-                }
+                val evResp = a.eventHistory(tokenStore.bearerHeader, limit = 50)
+                val auditResp = a.auditLogs(tokenStore.bearerHeader, limit = 100)
+                val events = evResp.body()?.events.orEmpty()
+                val audits = auditResp.body()?.entries.orEmpty()
+                val enriched = enrichEventsWithAudit(events, audits)
+                _state.update { it.copy(eventHistory = enriched) }
             } catch (_: Exception) { }
         }
+    }
+
+    private fun enrichEventsWithAudit(
+        events: List<PanelEvent>,
+        audits: List<AuditEntry>,
+    ): List<PanelEvent> {
+        val actionAudits = audits.filter {
+            it.action in setOf("arm_away", "arm_stay", "disarm", "panic")
+        }
+        val usedAudits = mutableSetOf<Int>()
+        return events.map { ev ->
+            if (ev.type == "partition" && ev.property == "mode") {
+                val matchIdx = actionAudits.indexOfFirst { audit ->
+                    audit.hashCode() !in usedAudits && modeMatchesAction(ev.value, audit.action) &&
+                        timestampsClose(ev.timestamp, audit.timestamp)
+                }
+                if (matchIdx >= 0) {
+                    usedAudits.add(actionAudits[matchIdx].hashCode())
+                    ev.copy(user = actionAudits[matchIdx].username)
+                } else ev
+            } else ev
+        }
+    }
+
+    private fun modeMatchesAction(modeValue: String, auditAction: String): Boolean =
+        when (auditAction) {
+            "arm_away" -> modeValue.contains("armed", ignoreCase = true) && !modeValue.contains("disarmed", ignoreCase = true)
+            "arm_stay" -> modeValue.contains("armed", ignoreCase = true)
+            "disarm" -> modeValue.contains("disarmed", ignoreCase = true)
+            "panic" -> modeValue.contains("triggered", ignoreCase = true)
+            else -> false
+        }
+
+    private fun timestampsClose(ts1: String, ts2: String): Boolean {
+        val t1 = ts1.take(16)
+        val t2 = ts2.take(16)
+        if (t1 == t2) return true
+        return try {
+            val d1 = java.time.LocalDateTime.parse(ts1.take(19))
+            val d2 = java.time.LocalDateTime.parse(ts2.take(19))
+            kotlin.math.abs(java.time.Duration.between(d1, d2).seconds) <= 60
+        } catch (_: Exception) { false }
     }
 
     // ── WebSocket real-time updates ──
@@ -396,6 +442,14 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     fun goBackToDashboard() {
         _state.update { it.copy(screen = Screen.Dashboard) }
+    }
+
+    fun openHistoryTab() {
+        _state.update { it.copy(screen = Screen.Dashboard, requestHistoryTab = true) }
+    }
+
+    fun consumeHistoryTabRequest() {
+        _state.update { it.copy(requestHistoryTab = false) }
     }
 
     fun setSoundEnabled(enabled: Boolean) {
@@ -517,6 +571,14 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         if (!_state.value.notificationsEnabled) return
         try {
             val ctx = getApplication<Application>()
+            val intent = Intent(ctx, MainActivity::class.java).apply {
+                putExtra("open_history", true)
+                flags = Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
+            }
+            val pendingIntent = PendingIntent.getActivity(
+                ctx, notificationId, intent,
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+            )
             val nm = ctx.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
             val notification = NotificationCompat.Builder(ctx, CHANNEL_ID)
                 .setSmallIcon(android.R.drawable.ic_dialog_alert)
@@ -524,6 +586,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 .setContentText(body)
                 .setPriority(NotificationCompat.PRIORITY_HIGH)
                 .setAutoCancel(true)
+                .setContentIntent(pendingIntent)
                 .build()
             nm.notify(notificationId++, notification)
         } catch (e: Exception) {
