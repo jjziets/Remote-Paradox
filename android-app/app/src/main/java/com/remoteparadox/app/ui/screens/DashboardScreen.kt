@@ -360,13 +360,14 @@ private fun PartitionStateCard(partition: PartitionInfo?) {
     }
     val zones = partition?.zones.orEmpty()
     val alarmCount = zones.count { it.alarm || it.wasInAlarm }
+    val ready = partition?.ready ?: true
     Card(
         modifier = Modifier.fillMaxWidth(),
         shape = RoundedCornerShape(16.dp),
         colors = CardDefaults.cardColors(containerColor = color.copy(alpha = 0.15f)),
     ) {
         Row(
-            modifier = Modifier.padding(24.dp),
+            modifier = Modifier.padding(start = 24.dp, end = 24.dp, top = 24.dp, bottom = 8.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(16.dp),
         ) {
@@ -383,11 +384,25 @@ private fun PartitionStateCard(partition: PartitionInfo?) {
                     val bp = zones.count { it.bypassed }
                     if (bp > 0) append("  •  $bp bypassed")
                     if (alarmCount > 0) append("  •  $alarmCount alarm")
-                    if (partition?.ready == false && mode == "disarmed") append("  •  NOT READY")
                 }
                 Text(sub, fontSize = 13.sp, color = Color.White.copy(alpha = 0.6f))
             }
         }
+        // Status line — always present to keep card height consistent across areas
+        val statusText = when {
+            !ready && mode == "disarmed" -> "System not ready — close all zones first"
+            mode == "arming" -> "Exit delay in progress..."
+            mode == "triggered" -> "Alarm triggered! Disarm immediately"
+            partition?.entryDelay == true -> "Entry delay — disarm now"
+            else -> null
+        }
+        Text(
+            text = statusText ?: "",
+            fontSize = 12.sp,
+            fontWeight = FontWeight.Medium,
+            color = if (!ready) AlarmStay.copy(alpha = 0.9f) else color.copy(alpha = 0.8f),
+            modifier = Modifier.padding(start = 24.dp, end = 24.dp, bottom = 16.dp).defaultMinSize(minHeight = 18.dp),
+        )
     }
 }
 
@@ -486,11 +501,6 @@ private fun ControlButtons(
                             Text("ARM HOME", fontWeight = FontWeight.Bold, fontSize = 13.sp)
                         }
                     }
-                }
-                if (!ready) {
-                    Text("System not ready — close all zones first",
-                        fontSize = 12.sp, color = AlarmStay.copy(alpha = 0.8f),
-                        modifier = Modifier.padding(start = 4.dp))
                 }
                 Button(
                     onClick = onDisarm,
