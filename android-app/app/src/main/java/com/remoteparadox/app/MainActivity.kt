@@ -1,6 +1,7 @@
 package com.remoteparadox.app
 
 import android.Manifest
+import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
@@ -41,9 +42,7 @@ class MainActivity : ComponentActivity() {
 
         vm.setPermissionRequester { requestNotificationPermission() }
 
-        intent?.data?.toString()?.let { uri ->
-            ServerConfig.fromUri(uri)?.let { vm.onQrScanned(it) }
-        }
+        handleIntent(intent)
 
         if (ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA)
             != PackageManager.PERMISSION_GRANTED
@@ -104,6 +103,7 @@ class MainActivity : ComponentActivity() {
                         username = vm.tokenStore.username,
                         savedAlarmCode = vm.savedAlarmCode,
                         wsConnected = state.wsConnected,
+                        requestHistoryTab = state.requestHistoryTab,
                         onSelectPartition = { vm.selectPartition(it) },
                         onArmAway = { code, pid -> vm.armAway(code, pid) },
                         onArmStay = { code, pid -> vm.armStay(code, pid) },
@@ -112,6 +112,7 @@ class MainActivity : ComponentActivity() {
                         onPanic = { type, pid -> vm.sendPanic(type, pid) },
                         onRefresh = { vm.refreshStatus(); vm.refreshHistory() },
                         onSettings = { vm.goToSettings() },
+                        onHistoryTabShown = { vm.consumeHistoryTabRequest() },
                     )
 
                     Screen.Settings -> SettingsScreen(
@@ -140,6 +141,22 @@ class MainActivity : ComponentActivity() {
             != PackageManager.PERMISSION_GRANTED
         ) {
             notificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
+        }
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        handleIntent(intent)
+    }
+
+    private fun handleIntent(intent: Intent?) {
+        intent ?: return
+        intent.data?.toString()?.let { uri ->
+            ServerConfig.fromUri(uri)?.let { vm.onQrScanned(it) }
+        }
+        if (intent.getBooleanExtra("open_history", false)) {
+            vm.openHistoryTab()
+            intent.removeExtra("open_history")
         }
     }
 

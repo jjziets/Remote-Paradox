@@ -94,6 +94,7 @@ data class PanelEvent(
     @Serializable(with = AnyValueAsString::class)
     val value: String,
     val timestamp: String,
+    val user: String? = null,
 )
 
 @Serializable
