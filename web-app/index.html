@@ -222,7 +222,10 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;b
     if (body) opts.body = JSON.stringify(body);
     return fetch(url, opts).then(function(r) {
       if (r.status === 401) { goLogin(); return Promise.reject('auth'); }
-      return r.json();
+      return r.json().then(function(d) {
+        if (!r.ok) return Promise.reject(d.detail || d.message || 'Request failed (' + r.status + ')');
+        return d;
+      });
     });
   }
 
@@ -568,19 +571,35 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;b
   }
 
   window.doRoleChange = function(uname, newRole) {
-    var action = newRole === 'admin' ? 'promote' : 'demote';
-    if (!confirm(action.charAt(0).toUpperCase() + action.slice(1) + ' ' + uname + ' to ' + newRole + '?')) return;
+    var action = newRole === 'admin' ? 'Promote' : 'Demote';
+    if (!confirm(action + ' ' + uname + ' to ' + newRole + '?')) return;
     api('PUT', '/auth/users/' + encodeURIComponent(uname) + '/role', { role: newRole }).then(function(d) {
-      if (d.success) loadUsers(); else showErr(d.message || 'Failed');
-    }).catch(function(e){ showErr(String(e)); });
+      loadUsers();
+    }).catch(function(e){
+      if (e === 'auth') return;
+      showUserErr(String(e));
+    });
   };
 
   window.doDeleteUser = function(uname) {
     if (!confirm('Delete user "' + uname + '"? This cannot be undone.')) return;
     api('DELETE', '/auth/users/' + encodeURIComponent(uname)).then(function(d) {
-      if (d.success) loadUsers(); else showErr(d.message || 'Failed');
-    }).catch(function(e){ showErr(String(e)); });
+      loadUsers();
+    }).catch(function(e){
+      if (e === 'auth') return;
+      showUserErr(String(e));
+    });
   };
+
+  function showUserErr(msg) {
+    var el = $('elUsers');
+    var errDiv = document.createElement('div');
+    errDiv.className = 'err';
+    errDiv.style.display = 'block';
+    errDiv.textContent = msg;
+    el.insertBefore(errDiv, el.firstChild);
+    setTimeout(function(){ errDiv.remove(); }, 5000);
+  }
 
   // ── System / Pi Update ──
 
