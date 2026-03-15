@@ -443,3 +443,69 @@ class TestRealModeLifespan:
         assert resp.json()["alarm_connected"] is False
         assert resp.json()["demo_mode"] is False
         shutdown_services()
+
+
+class TestSystemResources:
+    def test_requires_admin(self, client):
+        resp = client.get("/system/resources")
+        assert resp.status_code in (401, 403)
+
+    def test_returns_resource_data(self, client, admin_token):
+        with patch("paradox_bridge.main._read_cpu_percent", return_value=25.3), \
+             patch("paradox_bridge.main._read_memory", return_value=(200, 512, 39.1)), \
+             patch("paradox_bridge.main._read_uptime", return_value=86400), \
+             patch("shutil.disk_usage") as mock_du:
+            mock_du.return_value = type("Usage", (), {
+                "total": 16 * 1024**3, "used": 4 * 1024**3, "free": 12 * 1024**3,
+            })()
+            resp = client.get("/system/resources", headers=auth_header(admin_token))
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["cpu_percent"] == 25.3
+        assert data["memory_used_mb"] == 200
+        assert data["memory_total_mb"] == 512
+        assert data["memory_percent"] == 39.1
+        assert data["disk_used_gb"] == 4.0
+        assert data["disk_total_gb"] == 16.0
+        assert data["uptime_seconds"] == 86400
+
+
+class TestSystemWifi:
+    def test_requires_admin(self, client):
+        resp = client.get("/system/wifi")
+        assert resp.status_code in (401, 403)
+
+    def test_returns_wifi_info(self, client, admin_token):
+        with patch("subprocess.run") as mock_run:
+            def side_effect(cmd, **kw):
+                r = type("R", (), {"stdout": "", "stderr": "", "returncode": 0})()
+                if cmd[0] == "iwgetid":
+                    r.stdout = "MyNetwork\n"
+                elif cmd[0] == "hostname":
+                    r.stdout = "192.168.50.10\n"
+                elif cmd[0] == "iwconfig":
+                    r.stdout = "wlan0  Signal level=-55 dBm\n"
+                return r
+            mock_run.side_effect = side_effect
+            resp = client.get("/system/wifi", headers=auth_header(admin_token))
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["ssid"] == "MyNetwork"
+        assert data["ip_address"] == "192.168.50.10"
+        assert data["signal_dbm"] == -55
+        assert data["signal_percent"] == 90
+
+
+class TestSystemReboot:
+    def test_requires_admin(self, client):
+        resp = client.post("/system/reboot")
+        assert resp.status_code in (401, 403)
+
+    def test_initiates_reboot(self, client, admin_token):
+        with patch("subprocess.Popen") as mock_popen:
+            resp = client.post("/system/reboot", headers=auth_header(admin_token))
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["success"] is True
+        assert data["action"] == "reboot"
+        mock_popen.assert_called_once()

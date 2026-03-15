@@ -31,6 +31,7 @@ fun SettingsScreen(
     updateState: UpdateState,
     isAdmin: Boolean = false,
     piUpdate: com.remoteparadox.app.PiUpdateState = com.remoteparadox.app.PiUpdateState(),
+    piSystem: com.remoteparadox.app.PiSystemState = com.remoteparadox.app.PiSystemState(),
     onSoundToggle: (Boolean) -> Unit,
     onNotificationsToggle: (Boolean) -> Unit,
     onCheckUpdate: () -> Unit,
@@ -38,6 +39,9 @@ fun SettingsScreen(
     onManageUsers: () -> Unit = {},
     onCheckPiUpdate: () -> Unit = {},
     onApplyPiUpdate: () -> Unit = {},
+    onRefreshPiSystem: () -> Unit = {},
+    onRebootPi: () -> Unit = {},
+    onBleLinkPi: () -> Unit = {},
     onLogout: () -> Unit,
     onSwitchServer: () -> Unit,
     onBack: () -> Unit,
@@ -108,6 +112,124 @@ fun SettingsScreen(
                             Icon(Icons.Default.Group, null, Modifier.size(18.dp))
                             Spacer(Modifier.width(8.dp))
                             Text("Manage Users & Invites", fontWeight = FontWeight.Medium)
+                        }
+                    }
+                }
+
+                // Pi System Resources
+                Card(
+                    shape = RoundedCornerShape(12.dp),
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                ) {
+                    Column(modifier = Modifier.padding(16.dp)) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text("Pi System", fontWeight = FontWeight.Bold, color = Color.White, fontSize = 14.sp, modifier = Modifier.weight(1f))
+                            IconButton(onClick = onRefreshPiSystem, modifier = Modifier.size(32.dp)) {
+                                Icon(Icons.Default.Refresh, "Refresh", tint = Color.White.copy(alpha = 0.7f), modifier = Modifier.size(18.dp))
+                            }
+                        }
+
+                        if (piSystem.loading) {
+                            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(vertical = 8.dp)) {
+                                CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp, color = Color.White)
+                                Spacer(Modifier.width(12.dp))
+                                Text("Loading...", color = Color.White.copy(alpha = 0.5f), fontSize = 13.sp)
+                            }
+                        }
+
+                        val res = piSystem.resources
+                        if (res != null) {
+                            Spacer(Modifier.height(8.dp))
+                            ResourceBar("CPU", res.cpuPercent.toFloat(), "${String.format("%.1f", res.cpuPercent)}%")
+                            ResourceBar("Memory", res.memoryPercent.toFloat(), "${res.memoryUsedMb} / ${res.memoryTotalMb} MB")
+                            ResourceBar("Storage", res.diskPercent.toFloat(), "${String.format("%.1f", res.diskUsedGb)} / ${String.format("%.1f", res.diskTotalGb)} GB")
+                            if (res.uptimeSeconds > 0) {
+                                val d = res.uptimeSeconds / 86400
+                                val h = (res.uptimeSeconds % 86400) / 3600
+                                val m = (res.uptimeSeconds % 3600) / 60
+                                val uptimeStr = if (d > 0) "${d}d ${h}h ${m}m" else if (h > 0) "${h}h ${m}m" else "${m}m"
+                                Text("Uptime: $uptimeStr", color = Color.White.copy(alpha = 0.4f), fontSize = 11.sp,
+                                    modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
+                                    textAlign = androidx.compose.ui.text.style.TextAlign.End)
+                            }
+                        }
+
+                        val wifi = piSystem.wifi
+                        if (wifi != null) {
+                            Spacer(Modifier.height(12.dp))
+                            HorizontalDivider(color = Color.White.copy(alpha = 0.1f))
+                            Spacer(Modifier.height(8.dp))
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Icon(Icons.Default.Wifi, null, tint = Color.White.copy(alpha = 0.7f), modifier = Modifier.size(18.dp))
+                                Spacer(Modifier.width(8.dp))
+                                Column(Modifier.weight(1f)) {
+                                    Text(wifi.ssid.ifBlank { "Not connected" }, color = Color.White, fontSize = 14.sp)
+                                    Text(wifi.ipAddress.ifBlank { "—" }, color = Color.White.copy(alpha = 0.5f), fontSize = 12.sp)
+                                }
+                                if (wifi.signalPercent != null) {
+                                    Text("${wifi.signalPercent}%", color = Color(0xFF4CAF50), fontSize = 13.sp, fontWeight = FontWeight.Bold)
+                                }
+                            }
+                        }
+
+                        if (piSystem.error != null) {
+                            Spacer(Modifier.height(8.dp))
+                            Text(piSystem.error, color = Color(0xFFFF9800), fontSize = 12.sp)
+                        }
+                    }
+                }
+
+                // BLE Link + Reboot
+                Card(
+                    shape = RoundedCornerShape(12.dp),
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                ) {
+                    Column(modifier = Modifier.padding(16.dp)) {
+                        Text("Connectivity & Maintenance", fontWeight = FontWeight.Bold, color = Color.White, fontSize = 14.sp)
+                        Spacer(Modifier.height(8.dp))
+                        OutlinedButton(
+                            onClick = onBleLinkPi,
+                            modifier = Modifier.fillMaxWidth(),
+                            shape = RoundedCornerShape(10.dp),
+                            colors = ButtonDefaults.outlinedButtonColors(contentColor = Color(0xFF64B5F6)),
+                            border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFF64B5F6).copy(alpha = 0.5f)),
+                        ) {
+                            Icon(Icons.Default.Bluetooth, null, Modifier.size(18.dp))
+                            Spacer(Modifier.width(8.dp))
+                            Text("BLE Link to Pi", fontWeight = FontWeight.Medium)
+                        }
+                        Spacer(Modifier.height(8.dp))
+                        var showRebootConfirm by remember { mutableStateOf(false) }
+                        OutlinedButton(
+                            onClick = { showRebootConfirm = true },
+                            modifier = Modifier.fillMaxWidth(),
+                            shape = RoundedCornerShape(10.dp),
+                            colors = ButtonDefaults.outlinedButtonColors(contentColor = Color(0xFFE94560)),
+                            border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFFE94560).copy(alpha = 0.5f)),
+                            enabled = !piSystem.rebooting,
+                        ) {
+                            if (piSystem.rebooting) {
+                                CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp, color = Color(0xFFE94560))
+                            } else {
+                                Icon(Icons.Default.RestartAlt, null, Modifier.size(18.dp))
+                            }
+                            Spacer(Modifier.width(8.dp))
+                            Text("Reboot Pi", fontWeight = FontWeight.Medium)
+                        }
+                        if (showRebootConfirm) {
+                            AlertDialog(
+                                onDismissRequest = { showRebootConfirm = false },
+                                title = { Text("Reboot Pi?") },
+                                text = { Text("The alarm controller will be offline for ~60 seconds.") },
+                                confirmButton = {
+                                    TextButton(onClick = { showRebootConfirm = false; onRebootPi() }) {
+                                        Text("Reboot", color = Color(0xFFE94560))
+                                    }
+                                },
+                                dismissButton = {
+                                    TextButton(onClick = { showRebootConfirm = false }) { Text("Cancel") }
+                                },
+                            )
                         }
                     }
                 }
@@ -376,6 +498,29 @@ fun SettingsScreen(
             dismissButton = {
                 TextButton(onClick = { showSwitchConfirm = false }) { Text("Cancel") }
             },
+        )
+    }
+}
+
+@Composable
+private fun ResourceBar(label: String, percent: Float, detail: String) {
+    val clampedPct = percent.coerceIn(0f, 100f)
+    val color = when {
+        clampedPct < 60f -> Color(0xFF4CAF50)
+        clampedPct < 85f -> Color(0xFFFF9800)
+        else -> Color(0xFFE94560)
+    }
+    Column(modifier = Modifier.padding(bottom = 10.dp)) {
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+            Text(label, color = Color.White.copy(alpha = 0.7f), fontSize = 12.sp)
+            Text(detail, color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+        }
+        Spacer(Modifier.height(4.dp))
+        LinearProgressIndicator(
+            progress = { clampedPct / 100f },
+            modifier = Modifier.fillMaxWidth().height(6.dp),
+            color = color,
+            trackColor = Color.White.copy(alpha = 0.1f),
         )
     }
 }

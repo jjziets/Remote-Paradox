@@ -35,9 +35,11 @@ from paradox_bridge.models import (
     PartitionResponse,
     RegisterRequest,
     RegisterResponse,
+    SystemResourcesResponse,
     UserInfo,
     UserListResponse,
     RoleUpdateRequest,
+    WifiInfoResponse,
     ZoneResponse,
     ZoneToggleRequest,
 )
@@ -491,6 +493,133 @@ def apply_update(
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
         )
         return {"success": True, "message": f"Applying update to {data.get('new_version')}. Service will restart."}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+import shutil
+
+
+def _read_cpu_percent() -> float:
+    """Read aggregate CPU usage from /proc/stat (two samples 0.5s apart)."""
+    import time
+
+    def _read_idle_total():
+        with open("/proc/stat") as f:
+            fields = f.readline().split()[1:]
+        vals = [int(x) for x in fields]
+        idle = vals[3] + (vals[4] if len(vals) > 4 else 0)
+        return idle, sum(vals)
+
+    try:
+        idle1, total1 = _read_idle_total()
+        time.sleep(0.5)
+        idle2, total2 = _read_idle_total()
+        delta_total = total2 - total1
+        delta_idle = idle2 - idle1
+        if delta_total == 0:
+            return 0.0
+        return round((1 - delta_idle / delta_total) * 100, 1)
+    except Exception:
+        return 0.0
+
+
+def _read_memory() -> tuple[int, int, float]:
+    """Return (used_mb, total_mb, percent) from /proc/meminfo."""
+    try:
+        info: dict[str, int] = {}
+        with open("/proc/meminfo") as f:
+            for line in f:
+                parts = line.split()
+                if len(parts) >= 2:
+                    info[parts[0].rstrip(":")] = int(parts[1])
+        total_kb = info.get("MemTotal", 0)
+        avail_kb = info.get("MemAvailable", info.get("MemFree", 0))
+        used_kb = total_kb - avail_kb
+        total_mb = total_kb // 1024
+        used_mb = used_kb // 1024
+        pct = round(used_kb / total_kb * 100, 1) if total_kb else 0.0
+        return used_mb, total_mb, pct
+    except Exception:
+        return 0, 0, 0.0
+
+
+def _read_uptime() -> int:
+    try:
+        with open("/proc/uptime") as f:
+            return int(float(f.read().split()[0]))
+    except Exception:
+        return 0
+
+
+@app.get("/system/resources", response_model=SystemResourcesResponse)
+def system_resources(_admin: Annotated[dict, Depends(require_admin)]):
+    cpu = _read_cpu_percent()
+    mem_used, mem_total, mem_pct = _read_memory()
+    try:
+        usage = shutil.disk_usage("/")
+        disk_used = round(usage.used / (1024 ** 3), 2)
+        disk_total = round(usage.total / (1024 ** 3), 2)
+        disk_pct = round(usage.used / usage.total * 100, 1) if usage.total else 0.0
+    except Exception:
+        disk_used, disk_total, disk_pct = 0.0, 0.0, 0.0
+    return SystemResourcesResponse(
+        cpu_percent=cpu,
+        memory_used_mb=mem_used,
+        memory_total_mb=mem_total,
+        memory_percent=mem_pct,
+        disk_used_gb=disk_used,
+        disk_total_gb=disk_total,
+        disk_percent=disk_pct,
+        uptime_seconds=_read_uptime(),
+    )
+
+
+@app.get("/system/wifi", response_model=WifiInfoResponse)
+def system_wifi(_admin: Annotated[dict, Depends(require_admin)]):
+    ssid = ""
+    ip_addr = ""
+    signal_dbm = None
+    signal_pct = None
+    try:
+        r = subprocess.run(["iwgetid", "-r"], capture_output=True, text=True, timeout=5)
+        ssid = r.stdout.strip()
+    except Exception:
+        pass
+    try:
+        r = subprocess.run(["hostname", "-I"], capture_output=True, text=True, timeout=5)
+        ip_addr = r.stdout.strip().split()[0] if r.stdout.strip() else ""
+    except Exception:
+        pass
+    try:
+        r = subprocess.run(["iwconfig", "wlan0"], capture_output=True, text=True, timeout=5)
+        for line in r.stdout.split("\n"):
+            if "Signal level" in line:
+                import re
+                m = re.search(r"Signal level[=:](-?\d+)", line)
+                if m:
+                    signal_dbm = int(m.group(1))
+                    signal_pct = max(0, min(100, 2 * (signal_dbm + 100)))
+    except Exception:
+        pass
+    return WifiInfoResponse(
+        ssid=ssid, ip_address=ip_addr,
+        signal_dbm=signal_dbm, signal_percent=signal_pct,
+    )
+
+
+@app.post("/system/reboot", response_model=ActionResult)
+def system_reboot(
+    admin: Annotated[dict, Depends(require_admin)],
+    audit: Annotated[AuditService, Depends(get_audit)],
+):
+    audit.record(admin["sub"], "reboot", "Admin initiated Pi reboot")
+    try:
+        subprocess.Popen(
+            ["sudo", "/sbin/reboot"],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        )
+        return ActionResult(success=True, action="reboot", message="Pi is rebooting...")
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 

@@ -147,6 +147,26 @@ data class PiUpdateStatus(
 )
 
 @Serializable
+data class SystemResources(
+    @SerialName("cpu_percent") val cpuPercent: Double = 0.0,
+    @SerialName("memory_used_mb") val memoryUsedMb: Int = 0,
+    @SerialName("memory_total_mb") val memoryTotalMb: Int = 0,
+    @SerialName("memory_percent") val memoryPercent: Double = 0.0,
+    @SerialName("disk_used_gb") val diskUsedGb: Double = 0.0,
+    @SerialName("disk_total_gb") val diskTotalGb: Double = 0.0,
+    @SerialName("disk_percent") val diskPercent: Double = 0.0,
+    @SerialName("uptime_seconds") val uptimeSeconds: Int = 0,
+)
+
+@Serializable
+data class WifiInfo(
+    val ssid: String = "",
+    @SerialName("ip_address") val ipAddress: String = "",
+    @SerialName("signal_dbm") val signalDbm: Int? = null,
+    @SerialName("signal_percent") val signalPercent: Int? = null,
+)
+
+@Serializable
 data class ErrorResponse(val detail: String)
 
 data class ServerConfig(

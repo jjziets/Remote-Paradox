@@ -63,6 +63,14 @@ data class PiUpdateState(
     val message: String? = null,
 )
 
+data class PiSystemState(
+    val resources: com.remoteparadox.app.data.SystemResources? = null,
+    val wifi: com.remoteparadox.app.data.WifiInfo? = null,
+    val loading: Boolean = false,
+    val rebooting: Boolean = false,
+    val error: String? = null,
+)
+
 data class AppState(
     val screen: Screen = Screen.Loading,
     val alarmStatus: AlarmStatus? = null,
@@ -79,6 +87,7 @@ data class AppState(
     val requestHistoryTab: Boolean = false,
     val userMgmt: UserMgmtState = UserMgmtState(),
     val piUpdate: PiUpdateState = PiUpdateState(),
+    val piSystem: PiSystemState = PiSystemState(),
 )
 
 enum class Screen { Loading, Welcome, BleSetup, Scan, Setup, Login, Dashboard, Settings, UserManagement }
@@ -135,12 +144,32 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     // ── BLE Setup ──
 
     private var bleClient: com.remoteparadox.app.data.BleClient? = null
+    var bleLaunchedFromSettings = false
+        private set
 
     fun goToBleSetup() {
+        bleLaunchedFromSettings = false
         if (bleClient == null) {
             bleClient = com.remoteparadox.app.data.BleClient(getApplication())
         }
         _state.update { it.copy(screen = Screen.BleSetup) }
+    }
+
+    fun goToBleFromSettings() {
+        bleLaunchedFromSettings = true
+        if (bleClient == null) {
+            bleClient = com.remoteparadox.app.data.BleClient(getApplication())
+        }
+        _state.update { it.copy(screen = Screen.BleSetup) }
+    }
+
+    fun goBackFromBle() {
+        bleDisconnect()
+        if (bleLaunchedFromSettings) {
+            _state.update { it.copy(screen = Screen.Settings) }
+        } else {
+            _state.update { it.copy(screen = Screen.Welcome) }
+        }
     }
 
     fun bleStartScan() { bleClient?.startScan() }
@@ -481,6 +510,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     fun goToSettings() {
         _state.update { it.copy(screen = Screen.Settings) }
+        if (isAdmin) refreshPiSystem()
     }
 
     fun goBackToDashboard() {
@@ -636,6 +666,50 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 }
             } catch (e: Exception) {
                 _state.update { it.copy(piUpdate = it.piUpdate.copy(applying = false, message = e.message)) }
+            }
+        }
+    }
+
+    // ── Pi System Info ──
+
+    fun refreshPiSystem() {
+        val a = api ?: return
+        _state.update { it.copy(piSystem = it.piSystem.copy(loading = true, error = null)) }
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val resResp = a.systemResources(tokenStore.bearerHeader)
+                val wifiResp = a.systemWifi(tokenStore.bearerHeader)
+                _state.update {
+                    it.copy(piSystem = PiSystemState(
+                        resources = resResp.body(),
+                        wifi = wifiResp.body(),
+                    ))
+                }
+            } catch (e: Exception) {
+                _state.update { it.copy(piSystem = it.piSystem.copy(loading = false, error = e.message)) }
+            }
+        }
+    }
+
+    fun rebootPi() {
+        val a = api ?: return
+        _state.update { it.copy(piSystem = it.piSystem.copy(rebooting = true, error = null)) }
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val resp = a.systemReboot(tokenStore.bearerHeader)
+                if (resp.isSuccessful) {
+                    _state.update {
+                        it.copy(piSystem = it.piSystem.copy(
+                            rebooting = false,
+                            error = "Pi is rebooting... please wait ~60s",
+                        ))
+                    }
+                } else {
+                    val err = resp.errorBody()?.string() ?: "Reboot failed"
+                    _state.update { it.copy(piSystem = it.piSystem.copy(rebooting = false, error = err)) }
+                }
+            } catch (e: Exception) {
+                _state.update { it.copy(piSystem = it.piSystem.copy(rebooting = false, error = e.message)) }
             }
         }
     }

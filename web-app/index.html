@@ -114,6 +114,18 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;b
 .sys-label{font-size:13px;opacity:.7}
 .sys-value{font-size:13px;font-weight:600}
 .update-avail{color:#ff9800;font-weight:600;font-size:13px;margin-bottom:8px}
+
+/* Resource bars */
+.res-bar-wrap{margin-bottom:14px}
+.res-bar-header{display:flex;justify-content:space-between;font-size:13px;margin-bottom:4px}
+.res-bar-label{opacity:.7}
+.res-bar-val{font-weight:600}
+.res-bar{height:8px;border-radius:4px;background:rgba(255,255,255,.1);overflow:hidden}
+.res-bar-fill{height:100%;border-radius:4px;transition:width .4s ease}
+.res-green{background:#4caf50}
+.res-amber{background:#ff9800}
+.res-red{background:#e94560}
+.uptime-text{font-size:12px;opacity:.5;text-align:right;margin-top:4px}
 </style>
 </head>
 <body>
@@ -351,7 +363,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;b
     if (view === 'status') renderZones();
     if (view === 'history') renderHist();
     if (view === 'users') loadUsers();
-    if (view === 'system') loadSystem();
+    if (view === 'system') { loadSystem(); } else { clearInterval(sysRefreshTimer); }
   };
 
   function modeColor(m) {
@@ -603,6 +615,30 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;b
 
   // ── System / Pi Update ──
 
+  var sysRefreshTimer = null;
+
+  function barColor(pct) {
+    if (pct < 60) return 'res-green';
+    if (pct < 85) return 'res-amber';
+    return 'res-red';
+  }
+
+  function fmtUptime(s) {
+    var d = Math.floor(s / 86400);
+    var h = Math.floor((s % 86400) / 3600);
+    var m = Math.floor((s % 3600) / 60);
+    if (d > 0) return d + 'd ' + h + 'h ' + m + 'm';
+    if (h > 0) return h + 'h ' + m + 'm';
+    return m + 'm';
+  }
+
+  function renderResourceBar(label, pct, detail) {
+    return '<div class="res-bar-wrap">'
+      + '<div class="res-bar-header"><span class="res-bar-label">' + esc(label) + '</span><span class="res-bar-val">' + esc(detail) + '</span></div>'
+      + '<div class="res-bar"><div class="res-bar-fill ' + barColor(pct) + '" style="width:' + Math.min(pct, 100) + '%"></div></div>'
+      + '</div>';
+  }
+
   function loadSystem() {
     $('elSystem').innerHTML = '<div style="text-align:center;padding:24px;opacity:.5">Loading system info...</div>';
 
@@ -610,19 +646,52 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;b
       api('GET', '/health').catch(function(){ return {}; }),
       api('GET', '/system/update-status').catch(function(){ return { pending: false }; }),
       api('GET', '/system/version').catch(function(){ return { version: '?' }; }),
+      api('GET', '/system/resources').catch(function(){ return null; }),
+      api('GET', '/system/wifi').catch(function(){ return null; }),
     ]).then(function(results) {
       var health = results[0] || {};
       var update = results[1] || {};
       var ver = results[2] || {};
+      var res = results[3];
+      var wifi = results[4];
 
-      var h = '<div class="section-title">&#x2699; System</div>';
+      var h = '';
+
+      // ── System Resources ──
+      if (res) {
+        h += '<div class="sys-card">';
+        h += '<div class="section-title" style="margin-top:0">&#x1F4CA; System Resources</div>';
+        h += renderResourceBar('CPU', res.cpu_percent, res.cpu_percent.toFixed(1) + '%');
+        h += renderResourceBar('Memory', res.memory_percent, res.memory_used_mb + ' / ' + res.memory_total_mb + ' MB');
+        h += renderResourceBar('Storage', res.disk_percent, res.disk_used_gb.toFixed(1) + ' / ' + res.disk_total_gb.toFixed(1) + ' GB');
+        if (res.uptime_seconds) {
+          h += '<div class="uptime-text">Uptime: ' + fmtUptime(res.uptime_seconds) + '</div>';
+        }
+        h += '</div>';
+      }
+
+      // ── WiFi Info ──
+      if (wifi) {
+        h += '<div class="sys-card">';
+        h += '<div class="section-title" style="margin-top:0">&#x1F4F6; WiFi</div>';
+        h += '<div class="sys-row"><span class="sys-label">SSID</span><span class="sys-value">' + esc(wifi.ssid || 'not connected') + '</span></div>';
+        h += '<div class="sys-row"><span class="sys-label">IP Address</span><span class="sys-value">' + esc(wifi.ip_address || '—') + '</span></div>';
+        if (wifi.signal_percent != null) {
+          h += '<div class="sys-row"><span class="sys-label">Signal</span><span class="sys-value">' + wifi.signal_percent + '% (' + wifi.signal_dbm + ' dBm)</span></div>';
+        }
+        h += '</div>';
+      }
+
+      // ── Service Status ──
       h += '<div class="sys-card">';
+      h += '<div class="section-title" style="margin-top:0">&#x2699; Service Status</div>';
       h += '<div class="sys-row"><span class="sys-label">Pi Version</span><span class="sys-value">' + esc(ver.version || update.current_version || '?') + '</span></div>';
       h += '<div class="sys-row"><span class="sys-label">Panel Connected</span><span class="sys-value" style="color:' + (health.alarm_connected ? '#4caf50' : '#e94560') + '">' + (health.alarm_connected ? 'Yes' : 'No') + '</span></div>';
       h += '<div class="sys-row"><span class="sys-label">WebSocket Clients</span><span class="sys-value">' + (health.websocket_clients || 0) + '</span></div>';
       h += '<div class="sys-row"><span class="sys-label">Demo Mode</span><span class="sys-value">' + (health.demo_mode ? 'Yes' : 'No') + '</span></div>';
       h += '</div>';
 
+      // ── Pi Software Update ──
       h += '<div class="sys-card">';
       h += '<div class="section-title" style="margin-top:0">&#x1F504; Pi Software Update</div>';
       if (update.pending && update.new_version) {
@@ -631,11 +700,48 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;b
       } else {
         h += '<div style="color:#4caf50;font-size:13px;margin-bottom:8px">&#x2714; Pi is up to date (v' + esc(ver.version || update.current_version || '?') + ')</div>';
       }
-      h += '<button class="btn blue" style="width:100%" onclick="doCheckPiUpdate()">&#x1F50D; Check for Updates</button>';
+      h += '<button class="btn blue" style="width:100%;margin-bottom:8px" onclick="doCheckPiUpdate()">&#x1F50D; Check for Updates</button>';
+      h += '</div>';
+
+      // ── Maintenance ──
+      h += '<div class="sys-card">';
+      h += '<div class="section-title" style="margin-top:0">&#x1F527; Maintenance</div>';
+      h += '<button class="btn" style="width:100%;background:#e94560;border-color:#e94560" onclick="doReboot()">&#x1F504; Reboot Pi</button>';
       h += '</div>';
 
       $('elSystem').innerHTML = h;
+
+      // Auto-refresh resources every 10s while System tab is open
+      clearInterval(sysRefreshTimer);
+      sysRefreshTimer = setInterval(refreshResources, 10000);
     });
+  }
+
+  function refreshResources() {
+    // Only refresh resource bars, not the whole page
+    api('GET', '/system/resources').then(function(res) {
+      if (!res) return;
+      var bars = document.querySelectorAll('.res-bar-wrap');
+      if (bars.length < 3) return;
+      // CPU
+      var cpuFill = bars[0].querySelector('.res-bar-fill');
+      var cpuVal = bars[0].querySelector('.res-bar-val');
+      if (cpuFill) { cpuFill.style.width = Math.min(res.cpu_percent, 100) + '%'; cpuFill.className = 'res-bar-fill ' + barColor(res.cpu_percent); }
+      if (cpuVal) cpuVal.textContent = res.cpu_percent.toFixed(1) + '%';
+      // Memory
+      var memFill = bars[1].querySelector('.res-bar-fill');
+      var memVal = bars[1].querySelector('.res-bar-val');
+      if (memFill) { memFill.style.width = Math.min(res.memory_percent, 100) + '%'; memFill.className = 'res-bar-fill ' + barColor(res.memory_percent); }
+      if (memVal) memVal.textContent = res.memory_used_mb + ' / ' + res.memory_total_mb + ' MB';
+      // Disk
+      var diskFill = bars[2].querySelector('.res-bar-fill');
+      var diskVal = bars[2].querySelector('.res-bar-val');
+      if (diskFill) { diskFill.style.width = Math.min(res.disk_percent, 100) + '%'; diskFill.className = 'res-bar-fill ' + barColor(res.disk_percent); }
+      if (diskVal) diskVal.textContent = res.disk_used_gb.toFixed(1) + ' / ' + res.disk_total_gb.toFixed(1) + ' GB';
+      // Uptime
+      var uptEl = document.querySelector('.uptime-text');
+      if (uptEl && res.uptime_seconds) uptEl.textContent = 'Uptime: ' + fmtUptime(res.uptime_seconds);
+    }).catch(function(){});
   }
 
   window.doCheckPiUpdate = function() {
@@ -656,6 +762,19 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;b
         setTimeout(loadSystem, 10000);
       } else {
         showErr(d.message || 'Apply failed');
+      }
+    }).catch(function(e){ showErr(String(e)); });
+  };
+
+  window.doReboot = function() {
+    if (!confirm('Are you sure you want to reboot the Pi?\nThe alarm controller will be offline for ~60 seconds.')) return;
+    api('POST', '/system/reboot').then(function(d) {
+      if (d.success) {
+        $('elSystem').innerHTML = '<div style="text-align:center;padding:32px;color:#ff9800">&#x1F504; Pi is rebooting...<br><span style="font-size:12px;opacity:.6">The page will try to reconnect in 60 seconds.</span></div>';
+        clearInterval(sysRefreshTimer);
+        setTimeout(function(){ location.reload(); }, 60000);
+      } else {
+        showErr(d.message || 'Reboot failed');
       }
     }).catch(function(e){ showErr(String(e)); });
   };

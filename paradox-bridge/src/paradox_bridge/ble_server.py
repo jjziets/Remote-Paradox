@@ -3,14 +3,12 @@
 Advertises as "Remote_Paradox" with a Nordic UART Service (NUS) for
 JSON command/response communication with the Android app.
 
-Commands (JSON written to RX characteristic):
-  {"cmd": "status"}                    -> device status
-  {"cmd": "wifi_scan"}                 -> list available networks
-  {"cmd": "wifi_set", "ssid": "...", "password": "..."}  -> configure WiFi
-  {"cmd": "admin_setup", "username": "...", "password": "..."} -> first admin
-  {"cmd": "auth", "token": "..."}      -> authenticate as admin
+BLE is always discoverable. Access model:
+  PUBLIC (no auth):    status, admin_setup (once), auth
+  AUTHENTICATED:       wifi_scan, wifi_set (admin), alarm_*, system_*
+  Any untrusted device gets nothing until authenticated.
 
-Trust model: first-come-first-trusted. Reset by shorting GPIO17→GND.
+Reset trust by shorting GPIO17→GND.
 """
 
 import asyncio
@@ -132,6 +130,33 @@ def create_admin_user(username: str, password: str) -> str:
         return f"error: {e}"
 
 
+PUBLIC_COMMANDS = {"status", "admin_setup", "auth"}
+ADMIN_ONLY_COMMANDS = {"wifi_set", "system_reboot"}
+AUTHENTICATED_COMMANDS = {
+    "wifi_scan", "wifi_set",
+    "arm_away", "arm_stay", "disarm", "panic", "alarm_status",
+    "system_resources", "system_wifi", "system_reboot",
+}
+
+
+def _validate_token(token: str) -> dict | None:
+    """Validate a JWT and return the payload, or None."""
+    if not token:
+        return None
+    try:
+        import sys
+        sys.path.insert(0, "/opt/paradox-bridge/src")
+        from paradox_bridge.auth import AuthService
+        from paradox_bridge.config import load_config
+        from paradox_bridge.database import Database
+        cfg = load_config()
+        db = Database(cfg.db_path)
+        auth = AuthService(cfg, db)
+        return auth.decode_token(token)
+    except Exception:
+        return None
+
+
 def handle_command(data: str) -> str:
     """Process a JSON command and return a JSON response."""
     try:
@@ -141,6 +166,8 @@ def handle_command(data: str) -> str:
 
     action = cmd.get("cmd", "")
 
+    # ── Public commands ──
+
     if action == "status":
         return json.dumps({
             "ip": get_ip(),
@@ -148,15 +175,6 @@ def handle_command(data: str) -> str:
             "version": get_version(),
             "trusted": is_trusted(),
         })
-
-    if action == "wifi_scan":
-        return json.dumps({"networks": wifi_scan()})
-
-    if action == "wifi_set":
-        if not cmd.get("ssid"):
-            return json.dumps({"error": "ssid required"})
-        result = apply_wifi(cmd["ssid"], cmd.get("password", ""))
-        return json.dumps({"result": result})
 
     if action == "admin_setup":
         if is_trusted():
@@ -172,29 +190,83 @@ def handle_command(data: str) -> str:
 
     if action == "auth":
         token = cmd.get("token", "")
-        if not token:
-            return json.dumps({"error": "token required"})
-        try:
-            import sys
-            sys.path.insert(0, "/opt/paradox-bridge/src")
-            from paradox_bridge.auth import AuthService
-            from paradox_bridge.config import load_config
-            from paradox_bridge.database import Database
-            cfg = load_config()
-            db = Database(cfg.db_path)
-            auth = AuthService(cfg, db)
-            payload = auth.decode_token(token)
-            if payload.get("role") != "admin":
-                return json.dumps({"error": "admin required"})
-            return json.dumps({"result": "authenticated", "username": payload.get("sub")})
-        except Exception as e:
-            return json.dumps({"error": f"auth failed: {e}"})
+        payload = _validate_token(token)
+        if payload is None:
+            return json.dumps({"error": "invalid or expired token"})
+        return json.dumps({
+            "result": "authenticated",
+            "username": payload.get("sub"),
+            "role": payload.get("role", "user"),
+        })
 
-    # ── Alarm control via BLE (requires auth) ──
-    if action in ("arm_away", "arm_stay", "disarm", "panic", "alarm_status"):
-        return handle_alarm_command(action, cmd)
+    # ── All remaining commands require a valid token ──
+
+    if action in AUTHENTICATED_COMMANDS:
+        token = cmd.get("token", "")
+        payload = _validate_token(token)
+        if payload is None:
+            return json.dumps({"error": "authentication required"})
+
+        if action in ADMIN_ONLY_COMMANDS and payload.get("role") != "admin":
+            return json.dumps({"error": "admin privileges required"})
+
+        # WiFi
+        if action == "wifi_scan":
+            return json.dumps({"networks": wifi_scan()})
+
+        if action == "wifi_set":
+            if not cmd.get("ssid"):
+                return json.dumps({"error": "ssid required"})
+            result = apply_wifi(cmd["ssid"], cmd.get("password", ""))
+            return json.dumps({"result": result})
+
+        # Alarm control
+        if action in ("arm_away", "arm_stay", "disarm", "panic", "alarm_status"):
+            return handle_alarm_command(action, cmd)
+
+        # System commands — proxy through local API
+        if action == "system_resources":
+            return _proxy_get("/system/resources", token)
+        if action == "system_wifi":
+            return _proxy_get("/system/wifi", token)
+        if action == "system_reboot":
+            return _proxy_post("/system/reboot", token)
 
     return json.dumps({"error": f"unknown command: {action}"})
+
+
+def _proxy_get(path: str, token: str) -> str:
+    """Forward a GET request to the local FastAPI server."""
+    import urllib.request
+    try:
+        req = urllib.request.Request(
+            f"http://127.0.0.1:8080{path}",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            return resp.read().decode()
+    except Exception as e:
+        return json.dumps({"error": f"proxy failed: {e}"})
+
+
+def _proxy_post(path: str, token: str, body: dict | None = None) -> str:
+    """Forward a POST request to the local FastAPI server."""
+    import urllib.request
+    try:
+        data = json.dumps(body).encode() if body else None
+        req = urllib.request.Request(
+            f"http://127.0.0.1:8080{path}",
+            data=data,
+            headers={
+                "Authorization": f"Bearer {token}",
+                "Content-Type": "application/json",
+            },
+            method="POST",
+        )
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            return resp.read().decode()
+    except Exception as e:
+        return json.dumps({"error": f"proxy failed: {e}"})
 
 
 def handle_alarm_command(action: str, cmd: dict) -> str:

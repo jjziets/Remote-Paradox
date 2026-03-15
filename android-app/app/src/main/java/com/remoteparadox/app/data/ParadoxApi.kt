@@ -93,6 +93,21 @@ interface ParadoxApi {
         @Header("Authorization") auth: String,
     ): Response<ActionResult>
 
+    @GET("system/resources")
+    suspend fun systemResources(
+        @Header("Authorization") auth: String,
+    ): Response<SystemResources>
+
+    @GET("system/wifi")
+    suspend fun systemWifi(
+        @Header("Authorization") auth: String,
+    ): Response<WifiInfo>
+
+    @POST("system/reboot")
+    suspend fun systemReboot(
+        @Header("Authorization") auth: String,
+    ): Response<ActionResult>
+
     @GET("health")
     suspend fun health(): Response<HealthResponse>
 }
