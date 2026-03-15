@@ -120,6 +120,33 @@ data class AuditEntry(
 data class AuditLogResponse(val entries: List<AuditEntry>)
 
 @Serializable
+data class UserInfo(
+    val username: String,
+    val role: String,
+    @SerialName("created_at") val createdAt: String,
+)
+
+@Serializable
+data class UserListResponse(val users: List<UserInfo>)
+
+@Serializable
+data class RoleUpdateRequest(val role: String)
+
+@Serializable
+data class InviteResponse(
+    val uri: String,
+    @SerialName("qr_data_uri") val qrDataUri: String = "",
+    @SerialName("expires_in") val expiresIn: Int = 900,
+)
+
+@Serializable
+data class PiUpdateStatus(
+    val pending: Boolean = false,
+    @SerialName("current_version") val currentVersion: String = "0.0.0",
+    @SerialName("new_version") val newVersion: String? = null,
+)
+
+@Serializable
 data class ErrorResponse(val detail: String)
 
 data class ServerConfig(

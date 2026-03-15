@@ -37,6 +37,7 @@ from paradox_bridge.models import (
     RegisterResponse,
     UserInfo,
     UserListResponse,
+    RoleUpdateRequest,
     ZoneResponse,
     ZoneToggleRequest,
 )
@@ -397,6 +398,24 @@ def list_users(
     )
 
 
+@app.put("/auth/users/{username}/role", response_model=ActionResult)
+def update_user_role(
+    username: str,
+    req: RoleUpdateRequest,
+    admin: Annotated[dict, Depends(require_admin)],
+    db: Annotated[Database, Depends(get_db)],
+    audit: Annotated[AuditService, Depends(get_audit)],
+):
+    if username == admin["sub"]:
+        raise HTTPException(status_code=400, detail="Cannot change your own role")
+    try:
+        db.update_user_role(username, req.role)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    audit.record(admin["sub"], "update_role", f"{username} -> {req.role}")
+    return ActionResult(success=True, action="update_role", message=f"User '{username}' is now {req.role}")
+
+
 @app.delete("/auth/users/{username}", response_model=ActionResult)
 def delete_user(
     username: str,
@@ -409,9 +428,71 @@ def delete_user(
     try:
         db.delete_user(username)
     except ValueError as exc:
-        raise HTTPException(status_code=404, detail=str(exc))
+        raise HTTPException(status_code=400, detail=str(exc))
     audit.record(admin["sub"], "delete_user", f"deleted {username}")
     return ActionResult(success=True, action="delete_user", message=f"User '{username}' deleted")
+
+
+# ── System update routes ──
+
+import json
+import subprocess
+
+UPDATE_STATUS_FILE = Path("/opt/paradox-bridge/update_status.json")
+VERSION_FILE = Path("/opt/paradox-bridge/CURRENT_VERSION")
+APPLY_SCRIPT = Path("/opt/paradox-bridge/scripts/apply_update.sh")
+
+
+@app.get("/system/version")
+def system_version():
+    ver = VERSION_FILE.read_text().strip() if VERSION_FILE.exists() else "0.0.0"
+    return {"version": ver}
+
+
+@app.get("/system/update-status")
+def update_status(_admin: Annotated[dict, Depends(require_admin)]):
+    if not UPDATE_STATUS_FILE.exists():
+        return {"pending": False, "current_version": VERSION_FILE.read_text().strip() if VERSION_FILE.exists() else "0.0.0"}
+    try:
+        return json.loads(UPDATE_STATUS_FILE.read_text())
+    except Exception:
+        return {"pending": False}
+
+
+@app.post("/system/check-update")
+def check_update(_admin: Annotated[dict, Depends(require_admin)]):
+    try:
+        result = subprocess.run(
+            ["python3", "/opt/paradox-bridge/scripts/updater.py"],
+            capture_output=True, text=True, timeout=60,
+        )
+        return {"success": True, "output": result.stdout + result.stderr}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/system/apply-update")
+def apply_update(
+    admin: Annotated[dict, Depends(require_admin)],
+    audit: Annotated[AuditService, Depends(get_audit)],
+):
+    if not UPDATE_STATUS_FILE.exists():
+        raise HTTPException(status_code=404, detail="No pending update")
+    try:
+        data = json.loads(UPDATE_STATUS_FILE.read_text())
+    except Exception:
+        raise HTTPException(status_code=500, detail="Cannot read update status")
+    if not data.get("pending"):
+        raise HTTPException(status_code=400, detail="No pending update")
+    audit.record(admin["sub"], "apply_update", f"Applying {data.get('new_version', '?')}")
+    try:
+        subprocess.Popen(
+            ["sudo", str(APPLY_SCRIPT)],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        )
+        return {"success": True, "message": f"Applying update to {data.get('new_version')}. Service will restart."}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 # ── Alarm routes ──

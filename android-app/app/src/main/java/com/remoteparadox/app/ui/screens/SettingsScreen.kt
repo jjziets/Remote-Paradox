@@ -29,10 +29,15 @@ fun SettingsScreen(
     soundEnabled: Boolean,
     notificationsEnabled: Boolean,
     updateState: UpdateState,
+    isAdmin: Boolean = false,
+    piUpdate: com.remoteparadox.app.PiUpdateState = com.remoteparadox.app.PiUpdateState(),
     onSoundToggle: (Boolean) -> Unit,
     onNotificationsToggle: (Boolean) -> Unit,
     onCheckUpdate: () -> Unit,
     onDownloadUpdate: () -> Unit,
+    onManageUsers: () -> Unit = {},
+    onCheckPiUpdate: () -> Unit = {},
+    onApplyPiUpdate: () -> Unit = {},
     onLogout: () -> Unit,
     onSwitchServer: () -> Unit,
     onBack: () -> Unit,
@@ -79,6 +84,30 @@ fun SettingsScreen(
                         Column {
                             Text(username ?: "—", color = Color.White, fontSize = 15.sp)
                             Text("${serverHost ?: "—"}:$serverPort", color = Color.White.copy(alpha = 0.5f), fontSize = 12.sp)
+                        }
+                    }
+                }
+            }
+
+            // Admin section
+            if (isAdmin) {
+                Card(
+                    shape = RoundedCornerShape(12.dp),
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                ) {
+                    Column(modifier = Modifier.padding(16.dp)) {
+                        Text("Administration", fontWeight = FontWeight.Bold, color = Color.White, fontSize = 14.sp)
+                        Spacer(Modifier.height(8.dp))
+                        OutlinedButton(
+                            onClick = onManageUsers,
+                            modifier = Modifier.fillMaxWidth(),
+                            shape = RoundedCornerShape(10.dp),
+                            colors = ButtonDefaults.outlinedButtonColors(contentColor = Color(0xFF4CAF50)),
+                            border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFF4CAF50).copy(alpha = 0.5f)),
+                        ) {
+                            Icon(Icons.Default.Group, null, Modifier.size(18.dp))
+                            Spacer(Modifier.width(8.dp))
+                            Text("Manage Users & Invites", fontWeight = FontWeight.Medium)
                         }
                     }
                 }
@@ -215,6 +244,76 @@ fun SettingsScreen(
                             Icon(Icons.Default.Refresh, null, Modifier.size(16.dp))
                             Spacer(Modifier.width(6.dp))
                             Text("Check for updates", fontSize = 13.sp)
+                        }
+                    }
+                }
+            }
+
+            // Pi Software Update (admin only)
+            if (isAdmin) {
+                Card(
+                    shape = RoundedCornerShape(12.dp),
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                ) {
+                    Column(modifier = Modifier.padding(16.dp)) {
+                        Text("Pi Software", fontWeight = FontWeight.Bold, color = Color.White, fontSize = 14.sp)
+                        Spacer(Modifier.height(8.dp))
+
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(Icons.Default.DeveloperBoard, null, tint = Color.White.copy(alpha = 0.7f), modifier = Modifier.size(20.dp))
+                            Spacer(Modifier.width(12.dp))
+                            Column(Modifier.weight(1f)) {
+                                Text("Remote Paradox Pi", color = Color.White, fontSize = 14.sp)
+                                Text("Version ${piUpdate.currentVersion}", color = Color.White.copy(alpha = 0.5f), fontSize = 12.sp)
+                            }
+                        }
+
+                        if (piUpdate.message != null) {
+                            Spacer(Modifier.height(8.dp))
+                            Text(piUpdate.message, color = if (piUpdate.pending) Color(0xFFFF9800) else Color(0xFF4CAF50), fontSize = 13.sp)
+                        }
+
+                        if (piUpdate.pending && piUpdate.newVersion != null) {
+                            Spacer(Modifier.height(8.dp))
+                            Button(
+                                onClick = onApplyPiUpdate,
+                                modifier = Modifier.fillMaxWidth().height(40.dp),
+                                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFFF9800)),
+                                shape = RoundedCornerShape(8.dp),
+                                enabled = !piUpdate.applying,
+                            ) {
+                                if (piUpdate.applying) {
+                                    CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp, color = Color.White)
+                                } else {
+                                    Icon(Icons.Default.SystemUpdate, null, Modifier.size(16.dp))
+                                }
+                                Spacer(Modifier.width(6.dp))
+                                Text("Apply v${piUpdate.newVersion}", fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                            }
+                        }
+
+                        if (!piUpdate.checking && !piUpdate.applying) {
+                            Spacer(Modifier.height(8.dp))
+                            OutlinedButton(
+                                onClick = onCheckPiUpdate,
+                                modifier = Modifier.fillMaxWidth().height(40.dp),
+                                shape = RoundedCornerShape(8.dp),
+                                colors = ButtonDefaults.outlinedButtonColors(contentColor = Color.White),
+                                border = androidx.compose.foundation.BorderStroke(1.dp, Color.White.copy(alpha = 0.2f)),
+                            ) {
+                                Icon(Icons.Default.Refresh, null, Modifier.size(16.dp))
+                                Spacer(Modifier.width(6.dp))
+                                Text("Check Pi for updates", fontSize = 13.sp)
+                            }
+                        }
+
+                        if (piUpdate.checking) {
+                            Spacer(Modifier.height(8.dp))
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp, color = Color.White)
+                                Spacer(Modifier.width(12.dp))
+                                Text("Checking...", color = Color.White.copy(alpha = 0.7f), fontSize = 14.sp)
+                            }
                         }
                     }
                 }

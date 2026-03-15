@@ -85,10 +85,31 @@ class Database:
         rows = self.conn.execute("SELECT * FROM users ORDER BY created_at").fetchall()
         return [dict(r) for r in rows]
 
+    def update_user_role(self, username: str, role: str) -> None:
+        if role not in ("admin", "user"):
+            raise ValueError(f"Invalid role: {role}")
+        existing = self.get_user(username)
+        if existing is None:
+            raise ValueError(f"User '{username}' not found")
+        if existing["role"] == "admin" and role != "admin" and self.admin_count() <= 1:
+            raise ValueError("Cannot demote the last admin")
+        self.conn.execute(
+            "UPDATE users SET role = ? WHERE username = ?", (role, username),
+        )
+        self.conn.commit()
+
+    def admin_count(self) -> int:
+        row = self.conn.execute(
+            "SELECT COUNT(*) as cnt FROM users WHERE role = 'admin'"
+        ).fetchone()
+        return row["cnt"] if row else 0
+
     def delete_user(self, username: str) -> None:
         existing = self.get_user(username)
         if existing is None:
             raise ValueError(f"User '{username}' not found")
+        if existing["role"] == "admin" and self.admin_count() <= 1:
+            raise ValueError("Cannot delete the last admin")
         self.conn.execute("DELETE FROM users WHERE username = ?", (username,))
         self.conn.commit()
 

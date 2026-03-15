@@ -2,6 +2,8 @@ package com.remoteparadox.app.ui.screens
 
 import android.Manifest
 import android.util.Size
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.camera.core.*
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.view.PreviewView
@@ -9,6 +11,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.QrCodeScanner
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -35,21 +38,39 @@ fun ScanScreen(
     onManualEntry: () -> Unit,
     hasServerConfig: Boolean = false,
     onLogin: () -> Unit = {},
+    onBack: () -> Unit = {},
 ) {
     var hasPermission by remember { mutableStateOf<Boolean?>(null) }
     val context = LocalContext.current
 
+    val permissionLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { granted -> hasPermission = granted }
+
     LaunchedEffect(Unit) {
-        hasPermission = ContextCompat.checkSelfPermission(
+        val granted = ContextCompat.checkSelfPermission(
             context, Manifest.permission.CAMERA
         ) == android.content.pm.PackageManager.PERMISSION_GRANTED
+        if (granted) {
+            hasPermission = true
+        } else {
+            permissionLauncher.launch(Manifest.permission.CAMERA)
+        }
     }
 
     Column(
         modifier = Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
-        Spacer(Modifier.height(48.dp))
+        Row(
+            Modifier.fillMaxWidth().padding(top = 8.dp, start = 4.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            IconButton(onClick = onBack) {
+                Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back", tint = Color.White)
+            }
+        }
+        Spacer(Modifier.height(8.dp))
         Icon(
             Icons.Default.QrCodeScanner,
             contentDescription = null,
@@ -83,7 +104,7 @@ fun ScanScreen(
                     ServerConfig.fromUri(raw)?.let(onCodeScanned)
                 },
             )
-        } else {
+        } else if (hasPermission == false) {
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -91,26 +112,30 @@ fun ScanScreen(
                     .padding(24.dp),
                 contentAlignment = Alignment.Center,
             ) {
-                Text(
-                    "Camera permission required.\nGrant it in Settings.",
-                    textAlign = TextAlign.Center,
-                    color = Color.White.copy(alpha = 0.6f),
-                )
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    Text(
+                        "Camera permission required to scan QR codes.",
+                        textAlign = TextAlign.Center,
+                        color = Color.White.copy(alpha = 0.6f),
+                    )
+                    Spacer(Modifier.height(12.dp))
+                    OutlinedButton(onClick = { permissionLauncher.launch(Manifest.permission.CAMERA) }) {
+                        Text("Grant Camera Permission")
+                    }
+                }
+            }
+        } else {
+            Box(Modifier.fillMaxWidth().weight(1f), contentAlignment = Alignment.Center) {
+                CircularProgressIndicator(color = Color.White)
             }
         }
 
         Spacer(Modifier.height(16.dp))
         OutlinedButton(
             onClick = onManualEntry,
-            modifier = Modifier.padding(bottom = 8.dp),
-        ) {
-            Text("Enter code manually")
-        }
-        TextButton(
-            onClick = onLogin,
             modifier = Modifier.padding(bottom = 24.dp),
         ) {
-            Text("Already registered? Log in")
+            Text("Enter code manually")
         }
     }
 }

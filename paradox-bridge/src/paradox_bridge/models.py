@@ -124,5 +124,9 @@ class UserListResponse(BaseModel):
     users: list[UserInfo]
 
 
+class RoleUpdateRequest(BaseModel):
+    role: str
+
+
 class ErrorResponse(BaseModel):
     detail: str

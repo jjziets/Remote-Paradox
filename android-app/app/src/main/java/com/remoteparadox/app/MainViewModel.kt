@@ -46,6 +46,23 @@ data class UpdateState(
     val error: String? = null,
 )
 
+data class UserMgmtState(
+    val users: List<UserInfo> = emptyList(),
+    val isLoading: Boolean = false,
+    val error: String? = null,
+    val inviteUri: String? = null,
+    val inviteQr: String? = null,
+)
+
+data class PiUpdateState(
+    val checking: Boolean = false,
+    val pending: Boolean = false,
+    val currentVersion: String = "?",
+    val newVersion: String? = null,
+    val applying: Boolean = false,
+    val message: String? = null,
+)
+
 data class AppState(
     val screen: Screen = Screen.Loading,
     val alarmStatus: AlarmStatus? = null,
@@ -60,9 +77,11 @@ data class AppState(
     val notificationsEnabled: Boolean = true,
     val update: UpdateState = UpdateState(),
     val requestHistoryTab: Boolean = false,
+    val userMgmt: UserMgmtState = UserMgmtState(),
+    val piUpdate: PiUpdateState = PiUpdateState(),
 )
 
-enum class Screen { Loading, Scan, Setup, Login, Dashboard, Settings }
+enum class Screen { Loading, Welcome, BleSetup, Scan, Setup, Login, Dashboard, Settings, UserManagement }
 
 class MainViewModel(app: Application) : AndroidViewModel(app) {
     val tokenStore = TokenStore(app)
@@ -105,9 +124,33 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             _state.update { it.copy(screen = Screen.Dashboard) }
             startRealtimeUpdates()
         } else {
-            _state.update { it.copy(screen = Screen.Scan) }
+            _state.update { it.copy(screen = Screen.Welcome) }
         }
     }
+
+    fun goToWelcome() {
+        _state.update { it.copy(screen = Screen.Welcome, error = null) }
+    }
+
+    // ── BLE Setup ──
+
+    private var bleClient: com.remoteparadox.app.data.BleClient? = null
+
+    fun goToBleSetup() {
+        if (bleClient == null) {
+            bleClient = com.remoteparadox.app.data.BleClient(getApplication())
+        }
+        _state.update { it.copy(screen = Screen.BleSetup) }
+    }
+
+    fun bleStartScan() { bleClient?.startScan() }
+    fun bleConnect(address: String) { bleClient?.connect(address) }
+    fun bleDisconnect() { bleClient?.disconnect() }
+    fun bleSendCommand(json: String) { bleClient?.sendCommand(json) }
+
+    val bleConnectionState get() = bleClient?.connectionState
+    val bleDevices get() = bleClient?.discoveredDevices
+    val bleResponse get() = bleClient?.lastResponse
 
     private fun connectApi() {
         val url = tokenStore.baseUrl ?: return
@@ -452,6 +495,151 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         _state.update { it.copy(requestHistoryTab = false) }
     }
 
+    // ── User Management (admin) ──
+
+    fun goToUserManagement() {
+        _state.update { it.copy(screen = Screen.UserManagement) }
+        refreshUsers()
+    }
+
+    fun goBackFromUserMgmt() {
+        _state.update { it.copy(screen = Screen.Settings, userMgmt = UserMgmtState()) }
+    }
+
+    fun refreshUsers() {
+        val a = api ?: return
+        _state.update { it.copy(userMgmt = it.userMgmt.copy(isLoading = true, error = null)) }
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val resp = a.listUsers(tokenStore.bearerHeader)
+                if (resp.isSuccessful) {
+                    _state.update { it.copy(userMgmt = it.userMgmt.copy(users = resp.body()!!.users, isLoading = false)) }
+                } else {
+                    _state.update { it.copy(userMgmt = it.userMgmt.copy(isLoading = false, error = "Failed to load users")) }
+                }
+            } catch (e: Exception) {
+                _state.update { it.copy(userMgmt = it.userMgmt.copy(isLoading = false, error = e.message)) }
+            }
+        }
+    }
+
+    fun updateUserRole(username: String, newRole: String) {
+        val a = api ?: return
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val resp = a.updateUserRole(tokenStore.bearerHeader, username, RoleUpdateRequest(newRole))
+                if (resp.isSuccessful) {
+                    refreshUsers()
+                } else {
+                    val errBody = resp.errorBody()?.string() ?: "Failed"
+                    _state.update { it.copy(userMgmt = it.userMgmt.copy(error = errBody)) }
+                }
+            } catch (e: Exception) {
+                _state.update { it.copy(userMgmt = it.userMgmt.copy(error = e.message)) }
+            }
+        }
+    }
+
+    fun deleteUser(username: String) {
+        val a = api ?: return
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val resp = a.deleteUser(tokenStore.bearerHeader, username)
+                if (resp.isSuccessful) {
+                    refreshUsers()
+                } else {
+                    val errBody = resp.errorBody()?.string() ?: "Failed"
+                    _state.update { it.copy(userMgmt = it.userMgmt.copy(error = errBody)) }
+                }
+            } catch (e: Exception) {
+                _state.update { it.copy(userMgmt = it.userMgmt.copy(error = e.message)) }
+            }
+        }
+    }
+
+    fun generateInvite() {
+        val a = api ?: return
+        _state.update { it.copy(userMgmt = it.userMgmt.copy(inviteUri = null, inviteQr = null)) }
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val resp = a.createInvite(tokenStore.bearerHeader)
+                if (resp.isSuccessful) {
+                    val body = resp.body()!!
+                    _state.update { it.copy(userMgmt = it.userMgmt.copy(inviteUri = body.uri, inviteQr = body.qrDataUri)) }
+                } else {
+                    _state.update { it.copy(userMgmt = it.userMgmt.copy(error = "Failed to create invite")) }
+                }
+            } catch (e: Exception) {
+                _state.update { it.copy(userMgmt = it.userMgmt.copy(error = e.message)) }
+            }
+        }
+    }
+
+    fun dismissInvite() {
+        _state.update { it.copy(userMgmt = it.userMgmt.copy(inviteUri = null, inviteQr = null)) }
+    }
+
+    val isAdmin: Boolean get() {
+        val token = tokenStore.token ?: return false
+        return try {
+            val parts = token.split(".")
+            if (parts.size < 2) return false
+            val payload = String(android.util.Base64.decode(parts[1], android.util.Base64.URL_SAFE or android.util.Base64.NO_PADDING))
+            payload.contains("\"role\":\"admin\"") || payload.contains("\"role\": \"admin\"")
+        } catch (_: Exception) { false }
+    }
+
+    // ── Pi Update Management ──
+
+    fun checkPiUpdate() {
+        val a = api ?: return
+        _state.update { it.copy(piUpdate = it.piUpdate.copy(checking = true, message = null)) }
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                a.piCheckUpdate(tokenStore.bearerHeader)
+                val resp = a.piUpdateStatus(tokenStore.bearerHeader)
+                if (resp.isSuccessful) {
+                    val body = resp.body()!!
+                    _state.update {
+                        it.copy(piUpdate = PiUpdateState(
+                            pending = body.pending,
+                            currentVersion = body.currentVersion,
+                            newVersion = body.newVersion,
+                            message = if (body.pending) "Update available: ${body.newVersion}" else "Pi is up to date",
+                        ))
+                    }
+                } else {
+                    _state.update { it.copy(piUpdate = it.piUpdate.copy(checking = false, message = "Failed to check")) }
+                }
+            } catch (e: Exception) {
+                _state.update { it.copy(piUpdate = it.piUpdate.copy(checking = false, message = e.message)) }
+            }
+        }
+    }
+
+    fun applyPiUpdate() {
+        val a = api ?: return
+        _state.update { it.copy(piUpdate = it.piUpdate.copy(applying = true, message = "Applying update...")) }
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val resp = a.piApplyUpdate(tokenStore.bearerHeader)
+                if (resp.isSuccessful) {
+                    _state.update {
+                        it.copy(piUpdate = it.piUpdate.copy(
+                            applying = false, pending = false,
+                            message = "Update applied. Service restarting...",
+                        ))
+                    }
+                } else {
+                    val err = resp.errorBody()?.string() ?: "Failed"
+                    _state.update { it.copy(piUpdate = it.piUpdate.copy(applying = false, message = err)) }
+                }
+            } catch (e: Exception) {
+                _state.update { it.copy(piUpdate = it.piUpdate.copy(applying = false, message = e.message)) }
+            }
+        }
+    }
+
     fun setSoundEnabled(enabled: Boolean) {
         tokenStore.soundEnabled = enabled
         _state.update { it.copy(soundEnabled = enabled) }
@@ -746,7 +934,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         stopRealtimeUpdates()
         tokenStore.clear()
         api = null
-        _state.update { AppState(screen = Screen.Scan) }
+        _state.update { AppState(screen = Screen.Welcome) }
     }
 
     override fun onCleared() {
