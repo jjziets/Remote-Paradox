@@ -57,13 +57,13 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;b
 .tag.bp{background:rgba(255,152,0,.2);color:#ff9800}
 .tag.al{background:rgba(233,69,96,.3);color:#e94560}
 .zone-bottom .bp-btn{background:none;border:none;cursor:pointer;font-size:14px;padding:2px 4px;border-radius:4px;color:rgba(255,255,255,.3)}
+.zone-bottom .bp-btn.on{color:#ff9800}
 
 .panic-section{margin:12px 0}
 .panic-row{display:flex;gap:8px}
-.btn.panic{background:#b71c1c;font-size:12px;padding:12px}
+.btn.panic{background:#b71c1c;font-size:12px;padding:12px;flex-direction:column;gap:4px;min-height:64px}
 .btn.panic.medical{background:#1565c0}
 .btn.panic.fire{background:#e65100}
-.zone-bottom .bp-btn.on{color:#ff9800}
 
 .section-title{font-weight:700;font-size:16px;margin:12px 0 8px}
 
@@ -72,6 +72,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;b
 .hist .info{flex:1;margin-left:10px}
 .hist .zn{font-size:13px}.hist .ts{font-size:11px;opacity:.4}
 .hist .ev{font-size:12px;font-weight:700}
+.hist .user-tag{font-size:11px;color:#64b5f6;margin-left:6px}
 
 .modal-overlay{position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,.7);z-index:100;display:flex;align-items:center;justify-content:center}
 .modal{background:#16213e;border-radius:16px;padding:24px;max-width:400px;width:90%;text-align:center}
@@ -92,6 +93,27 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;b
 .login-wrap .server-row input:last-child{flex:1;width:auto}
 .code-box{text-align:center;margin:12px 0}
 .code-box input{width:200px;padding:12px;border-radius:8px;border:1px solid rgba(255,255,255,.2);background:#16213e;color:#fff;font-size:20px;text-align:center;letter-spacing:4px}
+
+/* User management */
+.user-row{display:flex;align-items:center;padding:12px;background:rgba(22,33,62,.6);border-radius:10px;margin-bottom:8px}
+.user-row .avatar{width:36px;height:36px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:18px;flex-shrink:0;margin-right:12px}
+.user-row .avatar.admin{background:rgba(76,175,80,.2)}
+.user-row .avatar.user{background:rgba(255,255,255,.1)}
+.user-row .uinfo{flex:1}
+.user-row .uname{font-size:14px;font-weight:600}
+.user-row .urole{font-size:12px;font-weight:500}
+.user-row .uactions{display:flex;gap:6px}
+.user-row .uactions button{background:none;border:1px solid rgba(255,255,255,.2);color:#fff;padding:4px 10px;border-radius:6px;cursor:pointer;font-size:11px}
+.user-row .uactions button:hover{background:rgba(255,255,255,.1)}
+.user-row .uactions button.del{border-color:rgba(233,69,96,.4);color:#e94560}
+.user-row .self-tag{font-size:10px;background:rgba(100,181,246,.15);color:#64b5f6;padding:1px 6px;border-radius:4px;margin-left:6px}
+
+/* System card */
+.sys-card{background:#16213e;border-radius:12px;padding:16px;margin-bottom:12px}
+.sys-row{display:flex;align-items:center;justify-content:space-between;margin-bottom:8px}
+.sys-label{font-size:13px;opacity:.7}
+.sys-value{font-size:13px;font-weight:600}
+.update-avail{color:#ff9800;font-weight:600;font-size:13px;margin-bottom:8px}
 </style>
 </head>
 <body>
@@ -100,6 +122,8 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;b
   <h1>Remote Paradox</h1>
   <div class="top-btns">
     <span class="user" id="userLabel"></span>
+    <button id="btnUsers" style="display:none" onclick="switchView('users')">&#x1F465; Users</button>
+    <button id="btnSystem" style="display:none" onclick="switchView('system')">&#x2699; System</button>
     <button id="btnInvite" style="display:none" onclick="doInvite()">+ Invite</button>
     <button onclick="doRefresh()">Refresh</button>
     <button onclick="doLogout()">Logout</button>
@@ -110,7 +134,6 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;b
 <div id="vLogin" class="login-wrap">
   <h2>Remote Paradox</h2>
   <div class="hint" id="loginHint">Log in with your credentials</div>
-  <!-- Server fields: shown when opened outside nginx (file:// or localhost dev) -->
   <div id="serverFields" style="display:none">
     <div class="server-row">
       <input id="inHost" placeholder="Server IP / hostname" autocomplete="url">
@@ -144,19 +167,23 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;b
 
   <div id="elPanic" class="panic-section" style="display:none">
     <div class="panic-row">
-      <button class="btn panic" onclick="doPanic('emergency')">&#x1F6A8; PANIC</button>
-      <button class="btn panic medical" onclick="doPanic('medical')">&#x1F3E5; MEDICAL</button>
-      <button class="btn panic fire" onclick="doPanic('fire')">&#x1F525; FIRE</button>
+      <button class="btn panic" onclick="doPanic('emergency')"><span style="font-size:20px">&#x1F6A8;</span>PANIC</button>
+      <button class="btn panic medical" onclick="doPanic('medical')"><span style="font-size:20px">&#x1F3E5;</span>MEDICAL</button>
+      <button class="btn panic fire" onclick="doPanic('fire')"><span style="font-size:20px">&#x1F525;</span>FIRE</button>
     </div>
   </div>
 
   <div class="view-tabs">
     <button class="view-tab active" id="vtStatus" onclick="switchView('status')">Zones</button>
     <button class="view-tab" id="vtHistory" onclick="switchView('history')">History</button>
+    <button class="view-tab" id="vtUsers" onclick="switchView('users')" style="display:none">Users</button>
+    <button class="view-tab" id="vtSystem" onclick="switchView('system')" style="display:none">System</button>
   </div>
 
   <div id="elZones"></div>
   <div id="elHist" style="display:none"></div>
+  <div id="elUsers" style="display:none"></div>
+  <div id="elSystem" style="display:none"></div>
 </div>
 
 <!-- Invite QR modal -->
@@ -179,7 +206,6 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;b
 
   var $ = function(id){ return document.getElementById(id); };
 
-  // Dev mode: file:// or localhost without an API behind it
   var isDevMode = location.protocol === 'file:' ||
     (location.hostname === 'localhost' && location.port !== '9433');
 
@@ -232,7 +258,12 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;b
     $('vLogin').style.display = 'none';
     $('vApp').style.display = '';
     $('userLabel').textContent = esc(username || '');
-    $('btnInvite').style.display = (userRole === 'admin') ? '' : 'none';
+    var isAdmin = userRole === 'admin';
+    $('btnInvite').style.display = isAdmin ? '' : 'none';
+    $('btnUsers').style.display = isAdmin ? '' : 'none';
+    $('btnSystem').style.display = isAdmin ? '' : 'none';
+    $('vtUsers').style.display = isAdmin ? '' : 'none';
+    $('vtSystem').style.display = isAdmin ? '' : 'none';
     if (alarmCode) {
       $('elCodeSetup').style.display = 'none';
       $('elCtrls').style.display = '';
@@ -306,17 +337,18 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;b
 
   window.switchView = function(view) {
     currentView = view;
-    $('vtStatus').className = 'view-tab' + (view === 'status' ? ' active' : '');
-    $('vtHistory').className = 'view-tab' + (view === 'history' ? ' active' : '');
-    if (view === 'status') {
-      $('elZones').style.display = '';
-      $('elHist').style.display = 'none';
-      renderZones();
-    } else {
-      $('elZones').style.display = 'none';
-      $('elHist').style.display = '';
-      renderHist();
-    }
+    ['status','history','users','system'].forEach(function(v){
+      var tab = $('vt' + v.charAt(0).toUpperCase() + v.slice(1));
+      if (tab) tab.className = 'view-tab' + (v === view ? ' active' : '');
+    });
+    $('elZones').style.display = view === 'status' ? '' : 'none';
+    $('elHist').style.display = view === 'history' ? '' : 'none';
+    $('elUsers').style.display = view === 'users' ? '' : 'none';
+    $('elSystem').style.display = view === 'system' ? '' : 'none';
+    if (view === 'status') renderZones();
+    if (view === 'history') renderHist();
+    if (view === 'users') loadUsers();
+    if (view === 'system') loadSystem();
   };
 
   function modeColor(m) {
@@ -388,11 +420,15 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;b
     var sub = esc(p.name) + ' &bull; ' + zones.length + ' zones &bull; ' + op + ' open';
     if (bp) sub += ' &bull; ' + bp + ' bypassed';
     if (al) sub += ' &bull; <span style="color:#e94560">' + al + ' alarm</span>';
-    if (!p.ready && m === 'disarmed') sub += ' &bull; <span style="color:#ff9800">NOT READY</span>';
+    var statusLine = '';
+    if (!p.ready && m === 'disarmed') statusLine = '<div style="color:#ff9800;font-size:12px;margin-top:8px;font-weight:500">System not ready — close all zones first</div>';
+    else if (m === 'arming') statusLine = '<div style="color:#ffeb3b;font-size:12px;margin-top:8px;font-weight:500">Exit delay in progress...</div>';
+    else if (m === 'triggered') statusLine = '<div style="color:#e94560;font-size:12px;margin-top:8px;font-weight:500">Alarm triggered! Disarm immediately</div>';
+    else if (p.entry_delay) statusLine = '<div style="color:#ff5722;font-size:12px;margin-top:8px;font-weight:500">Entry delay — disarm now</div>';
     $('elState').innerHTML =
       '<div class="state-card"><div class="state-icon" style="background:' + col + '22;color:' + col + '">' + icon + '</div>' +
       '<div><div class="state-label" style="color:' + col + '">' + label + '</div>' +
-      '<div class="state-sub">' + sub + '</div></div></div>';
+      '<div class="state-sub">' + sub + '</div>' + statusLine + '</div></div>';
   }
 
   function renderCtrls() {
@@ -489,16 +525,127 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;b
       if (typeof val === 'boolean') evLabel += val ? ' ON' : ' OFF';
       else if (val && typeof val === 'string') evLabel += ' ' + esc(val).toUpperCase();
       var icon = e.type === 'partition' ? '&#x1F3DB;' : '&#x1F4E1;';
+      var userHtml = e.user ? '<span class="user-tag">by ' + esc(e.user) + '</span>' : '';
       h += '<div class="hist"><span class="dot" style="background:' + col + '"></span>' +
-        '<div class="info"><div class="zn">' + icon + ' ' + esc(e.label) + '</div><div class="ts">' + esc(ts) + '</div></div>' +
+        '<div class="info"><div class="zn">' + icon + ' ' + esc(e.label) + userHtml + '</div><div class="ts">' + esc(ts) + '</div></div>' +
         '<span class="ev" style="color:' + col + '">' + evLabel + '</span></div>';
     });
     $('elHist').innerHTML = h;
   }
 
+  // ── User Management ──
+
+  function loadUsers() {
+    $('elUsers').innerHTML = '<div style="text-align:center;padding:24px;opacity:.5">Loading users...</div>';
+    api('GET', '/auth/users').then(function(d) {
+      var users = d.users || [];
+      var h = '<div class="section-title">&#x1F465; Users (' + users.length + ')</div>';
+      users.forEach(function(u) {
+        var isAdmin = u.role === 'admin';
+        var isSelf = u.username === username;
+        h += '<div class="user-row">';
+        h += '<div class="avatar ' + (isAdmin ? 'admin' : 'user') + '">' + (isAdmin ? '&#x1F6E1;' : '&#x1F464;') + '</div>';
+        h += '<div class="uinfo"><div class="uname">' + esc(u.username);
+        if (isSelf) h += '<span class="self-tag">you</span>';
+        h += '</div><div class="urole" style="color:' + (isAdmin ? '#4caf50' : 'rgba(255,255,255,.5)') + '">' + u.role.toUpperCase() + '</div></div>';
+        if (!isSelf) {
+          h += '<div class="uactions">';
+          if (isAdmin) {
+            h += '<button onclick="doRoleChange(\'' + esc(u.username) + '\',\'user\')" title="Demote to user">&#x2B07; Demote</button>';
+          } else {
+            h += '<button onclick="doRoleChange(\'' + esc(u.username) + '\',\'admin\')" title="Promote to admin">&#x2B06; Promote</button>';
+          }
+          h += '<button class="del" onclick="doDeleteUser(\'' + esc(u.username) + '\')" title="Delete user">&#x1F5D1; Delete</button>';
+          h += '</div>';
+        }
+        h += '</div>';
+      });
+      h += '<div style="margin-top:16px"><button class="btn green" style="width:100%" onclick="doInvite()">&#x2795; Generate Invite QR Code</button></div>';
+      $('elUsers').innerHTML = h;
+    }).catch(function() {
+      $('elUsers').innerHTML = '<div class="err" style="display:block">Failed to load users</div>';
+    });
+  }
+
+  window.doRoleChange = function(uname, newRole) {
+    var action = newRole === 'admin' ? 'promote' : 'demote';
+    if (!confirm(action.charAt(0).toUpperCase() + action.slice(1) + ' ' + uname + ' to ' + newRole + '?')) return;
+    api('PUT', '/auth/users/' + encodeURIComponent(uname) + '/role', { role: newRole }).then(function(d) {
+      if (d.success) loadUsers(); else showErr(d.message || 'Failed');
+    }).catch(function(e){ showErr(String(e)); });
+  };
+
+  window.doDeleteUser = function(uname) {
+    if (!confirm('Delete user "' + uname + '"? This cannot be undone.')) return;
+    api('DELETE', '/auth/users/' + encodeURIComponent(uname)).then(function(d) {
+      if (d.success) loadUsers(); else showErr(d.message || 'Failed');
+    }).catch(function(e){ showErr(String(e)); });
+  };
+
+  // ── System / Pi Update ──
+
+  function loadSystem() {
+    $('elSystem').innerHTML = '<div style="text-align:center;padding:24px;opacity:.5">Loading system info...</div>';
+
+    Promise.all([
+      api('GET', '/health').catch(function(){ return {}; }),
+      api('GET', '/system/update-status').catch(function(){ return { pending: false }; }),
+      api('GET', '/system/version').catch(function(){ return { version: '?' }; }),
+    ]).then(function(results) {
+      var health = results[0] || {};
+      var update = results[1] || {};
+      var ver = results[2] || {};
+
+      var h = '<div class="section-title">&#x2699; System</div>';
+      h += '<div class="sys-card">';
+      h += '<div class="sys-row"><span class="sys-label">Pi Version</span><span class="sys-value">' + esc(ver.version || update.current_version || '?') + '</span></div>';
+      h += '<div class="sys-row"><span class="sys-label">Panel Connected</span><span class="sys-value" style="color:' + (health.alarm_connected ? '#4caf50' : '#e94560') + '">' + (health.alarm_connected ? 'Yes' : 'No') + '</span></div>';
+      h += '<div class="sys-row"><span class="sys-label">WebSocket Clients</span><span class="sys-value">' + (health.websocket_clients || 0) + '</span></div>';
+      h += '<div class="sys-row"><span class="sys-label">Demo Mode</span><span class="sys-value">' + (health.demo_mode ? 'Yes' : 'No') + '</span></div>';
+      h += '</div>';
+
+      h += '<div class="sys-card">';
+      h += '<div class="section-title" style="margin-top:0">&#x1F504; Pi Software Update</div>';
+      if (update.pending && update.new_version) {
+        h += '<div class="update-avail">&#x26A0; Update available: v' + esc(update.new_version) + ' (current: v' + esc(update.current_version || '?') + ')</div>';
+        h += '<button class="btn amber" style="width:100%;margin-bottom:8px" onclick="doApplyPiUpdate()">&#x2B06; Apply Update v' + esc(update.new_version) + '</button>';
+      } else {
+        h += '<div style="color:#4caf50;font-size:13px;margin-bottom:8px">&#x2714; Pi is up to date (v' + esc(ver.version || update.current_version || '?') + ')</div>';
+      }
+      h += '<button class="btn blue" style="width:100%" onclick="doCheckPiUpdate()">&#x1F50D; Check for Updates</button>';
+      h += '</div>';
+
+      $('elSystem').innerHTML = h;
+    });
+  }
+
+  window.doCheckPiUpdate = function() {
+    $('elSystem').innerHTML = '<div style="text-align:center;padding:24px;opacity:.5">Checking for updates...</div>';
+    api('POST', '/system/check-update').then(function() {
+      setTimeout(loadSystem, 2000);
+    }).catch(function(e) {
+      showErr('Check failed: ' + String(e));
+      loadSystem();
+    });
+  };
+
+  window.doApplyPiUpdate = function() {
+    if (!confirm('Apply the pending update? The Pi service will restart.')) return;
+    api('POST', '/system/apply-update').then(function(d) {
+      if (d.success) {
+        showErr('Update applied! Service restarting...');
+        setTimeout(loadSystem, 10000);
+      } else {
+        showErr(d.message || 'Apply failed');
+      }
+    }).catch(function(e){ showErr(String(e)); });
+  };
+
+  // ── Shared ──
+
   function showErr(msg) {
     $('elErr').textContent = msg; $('elErr').style.display = '';
-    setTimeout(function(){ $('elErr').style.display = 'none'; }, 4000);
+    setTimeout(function(){ $('elErr').style.display = 'none'; }, 5000);
   }
 
   window.doLogout = function() {
@@ -509,20 +656,20 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;b
     goLogin();
   };
 
-  // ---- Invite QR ----
+  // ── Invite QR ──
   window.doInvite = function() {
     var el = $('inviteContent');
     el.innerHTML = '<p style="opacity:.5">Generating invite&hellip;</p>';
     $('inviteModal').style.display = '';
     api('POST', '/auth/invite').then(function(d) {
-      var mins = Math.round(d.expires_in_seconds / 60);
+      var mins = Math.round((d.expires_in_seconds || d.expires_in || 900) / 60);
       var html = '';
       if (d.qr_data_uri) {
         html += '<img class="qr-img" src="' + d.qr_data_uri + '" alt="QR">';
       }
-      html += '<div class="code-text">' + esc(d.code) + '</div>';
+      html += '<div class="code-text">' + esc(d.code || '') + '</div>';
       html += '<div class="expire">Expires in ' + mins + ' minutes &bull; Single use only</div>';
-      html += '<div style="font-size:11px;opacity:.4;word-break:break-all;margin-bottom:8px">' + esc(d.uri) + '</div>';
+      html += '<div style="font-size:11px;opacity:.4;word-break:break-all;margin-bottom:8px">' + esc(d.uri || '') + '</div>';
       html += '<button class="close-btn" onclick="closeInvite()">Close</button>';
       el.innerHTML = html;
     }).catch(function(e) {
