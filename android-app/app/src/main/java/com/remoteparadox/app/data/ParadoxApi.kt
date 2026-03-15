@@ -108,6 +108,11 @@ interface ParadoxApi {
         @Header("Authorization") auth: String,
     ): Response<ActionResult>
 
+    @GET("system/ble-clients")
+    suspend fun bleClients(
+        @Header("Authorization") auth: String,
+    ): Response<BleClientsResponse>
+
     @GET("health")
     suspend fun health(): Response<HealthResponse>
 }

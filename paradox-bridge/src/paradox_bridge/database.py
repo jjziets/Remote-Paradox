@@ -48,6 +48,17 @@ class Database:
                 action      TEXT NOT NULL,
                 detail      TEXT
             );
+
+            CREATE TABLE IF NOT EXISTS events (
+                id        INTEGER PRIMARY KEY AUTOINCREMENT,
+                type      TEXT NOT NULL,
+                label     TEXT NOT NULL,
+                property  TEXT NOT NULL,
+                value     TEXT NOT NULL,
+                timestamp TEXT NOT NULL
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_events_ts ON events(timestamp);
         """)
         c.commit()
 
@@ -163,3 +174,31 @@ class Database:
                 "SELECT * FROM audit_log ORDER BY id DESC LIMIT ?", (limit,)
             ).fetchall()
         return [dict(r) for r in rows]
+
+    # ── Alarm Events ──
+
+    def insert_event(
+        self, etype: str, label: str, prop: str, value: str, timestamp: str,
+    ) -> None:
+        self.conn.execute(
+            "INSERT INTO events (type, label, property, value, timestamp) VALUES (?, ?, ?, ?, ?)",
+            (etype, label, prop, value, timestamp),
+        )
+        self.conn.commit()
+
+    def get_events(self, limit: int = 50) -> list[dict]:
+        rows = self.conn.execute(
+            "SELECT * FROM events ORDER BY id DESC LIMIT ?", (limit,)
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+    def purge_old_events(self, days: int = 90) -> int:
+        from datetime import timedelta
+        cutoff = (
+            datetime.now(timezone.utc) - timedelta(days=days)
+        ).strftime("%Y-%m-%dT%H:%M:%S")
+        cursor = self.conn.execute(
+            "DELETE FROM events WHERE timestamp < ?", (cutoff,)
+        )
+        self.conn.commit()
+        return cursor.rowcount

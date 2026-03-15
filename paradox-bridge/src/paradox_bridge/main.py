@@ -23,6 +23,8 @@ from paradox_bridge.models import (
     ArmRequest,
     AuditEntry,
     AuditLogResponse,
+    BleClientInfo,
+    BleClientsResponse,
     BypassRequest,
     ErrorResponse,
     EventHistoryResponse,
@@ -61,6 +63,7 @@ _cert_fingerprint: str = ""
 _demo_trigger_task: asyncio.Task | None = None
 _reconnect_task: asyncio.Task | None = None
 _ws_heartbeat_task: asyncio.Task | None = None
+_event_purge_task: asyncio.Task | None = None
 
 _CONNECT_RETRY_DELAY = 30  # seconds between reconnection attempts
 _CONNECT_MAX_RETRIES = 3   # limit retries per cycle to avoid panel lockout
@@ -154,6 +157,7 @@ def init_services(config_path: str | None = None) -> None:
         baud=_config.serial_baud,
         pc_password=_config.panel_pc_password,
         demo_mode=_config.demo_mode,
+        db=_db,
     )
     _ws_manager = ConnectionManager()
 
@@ -205,6 +209,22 @@ async def _ws_heartbeat_loop() -> None:
         await asyncio.sleep(_WS_HEARTBEAT_INTERVAL)
         if _ws_manager and _ws_manager.active_count > 0:
             await _broadcast_status()
+
+
+_EVENT_PURGE_INTERVAL = 86400  # 24 hours
+
+
+async def _event_purge_loop() -> None:
+    """Purge alarm events older than 90 days, once per day."""
+    while True:
+        await asyncio.sleep(_EVENT_PURGE_INTERVAL)
+        if _db is not None:
+            try:
+                purged = _db.purge_old_events(days=90)
+                if purged:
+                    logger.info("Purged %d alarm events older than 90 days", purged)
+            except Exception:
+                logger.exception("Event purge failed")
 
 
 async def _demo_zone_trigger_loop() -> None:
@@ -261,7 +281,7 @@ async def _disconnect_alarm() -> None:
 
 @asynccontextmanager
 async def lifespan(application: FastAPI):
-    global _demo_trigger_task, _reconnect_task, _ws_heartbeat_task
+    global _demo_trigger_task, _reconnect_task, _ws_heartbeat_task, _event_purge_task
     init_services()
     admin_user = os.environ.get("PARADOX_ADMIN_USER", "admin")
     admin_pass = os.environ.get("PARADOX_ADMIN_PASS")
@@ -270,6 +290,7 @@ async def lifespan(application: FastAPI):
     if _alarm:
         _alarm.set_status_change_callback(_on_alarm_status_changed)
     _ws_heartbeat_task = asyncio.create_task(_ws_heartbeat_loop())
+    _event_purge_task = asyncio.create_task(_event_purge_loop())
     if _alarm and _alarm.demo_mode:
         _demo_trigger_task = asyncio.create_task(_demo_zone_trigger_loop())
     elif _alarm and not _alarm.demo_mode:
@@ -278,6 +299,9 @@ async def lifespan(application: FastAPI):
     if _ws_heartbeat_task:
         _ws_heartbeat_task.cancel()
         _ws_heartbeat_task = None
+    if _event_purge_task:
+        _event_purge_task.cancel()
+        _event_purge_task = None
     if _demo_trigger_task:
         _demo_trigger_task.cancel()
         _demo_trigger_task = None
@@ -622,6 +646,20 @@ def system_reboot(
         return ActionResult(success=True, action="reboot", message="Pi is rebooting...")
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/system/ble-clients", response_model=BleClientsResponse)
+def system_ble_clients(_admin: Annotated[dict, Depends(require_admin)]):
+    try:
+        from paradox_bridge.ble_server import get_tracker
+        tracker = get_tracker()
+        clients = tracker.get_clients()
+        return BleClientsResponse(
+            clients=[BleClientInfo(**c) for c in clients],
+            count=tracker.count,
+        )
+    except ImportError:
+        return BleClientsResponse(clients=[], count=0)
 
 
 # ── Alarm routes ──

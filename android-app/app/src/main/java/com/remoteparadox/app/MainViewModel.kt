@@ -66,6 +66,7 @@ data class PiUpdateState(
 data class PiSystemState(
     val resources: com.remoteparadox.app.data.SystemResources? = null,
     val wifi: com.remoteparadox.app.data.WifiInfo? = null,
+    val bleClients: com.remoteparadox.app.data.BleClientsResponse? = null,
     val loading: Boolean = false,
     val rebooting: Boolean = false,
     val error: String? = null,
@@ -679,10 +680,12 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             try {
                 val resResp = a.systemResources(tokenStore.bearerHeader)
                 val wifiResp = a.systemWifi(tokenStore.bearerHeader)
+                val bleResp = try { a.bleClients(tokenStore.bearerHeader).body() } catch (_: Exception) { null }
                 _state.update {
                     it.copy(piSystem = PiSystemState(
                         resources = resResp.body(),
                         wifi = wifiResp.body(),
+                        bleClients = bleResp,
                     ))
                 }
             } catch (e: Exception) {

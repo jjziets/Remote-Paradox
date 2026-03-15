@@ -52,7 +52,8 @@ class AlarmStatus:
 
 class AlarmService:
     def __init__(
-        self, serial_port: str, baud: int, pc_password: str, demo_mode: bool = False,
+        self, serial_port: str, baud: int, pc_password: str,
+        demo_mode: bool = False, db=None,
     ):
         self._serial_port = serial_port
         self._baud = baud
@@ -61,6 +62,7 @@ class AlarmService:
         self._pai_loop_task: Optional[asyncio.Task] = None
         self._connected = False
         self._demo_mode = demo_mode
+        self._db = db
         self._panel: Optional[VirtualPanel] = None
         self._events: deque = deque(maxlen=_MAX_EVENTS)
         self._prev_zone_state: dict[int, dict] = {}
@@ -72,6 +74,9 @@ class AlarmService:
             self._panel = VirtualPanel()
             self._panel.COMMAND_ACK_DELAY = 1.5  # realistic serial roundtrip
             self._connected = True
+
+        if db is not None and not demo_mode:
+            self._seed_events_from_db()
 
     def set_status_change_callback(self, cb: StatusChangeCallback) -> None:
         self._on_status_change = cb
@@ -298,13 +303,17 @@ class AlarmService:
     # ── State change tracking (real mode event history) ──
 
     def _record_event(self, etype: str, label: str, prop: str, value: object) -> None:
+        val_str = str(value).lower() if isinstance(value, bool) else str(value)
+        ts = time.strftime("%Y-%m-%dT%H:%M:%S")
         self._events.appendleft({
-            "type": etype,
-            "label": label,
-            "property": prop,
-            "value": str(value).lower() if isinstance(value, bool) else str(value),
-            "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S"),
+            "type": etype, "label": label, "property": prop,
+            "value": val_str, "timestamp": ts,
         })
+        if self._db is not None:
+            try:
+                self._db.insert_event(etype, label, prop, val_str, ts)
+            except Exception:
+                logger.exception("Failed to persist event to database")
         self._status_changed = True
 
     def _track_zone_changes(self, zid: int, zi: ZoneInfo) -> None:
@@ -335,7 +344,29 @@ class AlarmService:
     def get_zone_history(self, limit: int = 50) -> list[dict]:
         if self._demo_mode:
             return self._panel.get_events(limit=limit)
+        if self._db is not None:
+            rows = self._db.get_events(limit=limit)
+            return [
+                {"type": r["type"], "label": r["label"], "property": r["property"],
+                 "value": r["value"], "timestamp": r["timestamp"]}
+                for r in rows
+            ]
         return list(self._events)[:limit]
+
+    def _seed_events_from_db(self) -> None:
+        """Load recent events from DB into the in-memory deque on startup."""
+        if self._db is None:
+            return
+        try:
+            rows = self._db.get_events(limit=_MAX_EVENTS)
+            for row in reversed(rows):
+                self._events.appendleft({
+                    "type": row["type"], "label": row["label"],
+                    "property": row["property"], "value": row["value"],
+                    "timestamp": row["timestamp"],
+                })
+        except Exception:
+            logger.exception("Failed to seed events from database")
 
     # ── Zone listing (for CLI) ──
 

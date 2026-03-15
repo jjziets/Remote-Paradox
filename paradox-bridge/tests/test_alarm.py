@@ -9,6 +9,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from paradox_bridge.alarm import AlarmService, AlarmStatus, PartitionStatus, ZoneInfo
+from paradox_bridge.database import Database
 
 
 class TestAlarmServiceWithMock:
@@ -315,3 +316,73 @@ class TestDemoMode:
         st = svc.get_status()
         p = [p for p in st.partitions if p.id == 1][0]
         assert p.ready is False
+
+
+class TestEventPersistence:
+    """Verify that _record_event writes to the database when one is provided."""
+
+    @pytest.fixture()
+    def alarm_with_db(self, tmp_db):
+        db = Database(tmp_db)
+        db.init()
+        svc = AlarmService(
+            serial_port="/dev/null", baud=9600, pc_password="0000", db=db,
+        )
+        svc._pai = MagicMock()
+        svc._connected = True
+        return svc, db
+
+    def _setup_storage(self, alarm, partitions, zones):
+        part_container = MagicMock()
+        part_container.items.return_value = list(partitions.items())
+        zone_container = MagicMock()
+        zone_container.items.return_value = list(zones.items())
+        alarm._pai.storage.get_container.side_effect = lambda name: {
+            "partition": part_container,
+            "zone": zone_container,
+        }[name]
+
+    def test_record_event_writes_to_db(self, alarm_with_db):
+        alarm, db = alarm_with_db
+        self._setup_storage(alarm, {
+            1: {"label": "Area 1", "arm": False, "exit_delay": False,
+                "entry_delay": False, "ready_status": True},
+        }, {
+            1: {"label": "Front Door", "open": False, "bypassed": False,
+                "alarm": False, "was_in_alarm": False, "tamper": False, "partition": 1},
+        })
+        alarm.get_status()
+
+        self._setup_storage(alarm, {
+            1: {"label": "Area 1", "arm": False, "exit_delay": False,
+                "entry_delay": False, "ready_status": True},
+        }, {
+            1: {"label": "Front Door", "open": True, "bypassed": False,
+                "alarm": False, "was_in_alarm": False, "tamper": False, "partition": 1},
+        })
+        alarm.get_status()
+
+        events = db.get_events(limit=10)
+        assert len(events) >= 1
+        assert events[0]["label"] == "Front Door"
+        assert events[0]["property"] == "open"
+        db.close()
+
+    def test_history_reads_from_db(self, alarm_with_db):
+        alarm, db = alarm_with_db
+        db.insert_event("zone", "Seeded Event", "open", "true", "2026-03-09T09:00:00")
+        history = alarm.get_zone_history(limit=10)
+        assert any(e["label"] == "Seeded Event" for e in history)
+        db.close()
+
+    def test_alarm_without_db_still_works(self):
+        svc = AlarmService(serial_port="/dev/null", baud=9600, pc_password="0000")
+        svc._pai = MagicMock()
+        svc._connected = True
+        part_container = MagicMock()
+        part_container.items.return_value = [(1, {"label": "Area 1", "arm": False, "exit_delay": False, "entry_delay": False, "ready_status": True})]
+        zone_container = MagicMock()
+        zone_container.items.return_value = []
+        svc._pai.storage.get_container.side_effect = lambda name: {"partition": part_container, "zone": zone_container}[name]
+        svc.get_status()
+        assert svc.get_zone_history() == []

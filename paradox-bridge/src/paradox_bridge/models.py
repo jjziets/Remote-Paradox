@@ -146,5 +146,17 @@ class WifiInfoResponse(BaseModel):
     signal_percent: int | None = None
 
 
+class BleClientInfo(BaseModel):
+    address: str
+    name: str
+    username: str | None = None
+    connected_at: str
+
+
+class BleClientsResponse(BaseModel):
+    clients: list[BleClientInfo]
+    count: int
+
+
 class ErrorResponse(BaseModel):
     detail: str

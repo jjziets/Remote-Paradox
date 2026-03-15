@@ -172,6 +172,38 @@ fun SettingsScreen(
                             }
                         }
 
+                        val ble = piSystem.bleClients
+                        if (ble != null) {
+                            Spacer(Modifier.height(12.dp))
+                            HorizontalDivider(color = Color.White.copy(alpha = 0.1f))
+                            Spacer(Modifier.height(8.dp))
+                            Text("BLE Clients (${ble.count})", color = Color.White.copy(alpha = 0.7f), fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+                            Spacer(Modifier.height(4.dp))
+                            if (ble.clients.isEmpty()) {
+                                Text("No BLE clients connected", color = Color.White.copy(alpha = 0.4f), fontSize = 12.sp)
+                            } else {
+                                ble.clients.forEach { client ->
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp),
+                                    ) {
+                                        Icon(Icons.Default.Bluetooth, null, tint = Color(0xFF64B5F6), modifier = Modifier.size(16.dp))
+                                        Spacer(Modifier.width(6.dp))
+                                        Text(
+                                            client.name.ifBlank { client.address },
+                                            color = Color.White, fontSize = 13.sp,
+                                            modifier = Modifier.weight(1f),
+                                        )
+                                        Text(
+                                            client.username ?: "Unknown",
+                                            color = if (client.username != null) Color(0xFF4CAF50) else Color(0xFFE94560),
+                                            fontSize = 12.sp,
+                                        )
+                                    }
+                                }
+                            }
+                        }
+
                         if (piSystem.error != null) {
                             Spacer(Modifier.height(8.dp))
                             Text(piSystem.error, color = Color(0xFFFF9800), fontSize = 12.sp)

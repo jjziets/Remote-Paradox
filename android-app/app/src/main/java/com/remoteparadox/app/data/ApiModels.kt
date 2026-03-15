@@ -167,6 +167,20 @@ data class WifiInfo(
 )
 
 @Serializable
+data class BleClientInfo(
+    val address: String,
+    val name: String,
+    val username: String? = null,
+    @SerialName("connected_at") val connectedAt: String = "",
+)
+
+@Serializable
+data class BleClientsResponse(
+    val clients: List<BleClientInfo> = emptyList(),
+    val count: Int = 0,
+)
+
+@Serializable
 data class ErrorResponse(val detail: String)
 
 data class ServerConfig(
