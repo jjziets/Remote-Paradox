@@ -119,10 +119,13 @@ class BleClient(private val context: Context) {
     }
 
     fun sendCommand(json: String) {
+        if (pendingDescriptorWrite) return
         val char = rxChar ?: return
         char.value = json.toByteArray(Charsets.UTF_8)
         gatt?.writeCharacteristic(char)
     }
+
+    private var pendingDescriptorWrite = false
 
     private val gattCallback = object : BluetoothGattCallback() {
         override fun onConnectionStateChange(g: BluetoothGatt, status: Int, newState: Int) {
@@ -131,6 +134,7 @@ class BleClient(private val context: Context) {
             } else if (newState == BluetoothProfile.STATE_DISCONNECTED) {
                 _state.value = BleConnectionState.Disconnected
                 rxChar = null
+                pendingDescriptorWrite = false
             }
         }
 
@@ -150,10 +154,17 @@ class BleClient(private val context: Context) {
                 g.setCharacteristicNotification(txChar, true)
                 val desc = txChar.getDescriptor(CCC_DESCRIPTOR)
                 if (desc != null) {
+                    pendingDescriptorWrite = true
                     desc.value = BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE
                     g.writeDescriptor(desc)
+                    return
                 }
             }
+            _state.value = BleConnectionState.Connected
+        }
+
+        override fun onDescriptorWrite(g: BluetoothGatt, descriptor: BluetoothGattDescriptor, status: Int) {
+            pendingDescriptorWrite = false
             _state.value = BleConnectionState.Connected
         }
 
