@@ -8,21 +8,40 @@ class BleNameTest {
 
     companion object {
         private const val TARGET_NAME = "Remote Paradox"
+
+        fun isTargetDevice(name: String?): Boolean {
+            return name?.contains(TARGET_NAME, ignoreCase = true) == true
+        }
     }
 
     @Test
     fun `matches exact device name`() {
-        assertTrue("Remote Paradox".contains(TARGET_NAME, ignoreCase = true))
+        assertTrue(isTargetDevice("Remote Paradox"))
     }
 
     @Test
     fun `matches case insensitive`() {
-        assertTrue("remote paradox".contains(TARGET_NAME, ignoreCase = true))
+        assertTrue(isTargetDevice("remote paradox"))
+    }
+
+    @Test
+    fun `matches with suffix`() {
+        assertTrue(isTargetDevice("Remote Paradox-1"))
     }
 
     @Test
     fun `does not match old underscore name`() {
-        assertFalse("Remote_Paradox" == TARGET_NAME)
+        assertFalse(isTargetDevice("Remote_Paradox"))
+    }
+
+    @Test
+    fun `rejects null name`() {
+        assertFalse(isTargetDevice(null))
+    }
+
+    @Test
+    fun `rejects unrelated device`() {
+        assertFalse(isTargetDevice("My Speaker"))
     }
 
     @Test

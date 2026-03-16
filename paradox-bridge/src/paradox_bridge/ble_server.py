@@ -44,6 +44,23 @@ AGENT_IFACE = "org.bluez.Agent1"
 AGENT_PATH = "/org/bluez/paradox/agent"
 AGENT_CAPABILITY = "NoInputNoOutput"
 
+ALLOWED_SERVICE_UUIDS = {
+    NUS_SERVICE_UUID,
+    "00001800-0000-1000-8000-00805f9b34fb",  # Generic Access
+    "00001801-0000-1000-8000-00805f9b34fb",  # Generic Attribute
+    "0000180a-0000-1000-8000-00805f9b34fb",  # Device Information
+}
+
+REJECTED_AUDIO_UUIDS = {
+    "0000110a-0000-1000-8000-00805f9b34fb",  # Audio Source
+    "0000110b-0000-1000-8000-00805f9b34fb",  # Audio Sink
+    "0000110c-0000-1000-8000-00805f9b34fb",  # A/V Remote Control Target
+    "0000110d-0000-1000-8000-00805f9b34fb",  # Advanced Audio Distribution
+    "0000110e-0000-1000-8000-00805f9b34fb",  # A/V Remote Control
+    "0000111e-0000-1000-8000-00805f9b34fb",  # Handsfree
+    "0000111f-0000-1000-8000-00805f9b34fb",  # Handsfree Audio Gateway
+}
+
 PUBLIC_COMMANDS = {"status", "admin_setup", "auth"}
 ADMIN_ONLY_COMMANDS = {"wifi_set", "system_reboot"}
 AUTHENTICATED_COMMANDS = {
@@ -690,7 +707,14 @@ def register_pairing_agent(bus):
 
         @dbus.service.method(AGENT_IFACE, in_signature="os", out_signature="")
         def AuthorizeService(self, device, uuid):
-            logger.info("Authorize service %s for %s", uuid, device)
+            uuid_lower = str(uuid).lower()
+            if uuid_lower in REJECTED_AUDIO_UUIDS:
+                logger.info("Rejected audio service %s for %s", uuid, device)
+                raise dbus.exceptions.DBusException(
+                    "org.bluez.Error.Rejected",
+                    f"Audio service {uuid} not supported",
+                )
+            logger.info("Authorized service %s for %s", uuid, device)
 
         @dbus.service.method(AGENT_IFACE, in_signature="o", out_signature="")
         def RequestAuthorization(self, device):

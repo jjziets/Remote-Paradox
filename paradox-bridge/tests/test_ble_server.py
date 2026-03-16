@@ -128,3 +128,35 @@ class TestPairingAgent:
         finally:
             del sys.modules["dbus"]
             del sys.modules["dbus.service"]
+
+
+class TestServiceAuthorization:
+    """Verify allowed/rejected BLE service UUIDs."""
+
+    def test_nus_service_is_allowed(self):
+        from paradox_bridge.ble_server import ALLOWED_SERVICE_UUIDS, NUS_SERVICE_UUID
+        assert NUS_SERVICE_UUID in ALLOWED_SERVICE_UUIDS
+
+    def test_audio_source_is_rejected(self):
+        from paradox_bridge.ble_server import REJECTED_AUDIO_UUIDS
+        assert "0000110a-0000-1000-8000-00805f9b34fb" in REJECTED_AUDIO_UUIDS
+
+    def test_audio_sink_is_rejected(self):
+        from paradox_bridge.ble_server import REJECTED_AUDIO_UUIDS
+        assert "0000110b-0000-1000-8000-00805f9b34fb" in REJECTED_AUDIO_UUIDS
+
+    def test_handsfree_is_rejected(self):
+        from paradox_bridge.ble_server import REJECTED_AUDIO_UUIDS
+        assert "0000111e-0000-1000-8000-00805f9b34fb" in REJECTED_AUDIO_UUIDS
+
+    def test_handsfree_gateway_is_rejected(self):
+        from paradox_bridge.ble_server import REJECTED_AUDIO_UUIDS
+        assert "0000111f-0000-1000-8000-00805f9b34fb" in REJECTED_AUDIO_UUIDS
+
+    def test_no_overlap_between_allowed_and_rejected(self):
+        from paradox_bridge.ble_server import ALLOWED_SERVICE_UUIDS, REJECTED_AUDIO_UUIDS
+        assert ALLOWED_SERVICE_UUIDS.isdisjoint(REJECTED_AUDIO_UUIDS)
+
+    def test_generic_access_is_allowed(self):
+        from paradox_bridge.ble_server import ALLOWED_SERVICE_UUIDS
+        assert "00001800-0000-1000-8000-00805f9b34fb" in ALLOWED_SERVICE_UUIDS

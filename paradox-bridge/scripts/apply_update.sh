@@ -60,7 +60,26 @@ json.dump(s, open('$STATUS_FILE', 'w'))
 
 rm -rf "$STAGING_DIR"
 
-echo "[apply_update] Restarting paradox-bridge..."
+echo "[apply_update] Configuring Bluetooth for LE-only (no audio profiles)..."
+mkdir -p /etc/systemd/system/bluetooth.service.d
+cat > /etc/systemd/system/bluetooth.service.d/disable-audio.conf <<'BTEOF'
+[Service]
+ExecStart=
+ExecStart=/usr/libexec/bluetooth/bluetoothd --noplugin=a2dp,avrcp,hfp_hf,hfp_ag
+BTEOF
+
+if grep -q '^#ControllerMode = dual' /etc/bluetooth/main.conf 2>/dev/null; then
+    sed -i 's/^#ControllerMode = dual/ControllerMode = le/' /etc/bluetooth/main.conf
+elif ! grep -q '^ControllerMode' /etc/bluetooth/main.conf 2>/dev/null; then
+    sed -i '/^\[General\]/a ControllerMode = le' /etc/bluetooth/main.conf
+fi
+
+systemctl daemon-reload
+
+echo "[apply_update] Restarting services..."
 systemctl restart paradox-bridge
+systemctl restart bluetooth || true
+sleep 2
+systemctl restart paradox-ble || true
 
 echo "[apply_update] Done. Version $NEW_VERSION applied."

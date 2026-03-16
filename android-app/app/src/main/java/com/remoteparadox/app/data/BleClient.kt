@@ -76,7 +76,7 @@ class BleClient(private val context: Context) {
         }
 
         val filters = listOf(
-            ScanFilter.Builder().setDeviceName(TARGET_NAME).build()
+            ScanFilter.Builder().build()
         )
         val settings = ScanSettings.Builder()
             .setScanMode(ScanSettings.SCAN_MODE_LOW_LATENCY)
