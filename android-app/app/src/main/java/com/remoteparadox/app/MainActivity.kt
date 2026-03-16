@@ -80,6 +80,8 @@ class MainActivity : ComponentActivity() {
                             devices = bleDevs,
                             piStatus = bleResp,
                             manageMode = vm.bleLaunchedFromSettings,
+                            isAdmin = vm.isAdmin,
+                            authToken = vm.tokenStore.token ?: "",
                             onBack = { vm.goBackFromBle() },
                             onStartScan = { vm.bleStartScan() },
                             onConnect = { vm.bleConnect(it) },

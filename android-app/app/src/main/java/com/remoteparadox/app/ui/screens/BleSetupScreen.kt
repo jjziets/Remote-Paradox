@@ -29,6 +29,8 @@ fun BleSetupScreen(
     devices: List<BleDevice>,
     piStatus: String?,
     manageMode: Boolean = false,
+    isAdmin: Boolean = false,
+    authToken: String = "",
     onBack: () -> Unit,
     onStartScan: () -> Unit,
     onConnect: (String) -> Unit,
@@ -94,6 +96,8 @@ fun BleSetupScreen(
                     connectionState = connectionState,
                     devices = devices,
                     statusMessage = statusMessage,
+                    isAdmin = isAdmin,
+                    authToken = authToken,
                     wifiSsid = wifiSsid,
                     wifiPassword = wifiPassword,
                     onWifiSsidChange = { wifiSsid = it },
@@ -159,7 +163,7 @@ fun BleSetupScreen(
                         onSsidChange = { wifiSsid = it }, onPasswordChange = { wifiPassword = it },
                         statusMessage = statusMessage,
                         onApply = {
-                            onSendCommand("""{"cmd":"wifi_set","ssid":"$wifiSsid","password":"$wifiPassword"}""")
+                            onSendCommand("""{"cmd":"wifi_set","ssid":"$wifiSsid","password":"$wifiPassword","token":"$authToken"}""")
                             statusMessage = "Applying WiFi settings..."
                         },
                         onSkip = { step = 2 }, onNext = { step = 2 },
@@ -191,6 +195,8 @@ private fun BleManageContent(
     connectionState: BleConnectionState,
     devices: List<BleDevice>,
     statusMessage: String?,
+    isAdmin: Boolean,
+    authToken: String,
     wifiSsid: String,
     wifiPassword: String,
     onWifiSsidChange: (String) -> Unit,
@@ -280,55 +286,56 @@ private fun BleManageContent(
         Text("Get Status", fontWeight = FontWeight.Bold)
     }
 
-    Spacer(Modifier.height(8.dp))
+    if (isAdmin) {
+        Spacer(Modifier.height(8.dp))
 
-    Button(
-        onClick = { onSendCommand("""{"cmd":"wifi_scan"}""") },
-        modifier = Modifier.fillMaxWidth().height(44.dp),
-        shape = RoundedCornerShape(10.dp),
-        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF9C27B0)),
-    ) {
-        Icon(Icons.Default.WifiFind, null, Modifier.size(18.dp))
-        Spacer(Modifier.width(8.dp))
-        Text("Scan WiFi Networks", fontWeight = FontWeight.Bold)
-    }
+        Button(
+            onClick = { onSendCommand("""{"cmd":"wifi_scan","token":"$authToken"}""") },
+            modifier = Modifier.fillMaxWidth().height(44.dp),
+            shape = RoundedCornerShape(10.dp),
+            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF9C27B0)),
+        ) {
+            Icon(Icons.Default.WifiFind, null, Modifier.size(18.dp))
+            Spacer(Modifier.width(8.dp))
+            Text("Scan WiFi Networks", fontWeight = FontWeight.Bold)
+        }
 
-    Spacer(Modifier.height(16.dp))
+        Spacer(Modifier.height(16.dp))
 
-    // WiFi config section
-    Card(
-        shape = RoundedCornerShape(12.dp),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-        modifier = Modifier.fillMaxWidth(),
-    ) {
-        Column(Modifier.padding(16.dp)) {
-            Text("Change WiFi", fontWeight = FontWeight.Bold, color = Color.White, fontSize = 14.sp)
-            Spacer(Modifier.height(8.dp))
-            OutlinedTextField(
-                value = wifiSsid, onValueChange = onWifiSsidChange,
-                label = { Text("SSID") },
-                modifier = Modifier.fillMaxWidth(), singleLine = true,
-            )
-            Spacer(Modifier.height(8.dp))
-            OutlinedTextField(
-                value = wifiPassword, onValueChange = onWifiPasswordChange,
-                label = { Text("Password") },
-                modifier = Modifier.fillMaxWidth(), singleLine = true,
-                visualTransformation = PasswordVisualTransformation(),
-            )
-            Spacer(Modifier.height(12.dp))
-            Button(
-                onClick = {
-                    onSendCommand("""{"cmd":"wifi_set","ssid":"$wifiSsid","password":"$wifiPassword","token":""}""")
-                },
-                modifier = Modifier.fillMaxWidth().height(44.dp),
-                shape = RoundedCornerShape(10.dp),
-                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFFF9800)),
-                enabled = wifiSsid.isNotBlank(),
-            ) {
-                Icon(Icons.Default.Wifi, null, Modifier.size(18.dp))
-                Spacer(Modifier.width(8.dp))
-                Text("Apply WiFi", fontWeight = FontWeight.Bold)
+        Card(
+            shape = RoundedCornerShape(12.dp),
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+            modifier = Modifier.fillMaxWidth(),
+        ) {
+            Column(Modifier.padding(16.dp)) {
+                Text("Change WiFi", fontWeight = FontWeight.Bold, color = Color.White, fontSize = 14.sp)
+                Spacer(Modifier.height(8.dp))
+                OutlinedTextField(
+                    value = wifiSsid, onValueChange = onWifiSsidChange,
+                    label = { Text("SSID") },
+                    modifier = Modifier.fillMaxWidth(), singleLine = true,
+                )
+                Spacer(Modifier.height(8.dp))
+                OutlinedTextField(
+                    value = wifiPassword, onValueChange = onWifiPasswordChange,
+                    label = { Text("Password") },
+                    modifier = Modifier.fillMaxWidth(), singleLine = true,
+                    visualTransformation = PasswordVisualTransformation(),
+                )
+                Spacer(Modifier.height(12.dp))
+                Button(
+                    onClick = {
+                        onSendCommand("""{"cmd":"wifi_set","ssid":"$wifiSsid","password":"$wifiPassword","token":"$authToken"}""")
+                    },
+                    modifier = Modifier.fillMaxWidth().height(44.dp),
+                    shape = RoundedCornerShape(10.dp),
+                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFFF9800)),
+                    enabled = wifiSsid.isNotBlank(),
+                ) {
+                    Icon(Icons.Default.Wifi, null, Modifier.size(18.dp))
+                    Spacer(Modifier.width(8.dp))
+                    Text("Apply WiFi", fontWeight = FontWeight.Bold)
+                }
             }
         }
     }
