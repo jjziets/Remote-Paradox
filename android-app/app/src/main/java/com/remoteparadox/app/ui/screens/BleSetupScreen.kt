@@ -209,7 +209,8 @@ private fun BleManageContent(
     onBack: () -> Unit,
 ) {
     if (step == 0 || connectionState == BleConnectionState.Disconnected ||
-        connectionState == BleConnectionState.Scanning || connectionState == BleConnectionState.Error
+        connectionState == BleConnectionState.Scanning || connectionState == BleConnectionState.Connecting ||
+        connectionState == BleConnectionState.Error
     ) {
         FindPiStep(
             connectionState = connectionState,
