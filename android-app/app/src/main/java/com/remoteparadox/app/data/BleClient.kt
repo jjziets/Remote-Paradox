@@ -3,11 +3,7 @@ package com.remoteparadox.app.data
 import android.annotation.SuppressLint
 import android.bluetooth.*
 import android.bluetooth.le.*
-import android.content.BroadcastReceiver
 import android.content.Context
-import android.content.Intent
-import android.content.IntentFilter
-import android.os.Build
 import android.os.ParcelUuid
 import android.util.Log
 import kotlinx.coroutines.*
@@ -38,6 +34,8 @@ class BleClient(private val context: Context) {
         private val CCC_DESCRIPTOR = UUID.fromString("00002902-0000-1000-8000-00805f9b34fb")
         private const val TARGET_NAME = "Remote Paradox"
         private const val GATT_ERROR = 133
+        private const val GATT_CONN_TIMEOUT = 8
+        private const val GATT_CONN_TERMINATE_LOCAL = 22
         private const val MAX_RETRIES = 2
         private const val RETRY_DELAY_MS = 1000L
     }
@@ -60,7 +58,6 @@ class BleClient(private val context: Context) {
     private var scanCallback: ScanCallback? = null
     private var connectRetries = 0
     private var pendingAddress: String? = null
-    private var bondReceiver: BroadcastReceiver? = null
 
     fun startScan() {
         _devices.value = emptyList()
@@ -122,19 +119,8 @@ class BleClient(private val context: Context) {
             return
         }
 
-        // If already bonded, connect directly; otherwise initiate bonding first
-        if (device.bondState == BluetoothDevice.BOND_BONDED) {
-            Log.i(TAG, "Device already bonded, connecting GATT...")
-            connectGatt(device)
-        } else {
-            Log.i(TAG, "Device not bonded, initiating bond...")
-            registerBondReceiver(device)
-            if (!device.createBond()) {
-                Log.w(TAG, "createBond() returned false, attempting direct GATT connect")
-                unregisterBondReceiver()
-                connectGatt(device)
-            }
-        }
+        Log.i(TAG, "Connecting GATT to ${device.address} (bond=${device.bondState})...")
+        connectGatt(device)
     }
 
     private fun connectGatt(device: BluetoothDevice) {
@@ -157,46 +143,7 @@ class BleClient(private val context: Context) {
         }
     }
 
-    private fun registerBondReceiver(device: BluetoothDevice) {
-        unregisterBondReceiver()
-        bondReceiver = object : BroadcastReceiver() {
-            override fun onReceive(ctx: Context, intent: Intent) {
-                if (intent.action != BluetoothDevice.ACTION_BOND_STATE_CHANGED) return
-                val bondDevice = intent.getParcelableExtra<BluetoothDevice>(BluetoothDevice.EXTRA_DEVICE) ?: return
-                if (bondDevice.address != device.address) return
-                val bondState = intent.getIntExtra(BluetoothDevice.EXTRA_BOND_STATE, BluetoothDevice.BOND_NONE)
-                Log.i(TAG, "Bond state changed: $bondState")
-                when (bondState) {
-                    BluetoothDevice.BOND_BONDED -> {
-                        Log.i(TAG, "Bonding complete, connecting GATT...")
-                        unregisterBondReceiver()
-                        connectGatt(device)
-                    }
-                    BluetoothDevice.BOND_NONE -> {
-                        Log.w(TAG, "Bonding failed, attempting direct GATT connect...")
-                        unregisterBondReceiver()
-                        connectGatt(device)
-                    }
-                }
-            }
-        }
-        val filter = IntentFilter(BluetoothDevice.ACTION_BOND_STATE_CHANGED)
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            context.registerReceiver(bondReceiver, filter, Context.RECEIVER_EXPORTED)
-        } else {
-            context.registerReceiver(bondReceiver, filter)
-        }
-    }
-
-    private fun unregisterBondReceiver() {
-        bondReceiver?.let {
-            try { context.unregisterReceiver(it) } catch (_: Exception) {}
-        }
-        bondReceiver = null
-    }
-
     fun disconnect() {
-        unregisterBondReceiver()
         pendingAddress = null
         connectRetries = 0
         gatt?.disconnect()
@@ -225,11 +172,13 @@ class BleClient(private val context: Context) {
             } else if (newState == BluetoothProfile.STATE_DISCONNECTED) {
                 rxChar = null
                 pendingDescriptorWrite = false
-                // Retry on GATT error 133 (common Android BLE issue)
-                if (status == GATT_ERROR && connectRetries < MAX_RETRIES &&
+                // Retry on transient GATT errors (133, 8, 22)
+                val retriable = status == GATT_ERROR || status == GATT_CONN_TIMEOUT ||
+                    status == GATT_CONN_TERMINATE_LOCAL
+                if (retriable && connectRetries < MAX_RETRIES &&
                     _state.value == BleConnectionState.Connecting
                 ) {
-                    Log.w(TAG, "GATT error 133, retrying ($connectRetries/$MAX_RETRIES)...")
+                    Log.w(TAG, "GATT error $status, retrying ($connectRetries/$MAX_RETRIES)...")
                     retryConnect()
                 } else if (_state.value == BleConnectionState.Connecting) {
                     Log.e(TAG, "Connection failed with status=$status after $connectRetries retries")
