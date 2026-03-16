@@ -1,6 +1,6 @@
 """BLE GATT server for Remote Paradox Pi using BlueZ D-Bus API.
 
-Advertises as "Remote_Paradox" with a Nordic UART Service (NUS) for
+Advertises as "Remote Paradox" with a Nordic UART Service (NUS) for
 JSON command/response communication with the Android app.
 
 BLE is always discoverable. Access model:
@@ -38,6 +38,11 @@ LE_ADVERTISING_MANAGER_IFACE = "org.bluez.LEAdvertisingManager1"
 LE_ADVERTISEMENT_IFACE = "org.bluez.LEAdvertisement1"
 ADAPTER_IFACE = "org.bluez.Adapter1"
 DEVICE_IFACE = "org.bluez.Device1"
+AGENT_MANAGER_IFACE = "org.bluez.AgentManager1"
+AGENT_IFACE = "org.bluez.Agent1"
+
+AGENT_PATH = "/org/bluez/paradox/agent"
+AGENT_CAPABILITY = "NoInputNoOutput"
 
 PUBLIC_COMMANDS = {"status", "admin_setup", "auth"}
 ADMIN_ONLY_COMMANDS = {"wifi_set", "system_reboot"}
@@ -629,7 +634,7 @@ class Advertisement(object):
             LE_ADVERTISEMENT_IFACE: {
                 "Type": "peripheral",
                 "ServiceUUIDs": dbus.Array([NUS_SERVICE_UUID], signature="s"),
-                "LocalName": dbus.String("Remote_Paradox"),
+                "LocalName": dbus.String("Remote Paradox"),
                 "Includes": dbus.Array(["tx-power"], signature="s"),
             }
         }
@@ -673,6 +678,38 @@ def _setup_device_monitoring(bus):
     logger.info("BLE device connection monitoring started")
 
 
+def register_pairing_agent(bus):
+    """Register a NoInputNoOutput pairing agent so devices can pair via Just Works."""
+    import dbus
+    import dbus.service
+
+    class PairingAgent(dbus.service.Object):
+        @dbus.service.method(AGENT_IFACE, in_signature="", out_signature="")
+        def Release(self):
+            logger.info("Pairing agent released")
+
+        @dbus.service.method(AGENT_IFACE, in_signature="os", out_signature="")
+        def AuthorizeService(self, device, uuid):
+            logger.info("Authorize service %s for %s", uuid, device)
+
+        @dbus.service.method(AGENT_IFACE, in_signature="o", out_signature="")
+        def RequestAuthorization(self, device):
+            logger.info("Pairing authorization granted for %s", device)
+
+        @dbus.service.method(AGENT_IFACE, in_signature="", out_signature="")
+        def Cancel(self):
+            logger.info("Pairing cancelled")
+
+    agent = PairingAgent(bus, AGENT_PATH)
+    agent_manager = dbus.Interface(
+        bus.get_object(BLUEZ_SERVICE, "/org/bluez"), AGENT_MANAGER_IFACE,
+    )
+    agent_manager.RegisterAgent(AGENT_PATH, AGENT_CAPABILITY)
+    agent_manager.RequestDefaultAgent(AGENT_PATH)
+    logger.info("Pairing agent registered (%s)", AGENT_CAPABILITY)
+    return agent
+
+
 def run_ble_server():
     """Start BLE GATT server using BlueZ D-Bus API."""
     import dbus
@@ -680,16 +717,16 @@ def run_ble_server():
     from gi.repository import GLib
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(name)s] %(message)s")
-    logger.info("Starting Remote_Paradox BLE server...")
+    logger.info("Starting Remote Paradox BLE server...")
 
     subprocess.run(["sudo", "hciconfig", "hci0", "up"], capture_output=True)
     subprocess.run(["sudo", "btmgmt", "le", "on"], capture_output=True)
     subprocess.run(["sudo", "btmgmt", "connectable", "on"], capture_output=True)
-    subprocess.run(["sudo", "btmgmt", "name", "Remote_Paradox"], capture_output=True)
+    subprocess.run(["sudo", "btmgmt", "name", "Remote Paradox"], capture_output=True)
     subprocess.run(["sudo", "btmgmt", "advertising", "on"], capture_output=True)
 
     try:
-        subprocess.run(["sudo", "bluetoothctl", "system-alias", "Remote_Paradox"],
+        subprocess.run(["sudo", "bluetoothctl", "system-alias", "Remote Paradox"],
                         capture_output=True, timeout=5)
         subprocess.run(["sudo", "bluetoothctl", "discoverable", "on"],
                         capture_output=True, timeout=5)
@@ -702,6 +739,11 @@ def run_ble_server():
 
     dbus.mainloop.glib.DBusGMainLoop(set_as_default=True)
     bus = dbus.SystemBus()
+
+    try:
+        _pairing_agent = register_pairing_agent(bus)
+    except Exception as e:
+        logger.warning("Failed to register pairing agent: %s", e)
 
     adapter_path = _find_adapter(bus)
     if not adapter_path:

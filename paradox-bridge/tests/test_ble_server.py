@@ -98,3 +98,33 @@ class TestBleClientTracker:
         assert tracker.count == 0
         tracker.client_connected("AA:BB:CC:DD:EE:FF", "Phone")
         assert tracker.count == 1
+
+
+class TestPairingAgent:
+    """Verify NoInputNoOutput pairing agent helper functions."""
+
+    def test_agent_capability_is_no_input_no_output(self):
+        from paradox_bridge.ble_server import AGENT_CAPABILITY
+        assert AGENT_CAPABILITY == "NoInputNoOutput"
+
+    def test_agent_path_defined(self):
+        from paradox_bridge.ble_server import AGENT_PATH
+        assert AGENT_PATH.startswith("/")
+
+    def test_register_agent_calls_agent_manager(self):
+        import sys
+        mock_dbus = MagicMock()
+        mock_dbus.service.Object = type("Object", (), {"__init__": lambda *a, **k: None})
+        mock_dbus.service.method = lambda *a, **k: lambda f: f
+        sys.modules["dbus"] = mock_dbus
+        sys.modules["dbus.service"] = mock_dbus.service
+        try:
+            import importlib
+            import paradox_bridge.ble_server as mod
+            importlib.reload(mod)
+            mock_bus = MagicMock()
+            mod.register_pairing_agent(mock_bus)
+            mock_bus.get_object.assert_called()
+        finally:
+            del sys.modules["dbus"]
+            del sys.modules["dbus.service"]

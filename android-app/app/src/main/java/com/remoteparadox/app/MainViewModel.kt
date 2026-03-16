@@ -610,15 +610,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         _state.update { it.copy(userMgmt = it.userMgmt.copy(inviteUri = null, inviteQr = null)) }
     }
 
-    val isAdmin: Boolean get() {
-        val token = tokenStore.token ?: return false
-        return try {
-            val parts = token.split(".")
-            if (parts.size < 2) return false
-            val payload = String(android.util.Base64.decode(parts[1], android.util.Base64.URL_SAFE or android.util.Base64.NO_PADDING))
-            payload.contains("\"role\":\"admin\"") || payload.contains("\"role\": \"admin\"")
-        } catch (_: Exception) { false }
-    }
+    val isAdmin: Boolean get() = AdminCheck.isAdmin(tokenStore.role, tokenStore.token)
 
     // ── Pi Update Management ──
 

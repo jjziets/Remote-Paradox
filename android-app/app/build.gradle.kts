@@ -81,4 +81,7 @@ dependencies {
 
     // Splash screen
     implementation("androidx.core:core-splashscreen:1.0.1")
+
+    // Testing
+    testImplementation("junit:junit:4.13.2")
 }
