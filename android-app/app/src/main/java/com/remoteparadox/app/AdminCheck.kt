@@ -6,16 +6,18 @@ object AdminCheck {
 
     fun isAdmin(storedRole: String?, jwtToken: String?): Boolean {
         if (storedRole == "admin") return true
+        return extractRoleFromToken(jwtToken) == "admin"
+    }
 
-        val token = jwtToken ?: return false
+    fun extractRoleFromToken(jwtToken: String?): String? {
+        val token = jwtToken ?: return null
         return try {
             val parts = token.split(".")
-            if (parts.size < 2) return false
-            val decoded = Base64.getUrlDecoder().decode(parts[1])
-            val payload = String(decoded)
-            payload.contains("\"role\":\"admin\"") || payload.contains("\"role\": \"admin\"")
+            if (parts.size < 2) return null
+            val payload = String(Base64.getUrlDecoder().decode(parts[1]))
+            Regex("\"role\":\"(\\w+)\"").find(payload)?.groupValues?.get(1)
         } catch (_: Exception) {
-            false
+            null
         }
     }
 }

@@ -39,7 +39,7 @@ data class BypassRequest(
 )
 
 @Serializable
-data class ActionResult(val success: Boolean, val action: String, val message: String = "")
+data class ActionResult(val success: Boolean, val action: String = "", val message: String = "")
 
 @Serializable
 data class ZoneInfo(

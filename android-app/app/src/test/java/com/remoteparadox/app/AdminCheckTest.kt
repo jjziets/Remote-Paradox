@@ -51,4 +51,21 @@ class AdminCheckTest {
     fun `returns false for null role and null token`() {
         assertFalse(AdminCheck.isAdmin(storedRole = null, jwtToken = null))
     }
+
+    @Test
+    fun `extractRoleFromToken returns admin for admin JWT`() {
+        val token = buildJwt("admin")
+        assertEquals("admin", AdminCheck.extractRoleFromToken(token))
+    }
+
+    @Test
+    fun `extractRoleFromToken returns user for user JWT`() {
+        val token = buildJwt("user")
+        assertEquals("user", AdminCheck.extractRoleFromToken(token))
+    }
+
+    @Test
+    fun `extractRoleFromToken returns null for garbage`() {
+        assertNull(AdminCheck.extractRoleFromToken("garbage"))
+    }
 }

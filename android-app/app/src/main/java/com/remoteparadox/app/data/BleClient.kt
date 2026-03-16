@@ -29,7 +29,7 @@ class BleClient(private val context: Context) {
         private val NUS_RX = UUID.fromString("6e400002-b5a3-f393-e0a9-e50e24dcca9e")
         private val NUS_TX = UUID.fromString("6e400003-b5a3-f393-e0a9-e50e24dcca9e")
         private val CCC_DESCRIPTOR = UUID.fromString("00002902-0000-1000-8000-00805f9b34fb")
-        private const val TARGET_NAME = "Remote_Paradox"
+        private const val TARGET_NAME = "Remote Paradox"
     }
 
     private val adapter: BluetoothAdapter? =
@@ -61,7 +61,7 @@ class BleClient(private val context: Context) {
         scanCallback = object : ScanCallback() {
             override fun onScanResult(callbackType: Int, result: ScanResult) {
                 val name = result.device.name ?: return
-                if (!name.contains("Remote_Paradox", ignoreCase = true)) return
+                if (!name.contains("Remote Paradox", ignoreCase = true)) return
                 val dev = BleDevice(name, result.device.address, result.rssi)
                 val current = _devices.value.toMutableList()
                 if (current.none { it.address == dev.address }) {

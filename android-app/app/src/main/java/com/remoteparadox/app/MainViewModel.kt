@@ -130,12 +130,19 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     private fun decideInitialScreen() {
         if (tokenStore.isLoggedIn) {
+            syncRoleFromToken()
             connectApi()
             _state.update { it.copy(screen = Screen.Dashboard) }
             startRealtimeUpdates()
         } else {
             _state.update { it.copy(screen = Screen.Welcome) }
         }
+    }
+
+    private fun syncRoleFromToken() {
+        if (tokenStore.role != null) return
+        val role = AdminCheck.extractRoleFromToken(tokenStore.token) ?: return
+        tokenStore.role = role
     }
 
     fun goToWelcome() {

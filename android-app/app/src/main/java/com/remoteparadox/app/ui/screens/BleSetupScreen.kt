@@ -360,7 +360,7 @@ private fun FindPiStep(
     Text("Find Your Pi", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 20.sp)
     Spacer(Modifier.height(8.dp))
     Text(
-        "Make sure your Raspberry Pi is powered on.\nThe app will search for nearby Remote_Paradox devices.",
+        "Make sure your Raspberry Pi is powered on.\nThe app will search for nearby Remote Paradox devices.",
         textAlign = TextAlign.Center, color = Color.White.copy(alpha = 0.6f), fontSize = 14.sp,
     )
     Spacer(Modifier.height(24.dp))
@@ -369,7 +369,7 @@ private fun FindPiStep(
         BleConnectionState.Scanning -> {
             CircularProgressIndicator(color = MaterialTheme.colorScheme.primary)
             Spacer(Modifier.height(12.dp))
-            Text("Scanning for Remote_Paradox...", color = Color.White.copy(alpha = 0.7f))
+            Text("Scanning for Remote Paradox...", color = Color.White.copy(alpha = 0.7f))
         }
         BleConnectionState.Connecting -> {
             CircularProgressIndicator(color = Color(0xFFFF9800))

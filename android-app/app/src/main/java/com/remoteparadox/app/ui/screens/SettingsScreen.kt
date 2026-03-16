@@ -211,25 +211,13 @@ fun SettingsScreen(
                     }
                 }
 
-                // BLE Link + Reboot
+                // Reboot Pi (admin only)
                 Card(
                     shape = RoundedCornerShape(12.dp),
                     colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
                 ) {
                     Column(modifier = Modifier.padding(16.dp)) {
-                        Text("Connectivity & Maintenance", fontWeight = FontWeight.Bold, color = Color.White, fontSize = 14.sp)
-                        Spacer(Modifier.height(8.dp))
-                        OutlinedButton(
-                            onClick = onBleLinkPi,
-                            modifier = Modifier.fillMaxWidth(),
-                            shape = RoundedCornerShape(10.dp),
-                            colors = ButtonDefaults.outlinedButtonColors(contentColor = Color(0xFF64B5F6)),
-                            border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFF64B5F6).copy(alpha = 0.5f)),
-                        ) {
-                            Icon(Icons.Default.Bluetooth, null, Modifier.size(18.dp))
-                            Spacer(Modifier.width(8.dp))
-                            Text("BLE Link to Pi", fontWeight = FontWeight.Medium)
-                        }
+                        Text("Maintenance", fontWeight = FontWeight.Bold, color = Color.White, fontSize = 14.sp)
                         Spacer(Modifier.height(8.dp))
                         var showRebootConfirm by remember { mutableStateOf(false) }
                         OutlinedButton(
@@ -263,6 +251,28 @@ fun SettingsScreen(
                                 },
                             )
                         }
+                    }
+                }
+            }
+
+            // BLE Link (available to all users)
+            Card(
+                shape = RoundedCornerShape(12.dp),
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+            ) {
+                Column(modifier = Modifier.padding(16.dp)) {
+                    Text("Connectivity", fontWeight = FontWeight.Bold, color = Color.White, fontSize = 14.sp)
+                    Spacer(Modifier.height(8.dp))
+                    OutlinedButton(
+                        onClick = onBleLinkPi,
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(10.dp),
+                        colors = ButtonDefaults.outlinedButtonColors(contentColor = Color(0xFF64B5F6)),
+                        border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFF64B5F6).copy(alpha = 0.5f)),
+                    ) {
+                        Icon(Icons.Default.Bluetooth, null, Modifier.size(18.dp))
+                        Spacer(Modifier.width(8.dp))
+                        Text("BLE Link to Pi", fontWeight = FontWeight.Medium)
                     }
                 }
             }
