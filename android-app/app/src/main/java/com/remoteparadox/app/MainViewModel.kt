@@ -46,6 +46,32 @@ data class UpdateState(
     val error: String? = null,
 )
 
+data class UserMgmtState(
+    val users: List<UserInfo> = emptyList(),
+    val isLoading: Boolean = false,
+    val error: String? = null,
+    val inviteUri: String? = null,
+    val inviteQr: String? = null,
+)
+
+data class PiUpdateState(
+    val checking: Boolean = false,
+    val pending: Boolean = false,
+    val currentVersion: String = "?",
+    val newVersion: String? = null,
+    val applying: Boolean = false,
+    val message: String? = null,
+)
+
+data class PiSystemState(
+    val resources: com.remoteparadox.app.data.SystemResources? = null,
+    val wifi: com.remoteparadox.app.data.WifiInfo? = null,
+    val bleClients: com.remoteparadox.app.data.BleClientsResponse? = null,
+    val loading: Boolean = false,
+    val rebooting: Boolean = false,
+    val error: String? = null,
+)
+
 data class AppState(
     val screen: Screen = Screen.Loading,
     val alarmStatus: AlarmStatus? = null,
@@ -60,9 +86,13 @@ data class AppState(
     val notificationsEnabled: Boolean = true,
     val update: UpdateState = UpdateState(),
     val requestHistoryTab: Boolean = false,
+    val userMgmt: UserMgmtState = UserMgmtState(),
+    val piUpdate: PiUpdateState = PiUpdateState(),
+    val piSystem: PiSystemState = PiSystemState(),
+    val bleConnected: Boolean = false,
 )
 
-enum class Screen { Loading, Scan, Setup, Login, Dashboard, Settings }
+enum class Screen { Loading, Welcome, BleSetup, Scan, Setup, Login, Dashboard, Settings, UserManagement }
 
 class MainViewModel(app: Application) : AndroidViewModel(app) {
     val tokenStore = TokenStore(app)
@@ -74,6 +104,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     private var wsJob: Job? = null
     private var webSocket: WebSocket? = null
     private val json = Json { ignoreUnknownKeys = true; isLenient = true }
+    private var httpReachable = true
     private var notificationId = 100
     private var lastTriggeredPartition: Int? = null
     private var lastArmedState = mutableMapOf<Int, Boolean>()
@@ -101,11 +132,129 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     private fun decideInitialScreen() {
         if (tokenStore.isLoggedIn) {
+            syncRoleFromToken()
             connectApi()
             _state.update { it.copy(screen = Screen.Dashboard) }
             startRealtimeUpdates()
         } else {
-            _state.update { it.copy(screen = Screen.Scan) }
+            _state.update { it.copy(screen = Screen.Welcome) }
+        }
+    }
+
+    private fun syncRoleFromToken() {
+        if (tokenStore.role != null) return
+        val role = AdminCheck.extractRoleFromToken(tokenStore.token) ?: return
+        tokenStore.role = role
+    }
+
+    fun goToWelcome() {
+        _state.update { it.copy(screen = Screen.Welcome, error = null) }
+    }
+
+    // ── BLE Setup ──
+
+    private var bleClient: com.remoteparadox.app.data.BleClient? = null
+    var bleLaunchedFromSettings = false
+        private set
+
+    fun goToBleSetup() {
+        bleLaunchedFromSettings = false
+        if (bleClient == null) {
+            bleClient = com.remoteparadox.app.data.BleClient(getApplication())
+        }
+        _state.update { it.copy(screen = Screen.BleSetup) }
+    }
+
+    fun goToBleFromSettings() {
+        bleLaunchedFromSettings = true
+        if (bleClient == null) {
+            bleClient = com.remoteparadox.app.data.BleClient(getApplication())
+        }
+        _state.update { it.copy(screen = Screen.BleSetup) }
+    }
+
+    fun goBackFromBle() {
+        // Keep BLE connected — it serves as telemetry link when WiFi is offline
+        if (bleLaunchedFromSettings) {
+            _state.update { it.copy(screen = Screen.Settings) }
+        } else {
+            _state.update { it.copy(screen = Screen.Welcome) }
+        }
+    }
+
+    fun bleStartScan() { bleClient?.startScan() }
+    fun bleConnect(address: String) { bleClient?.connect(address) }
+    fun bleDisconnect() { bleClient?.disconnect() }
+    fun bleSendCommand(json: String) {
+        val ble = bleClient ?: return
+        viewModelScope.launch(Dispatchers.IO) {
+            ble.sendManagePanelCommand(json)
+        }
+    }
+
+    val bleConnectionState get() = bleClient?.connectionState
+    val bleDevices get() = bleClient?.discoveredDevices
+    val bleResponse get() = bleClient?.managePanelResponse
+
+    private val isBleConnected: Boolean
+        get() = bleClient?.connectionState?.value == BleConnectionState.Connected
+
+    // ── BLE Fallback for alarm operations ──
+
+    private fun refreshStatusViaBle() {
+        val ble = bleClient ?: return
+        val token = tokenStore.token ?: return
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                _state.update { it.copy(isLoading = true) }
+                val resp = ble.sendCommandAsync("""{"cmd":"alarm_status","token":"$token"}""")
+                if (resp == null) {
+                    _state.update { it.copy(isLoading = false, error = "BLE timeout") }
+                    return@launch
+                }
+                // Check for error response from Pi
+                val obj = try { org.json.JSONObject(resp) } catch (_: Exception) { null }
+                if (obj?.has("error") == true) {
+                    val err = obj.getString("error")
+                    Log.w(TAG, "BLE alarm_status error: $err")
+                    _state.update { it.copy(isLoading = false, error = "BLE: $err", bleConnected = true) }
+                    return@launch
+                }
+                val status = json.decodeFromString<AlarmStatus>(resp)
+                checkStatusChanges(status)
+                _state.update { it.copy(alarmStatus = status, isLoading = false, error = null, bleConnected = true) }
+            } catch (e: Exception) {
+                Log.w(TAG, "BLE status refresh failed: ${e.message}")
+                _state.update { it.copy(isLoading = false, error = "BLE: ${e.message}") }
+            }
+        }
+    }
+
+    private fun bleAlarmAction(cmdName: String, extras: Map<String, Any> = emptyMap()) {
+        val ble = bleClient ?: return
+        val token = tokenStore.token ?: return
+        _state.update { it.copy(actionInProgress = cmdName, error = null) }
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val cmdMap = mutableMapOf<String, Any>("cmd" to cmdName, "token" to token)
+                cmdMap.putAll(extras)
+                val cmdJson = org.json.JSONObject(cmdMap).toString()
+                val resp = ble.sendCommandAsync(cmdJson)
+                if (resp == null) {
+                    _state.update { it.copy(actionInProgress = null, error = "BLE timeout") }
+                    return@launch
+                }
+                val obj = org.json.JSONObject(resp)
+                if (obj.has("error")) {
+                    _state.update { it.copy(actionInProgress = null, error = obj.getString("error")) }
+                } else {
+                    _state.update { it.copy(actionInProgress = null) }
+                    delay(500)
+                    refreshStatusViaBle()
+                }
+            } catch (e: Exception) {
+                _state.update { it.copy(actionInProgress = null, error = "BLE: ${e.message}") }
+            }
         }
     }
 
@@ -214,36 +363,63 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     fun armAway(code: String, partitionId: Int) {
         tokenStore.alarmCode = code
-        alarmAction("arm_away") { it.armAway(tokenStore.bearerHeader, ArmRequest(code, partitionId)) }
+        if (!httpReachable && isBleConnected) {
+            bleAlarmAction("arm_away", mapOf("code" to code, "partition" to partitionId))
+        } else {
+            alarmAction("arm_away") { it.armAway(tokenStore.bearerHeader, ArmRequest(code, partitionId)) }
+        }
     }
 
     fun armStay(code: String, partitionId: Int) {
         tokenStore.alarmCode = code
-        alarmAction("arm_stay") { it.armStay(tokenStore.bearerHeader, ArmRequest(code, partitionId)) }
+        if (!httpReachable && isBleConnected) {
+            bleAlarmAction("arm_stay", mapOf("code" to code, "partition" to partitionId))
+        } else {
+            alarmAction("arm_stay") { it.armStay(tokenStore.bearerHeader, ArmRequest(code, partitionId)) }
+        }
     }
 
     fun disarm(code: String, partitionId: Int) {
         tokenStore.alarmCode = code
-        alarmAction("disarm") { it.disarm(tokenStore.bearerHeader, ArmRequest(code, partitionId)) }
+        if (!httpReachable && isBleConnected) {
+            bleAlarmAction("disarm", mapOf("code" to code, "partition" to partitionId))
+        } else {
+            alarmAction("disarm") { it.disarm(tokenStore.bearerHeader, ArmRequest(code, partitionId)) }
+        }
     }
 
-    fun bypassZone(zoneId: Int, bypass: Boolean) =
-        alarmAction(if (bypass) "bypass" else "unbypass") {
-            it.bypassZone(tokenStore.bearerHeader, BypassRequest(zoneId, bypass))
+    fun bypassZone(zoneId: Int, bypass: Boolean) {
+        if (!httpReachable && isBleConnected) {
+            bleAlarmAction("bypass", mapOf("zone_id" to zoneId, "bypass" to bypass))
+        } else {
+            alarmAction(if (bypass) "bypass" else "unbypass") {
+                it.bypassZone(tokenStore.bearerHeader, BypassRequest(zoneId, bypass))
+            }
         }
+    }
 
-    fun sendPanic(panicType: String, partitionId: Int) =
-        alarmAction("panic") {
-            it.panic(tokenStore.bearerHeader, PanicRequest(partitionId, panicType))
+    fun sendPanic(panicType: String, partitionId: Int) {
+        if (!httpReachable && isBleConnected) {
+            bleAlarmAction("panic", mapOf("partition" to partitionId, "type" to panicType))
+        } else {
+            alarmAction("panic") {
+                it.panic(tokenStore.bearerHeader, PanicRequest(partitionId, panicType))
+            }
         }
+    }
 
     private fun alarmAction(name: String, call: suspend (ParadoxApi) -> retrofit2.Response<ActionResult>) {
-        val a = api ?: return
+        val a = api ?: run {
+            // No HTTP API — try BLE if connected
+            if (isBleConnected) bleAlarmAction(name)
+            return
+        }
         _state.update { it.copy(actionInProgress = name, error = null) }
         viewModelScope.launch(Dispatchers.IO) {
             try {
                 val resp = call(a)
                 if (resp.isSuccessful) {
+                    httpReachable = true
                     _state.update { it.copy(actionInProgress = null) }
                     delay(500)
                     refreshStatus()
@@ -254,18 +430,54 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                     _state.update { it.copy(actionInProgress = null, error = "Action failed") }
                 }
             } catch (e: Exception) {
-                _state.update { it.copy(actionInProgress = null, error = e.message) }
+                httpReachable = false
+                // Cascade to BLE on HTTP failure
+                if (isBleConnected) {
+                    Log.i(TAG, "HTTP failed for $name, falling back to BLE")
+                    _state.update { it.copy(actionInProgress = null) }
+                    bleAlarmAction(name)
+                } else {
+                    _state.update { it.copy(actionInProgress = null, error = e.message) }
+                }
             }
         }
     }
 
+    private fun isNetworkAvailable(): Boolean {
+        val cm = getApplication<Application>().getSystemService(Context.CONNECTIVITY_SERVICE) as? android.net.ConnectivityManager
+        return cm?.activeNetwork != null
+    }
+
     fun refreshStatus() {
-        val a = api ?: return
+        // Update BLE state
+        _state.update { it.copy(bleConnected = isBleConnected) }
+
+        // Fast path: no network at all (airplane mode) → use BLE immediately
+        if (!isNetworkAvailable()) {
+            httpReachable = false
+            if (isBleConnected) {
+                refreshStatusViaBle()
+            } else {
+                _state.update { it.copy(isLoading = false, error = "No connection") }
+            }
+            return
+        }
+
+        val a = api
+        if (a == null) {
+            if (isBleConnected) refreshStatusViaBle()
+            return
+        }
+        if (!httpReachable && isBleConnected) {
+            refreshStatusViaBle()
+            return
+        }
         viewModelScope.launch(Dispatchers.IO) {
             try {
                 _state.update { it.copy(isLoading = true) }
                 val resp = a.alarmStatus(tokenStore.bearerHeader)
                 if (resp.isSuccessful && resp.body() != null) {
+                    httpReachable = true
                     val body = resp.body()!!
                     checkStatusChanges(body)
                     _state.update { it.copy(alarmStatus = body, isLoading = false, error = null) }
@@ -275,13 +487,25 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                     _state.update { it.copy(isLoading = false) }
                 }
             } catch (e: Exception) {
-                _state.update { it.copy(isLoading = false, error = "Connection lost") }
+                httpReachable = false
+                // Cascade to BLE
+                if (isBleConnected) {
+                    Log.i(TAG, "HTTP unreachable, falling back to BLE for status")
+                    refreshStatusViaBle()
+                } else {
+                    _state.update { it.copy(isLoading = false, error = "Connection lost") }
+                }
             }
         }
     }
 
     fun refreshHistory() {
-        val a = api ?: return
+        if (!isNetworkAvailable()) { httpReachable = false }
+        val a = api
+        if (a == null || (!httpReachable && isBleConnected)) {
+            refreshHistoryViaBle()
+            return
+        }
         viewModelScope.launch(Dispatchers.IO) {
             try {
                 val evResp = a.eventHistory(tokenStore.bearerHeader, limit = 50)
@@ -290,7 +514,30 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 val audits = auditResp.body()?.entries.orEmpty()
                 val enriched = enrichEventsWithAudit(events, audits)
                 _state.update { it.copy(eventHistory = enriched) }
-            } catch (_: Exception) { }
+            } catch (_: Exception) {
+                if (isBleConnected) refreshHistoryViaBle()
+            }
+        }
+    }
+
+    private fun refreshHistoryViaBle() {
+        val ble = bleClient ?: return
+        val token = tokenStore.token ?: return
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val evJson = ble.sendCommandAsync("""{"cmd":"event_history","token":"$token","limit":50}""")
+                val auditJson = ble.sendCommandAsync("""{"cmd":"audit_logs","token":"$token","limit":100}""")
+                val events = evJson?.let {
+                    try { json.decodeFromString<EventHistoryResponse>(it).events } catch (_: Exception) { null }
+                }.orEmpty()
+                val audits = auditJson?.let {
+                    try { json.decodeFromString<AuditLogResponse>(it).entries } catch (_: Exception) { null }
+                }.orEmpty()
+                val enriched = enrichEventsWithAudit(events, audits)
+                _state.update { it.copy(eventHistory = enriched) }
+            } catch (e: Exception) {
+                Log.w(TAG, "BLE history refresh failed: ${e.message}")
+            }
         }
     }
 
@@ -413,15 +660,25 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         refreshStatus()
         refreshHistory()
         connectWebSocket()
+        var cycleCount = 0
         wsJob = viewModelScope.launch(Dispatchers.IO) {
             while (isActive) {
                 delay(FALLBACK_POLL_INTERVAL_MS)
-                if (!_state.value.wsConnected) {
+                cycleCount++
+
+                if (!httpReachable && cycleCount % 6 == 0) {
+                    // Probe HTTP recovery every ~30s
+                    Log.d(TAG, "Probing HTTP recovery...")
+                    httpReachable = true
+                }
+
+                if (httpReachable && !_state.value.wsConnected) {
                     Log.d(TAG, "WS disconnected — reconnecting")
                     connectWebSocket()
                 }
-                refreshStatus()
-                refreshHistory()
+
+                refreshStatus() // This cascades to BLE if HTTP fails
+                refreshHistory() // This cascades to BLE if HTTP fails
             }
         }
     }
@@ -438,6 +695,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     fun goToSettings() {
         _state.update { it.copy(screen = Screen.Settings) }
+        if (isAdmin) refreshPiSystem()
     }
 
     fun goBackToDashboard() {
@@ -450,6 +708,303 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     fun consumeHistoryTabRequest() {
         _state.update { it.copy(requestHistoryTab = false) }
+    }
+
+    // ── User Management (admin) ──
+
+    fun goToUserManagement() {
+        _state.update { it.copy(screen = Screen.UserManagement) }
+        refreshUsers()
+    }
+
+    fun goBackFromUserMgmt() {
+        _state.update { it.copy(screen = Screen.Settings, userMgmt = UserMgmtState()) }
+    }
+
+    fun refreshUsers() {
+        if (!isNetworkAvailable()) { httpReachable = false }
+        val a = api
+        if (a == null || (!httpReachable && isBleConnected)) {
+            refreshUsersViaBle()
+            return
+        }
+        _state.update { it.copy(userMgmt = it.userMgmt.copy(isLoading = true, error = null)) }
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val resp = a.listUsers(tokenStore.bearerHeader)
+                if (resp.isSuccessful) {
+                    _state.update { it.copy(userMgmt = it.userMgmt.copy(users = resp.body()!!.users, isLoading = false)) }
+                } else {
+                    _state.update { it.copy(userMgmt = it.userMgmt.copy(isLoading = false, error = "Failed to load users")) }
+                }
+            } catch (e: Exception) {
+                if (isBleConnected) refreshUsersViaBle()
+                else _state.update { it.copy(userMgmt = it.userMgmt.copy(isLoading = false, error = e.message)) }
+            }
+        }
+    }
+
+    private fun refreshUsersViaBle() {
+        val ble = bleClient ?: return
+        val token = tokenStore.token ?: return
+        _state.update { it.copy(userMgmt = it.userMgmt.copy(isLoading = true, error = null)) }
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val resp = ble.sendCommandAsync("""{"cmd":"list_users","token":"$token"}""")
+                if (resp != null) {
+                    val users = json.decodeFromString<UserListResponse>(resp).users
+                    _state.update { it.copy(userMgmt = it.userMgmt.copy(users = users, isLoading = false)) }
+                } else {
+                    _state.update { it.copy(userMgmt = it.userMgmt.copy(isLoading = false, error = "BLE timeout")) }
+                }
+            } catch (e: Exception) {
+                _state.update { it.copy(userMgmt = it.userMgmt.copy(isLoading = false, error = "BLE: ${e.message}")) }
+            }
+        }
+    }
+
+    fun updateUserRole(username: String, newRole: String) {
+        val a = api
+        if (a == null || (!httpReachable && isBleConnected)) {
+            bleUserAction("update_role", mapOf("username" to username, "role" to newRole))
+            return
+        }
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val resp = a.updateUserRole(tokenStore.bearerHeader, username, RoleUpdateRequest(newRole))
+                if (resp.isSuccessful) {
+                    refreshUsers()
+                } else {
+                    val errBody = resp.errorBody()?.string() ?: "Failed"
+                    _state.update { it.copy(userMgmt = it.userMgmt.copy(error = errBody)) }
+                }
+            } catch (e: Exception) {
+                if (isBleConnected) bleUserAction("update_role", mapOf("username" to username, "role" to newRole))
+                else _state.update { it.copy(userMgmt = it.userMgmt.copy(error = e.message)) }
+            }
+        }
+    }
+
+    fun deleteUser(username: String) {
+        val a = api
+        if (a == null || (!httpReachable && isBleConnected)) {
+            bleUserAction("delete_user", mapOf("username" to username))
+            return
+        }
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val resp = a.deleteUser(tokenStore.bearerHeader, username)
+                if (resp.isSuccessful) {
+                    refreshUsers()
+                } else {
+                    val errBody = resp.errorBody()?.string() ?: "Failed"
+                    _state.update { it.copy(userMgmt = it.userMgmt.copy(error = errBody)) }
+                }
+            } catch (e: Exception) {
+                if (isBleConnected) bleUserAction("delete_user", mapOf("username" to username))
+                else _state.update { it.copy(userMgmt = it.userMgmt.copy(error = e.message)) }
+            }
+        }
+    }
+
+    fun generateInvite() {
+        val a = api
+        if (a == null || (!httpReachable && isBleConnected)) {
+            bleGenerateInvite()
+            return
+        }
+        _state.update { it.copy(userMgmt = it.userMgmt.copy(inviteUri = null, inviteQr = null)) }
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val resp = a.createInvite(tokenStore.bearerHeader)
+                if (resp.isSuccessful) {
+                    val body = resp.body()!!
+                    _state.update { it.copy(userMgmt = it.userMgmt.copy(inviteUri = body.uri, inviteQr = body.qrDataUri)) }
+                } else {
+                    _state.update { it.copy(userMgmt = it.userMgmt.copy(error = "Failed to create invite")) }
+                }
+            } catch (e: Exception) {
+                if (isBleConnected) bleGenerateInvite()
+                else _state.update { it.copy(userMgmt = it.userMgmt.copy(error = e.message)) }
+            }
+        }
+    }
+
+    private fun bleUserAction(cmd: String, extras: Map<String, Any> = emptyMap()) {
+        val ble = bleClient ?: return
+        val token = tokenStore.token ?: return
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val cmdMap = mutableMapOf<String, Any>("cmd" to cmd, "token" to token)
+                cmdMap.putAll(extras)
+                ble.sendCommandAsync(org.json.JSONObject(cmdMap).toString())
+                refreshUsers()
+            } catch (e: Exception) {
+                _state.update { it.copy(userMgmt = it.userMgmt.copy(error = "BLE: ${e.message}")) }
+            }
+        }
+    }
+
+    private fun bleGenerateInvite() {
+        val ble = bleClient ?: return
+        val token = tokenStore.token ?: return
+        _state.update { it.copy(userMgmt = it.userMgmt.copy(inviteUri = null, inviteQr = null)) }
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val resp = ble.sendCommandAsync("""{"cmd":"create_invite","token":"$token"}""")
+                if (resp != null) {
+                    val invite = json.decodeFromString<InviteResponse>(resp)
+                    _state.update { it.copy(userMgmt = it.userMgmt.copy(inviteUri = invite.uri, inviteQr = invite.qrDataUri)) }
+                }
+            } catch (e: Exception) {
+                _state.update { it.copy(userMgmt = it.userMgmt.copy(error = "BLE: ${e.message}")) }
+            }
+        }
+    }
+
+    fun dismissInvite() {
+        _state.update { it.copy(userMgmt = it.userMgmt.copy(inviteUri = null, inviteQr = null)) }
+    }
+
+    val isAdmin: Boolean get() = AdminCheck.isAdmin(tokenStore.role, tokenStore.token)
+
+    // ── Pi Update Management ──
+
+    fun checkPiUpdate() {
+        val a = api ?: return
+        _state.update { it.copy(piUpdate = it.piUpdate.copy(checking = true, message = null)) }
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                a.piCheckUpdate(tokenStore.bearerHeader)
+                val resp = a.piUpdateStatus(tokenStore.bearerHeader)
+                if (resp.isSuccessful) {
+                    val body = resp.body()!!
+                    _state.update {
+                        it.copy(piUpdate = PiUpdateState(
+                            pending = body.pending,
+                            currentVersion = body.currentVersion,
+                            newVersion = body.newVersion,
+                            message = if (body.pending) "Update available: ${body.newVersion}" else "Pi is up to date",
+                        ))
+                    }
+                } else {
+                    _state.update { it.copy(piUpdate = it.piUpdate.copy(checking = false, message = "Failed to check")) }
+                }
+            } catch (e: Exception) {
+                _state.update { it.copy(piUpdate = it.piUpdate.copy(checking = false, message = e.message)) }
+            }
+        }
+    }
+
+    fun applyPiUpdate() {
+        val a = api ?: return
+        _state.update { it.copy(piUpdate = it.piUpdate.copy(applying = true, message = "Applying update...")) }
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val resp = a.piApplyUpdate(tokenStore.bearerHeader)
+                if (resp.isSuccessful) {
+                    _state.update {
+                        it.copy(piUpdate = it.piUpdate.copy(
+                            applying = false, pending = false,
+                            message = "Update applied. Service restarting...",
+                        ))
+                    }
+                } else {
+                    val err = resp.errorBody()?.string() ?: "Failed"
+                    _state.update { it.copy(piUpdate = it.piUpdate.copy(applying = false, message = err)) }
+                }
+            } catch (e: Exception) {
+                _state.update { it.copy(piUpdate = it.piUpdate.copy(applying = false, message = e.message)) }
+            }
+        }
+    }
+
+    // ── Pi System Info ──
+
+    fun refreshPiSystem() {
+        if (!isNetworkAvailable()) { httpReachable = false }
+        val a = api
+        if (a == null || (!httpReachable && isBleConnected)) {
+            refreshPiSystemViaBle()
+            return
+        }
+        _state.update { it.copy(piSystem = it.piSystem.copy(loading = true, error = null)) }
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val resResp = a.systemResources(tokenStore.bearerHeader)
+                val wifiResp = a.systemWifi(tokenStore.bearerHeader)
+                val bleResp = try { a.bleClients(tokenStore.bearerHeader).body() } catch (_: Exception) { null }
+                _state.update {
+                    it.copy(piSystem = PiSystemState(
+                        resources = resResp.body(),
+                        wifi = wifiResp.body(),
+                        bleClients = bleResp,
+                    ))
+                }
+            } catch (e: Exception) {
+                if (isBleConnected) {
+                    refreshPiSystemViaBle()
+                } else {
+                    _state.update { it.copy(piSystem = it.piSystem.copy(loading = false, error = e.message)) }
+                }
+            }
+        }
+    }
+
+    private fun refreshPiSystemViaBle() {
+        val ble = bleClient ?: return
+        val token = tokenStore.token ?: return
+        _state.update { it.copy(piSystem = it.piSystem.copy(loading = true, error = null)) }
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val resJson = ble.sendCommandAsync("""{"cmd":"system_resources","token":"$token"}""")
+                val wifiJson = ble.sendCommandAsync("""{"cmd":"system_wifi","token":"$token"}""")
+                val bleJson = ble.sendCommandAsync("""{"cmd":"ble_clients","token":"$token"}""")
+
+                val resources = resJson?.let { try { json.decodeFromString<SystemResources>(it) } catch (_: Exception) { null } }
+                val wifi = wifiJson?.let { try { json.decodeFromString<WifiInfo>(it) } catch (_: Exception) { null } }
+                val bleClients = bleJson?.let { try { json.decodeFromString<BleClientsResponse>(it) } catch (_: Exception) { null } }
+
+                _state.update {
+                    it.copy(piSystem = PiSystemState(
+                        resources = resources,
+                        wifi = wifi,
+                        bleClients = bleClients,
+                    ))
+                }
+            } catch (e: Exception) {
+                _state.update { it.copy(piSystem = it.piSystem.copy(loading = false, error = "BLE: ${e.message}")) }
+            }
+        }
+    }
+
+    fun rebootPi() {
+        val a = api
+        if (a == null && isBleConnected) {
+            bleAlarmAction("system_reboot")
+            _state.update { it.copy(piSystem = it.piSystem.copy(error = "Pi is rebooting... please wait ~60s")) }
+            return
+        }
+        if (a == null) return
+        _state.update { it.copy(piSystem = it.piSystem.copy(rebooting = true, error = null)) }
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val resp = a.systemReboot(tokenStore.bearerHeader)
+                if (resp.isSuccessful) {
+                    _state.update {
+                        it.copy(piSystem = it.piSystem.copy(
+                            rebooting = false,
+                            error = "Pi is rebooting... please wait ~60s",
+                        ))
+                    }
+                } else {
+                    val err = resp.errorBody()?.string() ?: "Reboot failed"
+                    _state.update { it.copy(piSystem = it.piSystem.copy(rebooting = false, error = err)) }
+                }
+            } catch (e: Exception) {
+                _state.update { it.copy(piSystem = it.piSystem.copy(rebooting = false, error = e.message)) }
+            }
+        }
     }
 
     fun setSoundEnabled(enabled: Boolean) {
@@ -746,7 +1301,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         stopRealtimeUpdates()
         tokenStore.clear()
         api = null
-        _state.update { AppState(screen = Screen.Scan) }
+        _state.update { AppState(screen = Screen.Welcome) }
     }
 
     override fun onCleared() {

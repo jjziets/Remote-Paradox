@@ -29,10 +29,19 @@ fun SettingsScreen(
     soundEnabled: Boolean,
     notificationsEnabled: Boolean,
     updateState: UpdateState,
+    isAdmin: Boolean = false,
+    piUpdate: com.remoteparadox.app.PiUpdateState = com.remoteparadox.app.PiUpdateState(),
+    piSystem: com.remoteparadox.app.PiSystemState = com.remoteparadox.app.PiSystemState(),
     onSoundToggle: (Boolean) -> Unit,
     onNotificationsToggle: (Boolean) -> Unit,
     onCheckUpdate: () -> Unit,
     onDownloadUpdate: () -> Unit,
+    onManageUsers: () -> Unit = {},
+    onCheckPiUpdate: () -> Unit = {},
+    onApplyPiUpdate: () -> Unit = {},
+    onRefreshPiSystem: () -> Unit = {},
+    onRebootPi: () -> Unit = {},
+    onBleLinkPi: () -> Unit = {},
     onLogout: () -> Unit,
     onSwitchServer: () -> Unit,
     onBack: () -> Unit,
@@ -80,6 +89,190 @@ fun SettingsScreen(
                             Text(username ?: "—", color = Color.White, fontSize = 15.sp)
                             Text("${serverHost ?: "—"}:$serverPort", color = Color.White.copy(alpha = 0.5f), fontSize = 12.sp)
                         }
+                    }
+                }
+            }
+
+            // Admin section
+            if (isAdmin) {
+                Card(
+                    shape = RoundedCornerShape(12.dp),
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                ) {
+                    Column(modifier = Modifier.padding(16.dp)) {
+                        Text("Administration", fontWeight = FontWeight.Bold, color = Color.White, fontSize = 14.sp)
+                        Spacer(Modifier.height(8.dp))
+                        OutlinedButton(
+                            onClick = onManageUsers,
+                            modifier = Modifier.fillMaxWidth(),
+                            shape = RoundedCornerShape(10.dp),
+                            colors = ButtonDefaults.outlinedButtonColors(contentColor = Color(0xFF4CAF50)),
+                            border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFF4CAF50).copy(alpha = 0.5f)),
+                        ) {
+                            Icon(Icons.Default.Group, null, Modifier.size(18.dp))
+                            Spacer(Modifier.width(8.dp))
+                            Text("Manage Users & Invites", fontWeight = FontWeight.Medium)
+                        }
+                    }
+                }
+
+                // Pi System Resources
+                Card(
+                    shape = RoundedCornerShape(12.dp),
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                ) {
+                    Column(modifier = Modifier.padding(16.dp)) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text("Pi System", fontWeight = FontWeight.Bold, color = Color.White, fontSize = 14.sp, modifier = Modifier.weight(1f))
+                            IconButton(onClick = onRefreshPiSystem, modifier = Modifier.size(32.dp)) {
+                                Icon(Icons.Default.Refresh, "Refresh", tint = Color.White.copy(alpha = 0.7f), modifier = Modifier.size(18.dp))
+                            }
+                        }
+
+                        if (piSystem.loading) {
+                            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(vertical = 8.dp)) {
+                                CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp, color = Color.White)
+                                Spacer(Modifier.width(12.dp))
+                                Text("Loading...", color = Color.White.copy(alpha = 0.5f), fontSize = 13.sp)
+                            }
+                        }
+
+                        val res = piSystem.resources
+                        if (res != null) {
+                            Spacer(Modifier.height(8.dp))
+                            ResourceBar("CPU", res.cpuPercent.toFloat(), "${String.format("%.1f", res.cpuPercent)}%")
+                            ResourceBar("Memory", res.memoryPercent.toFloat(), "${res.memoryUsedMb} / ${res.memoryTotalMb} MB")
+                            ResourceBar("Storage", res.diskPercent.toFloat(), "${String.format("%.1f", res.diskUsedGb)} / ${String.format("%.1f", res.diskTotalGb)} GB")
+                            if (res.uptimeSeconds > 0) {
+                                val d = res.uptimeSeconds / 86400
+                                val h = (res.uptimeSeconds % 86400) / 3600
+                                val m = (res.uptimeSeconds % 3600) / 60
+                                val uptimeStr = if (d > 0) "${d}d ${h}h ${m}m" else if (h > 0) "${h}h ${m}m" else "${m}m"
+                                Text("Uptime: $uptimeStr", color = Color.White.copy(alpha = 0.4f), fontSize = 11.sp,
+                                    modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
+                                    textAlign = androidx.compose.ui.text.style.TextAlign.End)
+                            }
+                        }
+
+                        val wifi = piSystem.wifi
+                        if (wifi != null) {
+                            Spacer(Modifier.height(12.dp))
+                            HorizontalDivider(color = Color.White.copy(alpha = 0.1f))
+                            Spacer(Modifier.height(8.dp))
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Icon(Icons.Default.Wifi, null, tint = Color.White.copy(alpha = 0.7f), modifier = Modifier.size(18.dp))
+                                Spacer(Modifier.width(8.dp))
+                                Column(Modifier.weight(1f)) {
+                                    Text(wifi.ssid.ifBlank { "Not connected" }, color = Color.White, fontSize = 14.sp)
+                                    Text(wifi.ipAddress.ifBlank { "—" }, color = Color.White.copy(alpha = 0.5f), fontSize = 12.sp)
+                                }
+                                if (wifi.signalPercent != null) {
+                                    Text("${wifi.signalPercent}%", color = Color(0xFF4CAF50), fontSize = 13.sp, fontWeight = FontWeight.Bold)
+                                }
+                            }
+                        }
+
+                        val ble = piSystem.bleClients
+                        if (ble != null) {
+                            Spacer(Modifier.height(12.dp))
+                            HorizontalDivider(color = Color.White.copy(alpha = 0.1f))
+                            Spacer(Modifier.height(8.dp))
+                            Text("BLE Clients (${ble.count})", color = Color.White.copy(alpha = 0.7f), fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+                            Spacer(Modifier.height(4.dp))
+                            if (ble.clients.isEmpty()) {
+                                Text("No BLE clients connected", color = Color.White.copy(alpha = 0.4f), fontSize = 12.sp)
+                            } else {
+                                ble.clients.forEach { client ->
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp),
+                                    ) {
+                                        Icon(Icons.Default.Bluetooth, null, tint = Color(0xFF64B5F6), modifier = Modifier.size(16.dp))
+                                        Spacer(Modifier.width(6.dp))
+                                        Text(
+                                            client.name.ifBlank { client.address },
+                                            color = Color.White, fontSize = 13.sp,
+                                            modifier = Modifier.weight(1f),
+                                        )
+                                        Text(
+                                            client.username ?: "Unknown",
+                                            color = if (client.username != null) Color(0xFF4CAF50) else Color(0xFFE94560),
+                                            fontSize = 12.sp,
+                                        )
+                                    }
+                                }
+                            }
+                        }
+
+                        if (piSystem.error != null) {
+                            Spacer(Modifier.height(8.dp))
+                            Text(piSystem.error, color = Color(0xFFFF9800), fontSize = 12.sp)
+                        }
+                    }
+                }
+
+                // Reboot Pi (admin only)
+                Card(
+                    shape = RoundedCornerShape(12.dp),
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                ) {
+                    Column(modifier = Modifier.padding(16.dp)) {
+                        Text("Maintenance", fontWeight = FontWeight.Bold, color = Color.White, fontSize = 14.sp)
+                        Spacer(Modifier.height(8.dp))
+                        var showRebootConfirm by remember { mutableStateOf(false) }
+                        OutlinedButton(
+                            onClick = { showRebootConfirm = true },
+                            modifier = Modifier.fillMaxWidth(),
+                            shape = RoundedCornerShape(10.dp),
+                            colors = ButtonDefaults.outlinedButtonColors(contentColor = Color(0xFFE94560)),
+                            border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFFE94560).copy(alpha = 0.5f)),
+                            enabled = !piSystem.rebooting,
+                        ) {
+                            if (piSystem.rebooting) {
+                                CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp, color = Color(0xFFE94560))
+                            } else {
+                                Icon(Icons.Default.RestartAlt, null, Modifier.size(18.dp))
+                            }
+                            Spacer(Modifier.width(8.dp))
+                            Text("Reboot Pi", fontWeight = FontWeight.Medium)
+                        }
+                        if (showRebootConfirm) {
+                            AlertDialog(
+                                onDismissRequest = { showRebootConfirm = false },
+                                title = { Text("Reboot Pi?") },
+                                text = { Text("The alarm controller will be offline for ~60 seconds.") },
+                                confirmButton = {
+                                    TextButton(onClick = { showRebootConfirm = false; onRebootPi() }) {
+                                        Text("Reboot", color = Color(0xFFE94560))
+                                    }
+                                },
+                                dismissButton = {
+                                    TextButton(onClick = { showRebootConfirm = false }) { Text("Cancel") }
+                                },
+                            )
+                        }
+                    }
+                }
+            }
+
+            // BLE Link (available to all users)
+            Card(
+                shape = RoundedCornerShape(12.dp),
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+            ) {
+                Column(modifier = Modifier.padding(16.dp)) {
+                    Text("Connectivity", fontWeight = FontWeight.Bold, color = Color.White, fontSize = 14.sp)
+                    Spacer(Modifier.height(8.dp))
+                    OutlinedButton(
+                        onClick = onBleLinkPi,
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(10.dp),
+                        colors = ButtonDefaults.outlinedButtonColors(contentColor = Color(0xFF64B5F6)),
+                        border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFF64B5F6).copy(alpha = 0.5f)),
+                    ) {
+                        Icon(Icons.Default.Bluetooth, null, Modifier.size(18.dp))
+                        Spacer(Modifier.width(8.dp))
+                        Text("BLE Link to Pi", fontWeight = FontWeight.Medium)
                     }
                 }
             }
@@ -220,6 +413,76 @@ fun SettingsScreen(
                 }
             }
 
+            // Pi Software Update (admin only)
+            if (isAdmin) {
+                Card(
+                    shape = RoundedCornerShape(12.dp),
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                ) {
+                    Column(modifier = Modifier.padding(16.dp)) {
+                        Text("Pi Software", fontWeight = FontWeight.Bold, color = Color.White, fontSize = 14.sp)
+                        Spacer(Modifier.height(8.dp))
+
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(Icons.Default.DeveloperBoard, null, tint = Color.White.copy(alpha = 0.7f), modifier = Modifier.size(20.dp))
+                            Spacer(Modifier.width(12.dp))
+                            Column(Modifier.weight(1f)) {
+                                Text("Remote Paradox Pi", color = Color.White, fontSize = 14.sp)
+                                Text("Version ${piUpdate.currentVersion}", color = Color.White.copy(alpha = 0.5f), fontSize = 12.sp)
+                            }
+                        }
+
+                        if (piUpdate.message != null) {
+                            Spacer(Modifier.height(8.dp))
+                            Text(piUpdate.message, color = if (piUpdate.pending) Color(0xFFFF9800) else Color(0xFF4CAF50), fontSize = 13.sp)
+                        }
+
+                        if (piUpdate.pending && piUpdate.newVersion != null) {
+                            Spacer(Modifier.height(8.dp))
+                            Button(
+                                onClick = onApplyPiUpdate,
+                                modifier = Modifier.fillMaxWidth().height(40.dp),
+                                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFFF9800)),
+                                shape = RoundedCornerShape(8.dp),
+                                enabled = !piUpdate.applying,
+                            ) {
+                                if (piUpdate.applying) {
+                                    CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp, color = Color.White)
+                                } else {
+                                    Icon(Icons.Default.SystemUpdate, null, Modifier.size(16.dp))
+                                }
+                                Spacer(Modifier.width(6.dp))
+                                Text("Apply v${piUpdate.newVersion}", fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                            }
+                        }
+
+                        if (!piUpdate.checking && !piUpdate.applying) {
+                            Spacer(Modifier.height(8.dp))
+                            OutlinedButton(
+                                onClick = onCheckPiUpdate,
+                                modifier = Modifier.fillMaxWidth().height(40.dp),
+                                shape = RoundedCornerShape(8.dp),
+                                colors = ButtonDefaults.outlinedButtonColors(contentColor = Color.White),
+                                border = androidx.compose.foundation.BorderStroke(1.dp, Color.White.copy(alpha = 0.2f)),
+                            ) {
+                                Icon(Icons.Default.Refresh, null, Modifier.size(16.dp))
+                                Spacer(Modifier.width(6.dp))
+                                Text("Check Pi for updates", fontSize = 13.sp)
+                            }
+                        }
+
+                        if (piUpdate.checking) {
+                            Spacer(Modifier.height(8.dp))
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp, color = Color.White)
+                                Spacer(Modifier.width(12.dp))
+                                Text("Checking...", color = Color.White.copy(alpha = 0.7f), fontSize = 14.sp)
+                            }
+                        }
+                    }
+                }
+            }
+
             Spacer(Modifier.weight(1f))
 
             OutlinedButton(
@@ -277,6 +540,29 @@ fun SettingsScreen(
             dismissButton = {
                 TextButton(onClick = { showSwitchConfirm = false }) { Text("Cancel") }
             },
+        )
+    }
+}
+
+@Composable
+private fun ResourceBar(label: String, percent: Float, detail: String) {
+    val clampedPct = percent.coerceIn(0f, 100f)
+    val color = when {
+        clampedPct < 60f -> Color(0xFF4CAF50)
+        clampedPct < 85f -> Color(0xFFFF9800)
+        else -> Color(0xFFE94560)
+    }
+    Column(modifier = Modifier.padding(bottom = 10.dp)) {
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+            Text(label, color = Color.White.copy(alpha = 0.7f), fontSize = 12.sp)
+            Text(detail, color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+        }
+        Spacer(Modifier.height(4.dp))
+        LinearProgressIndicator(
+            progress = { clampedPct / 100f },
+            modifier = Modifier.fillMaxWidth().height(6.dp),
+            color = color,
+            trackColor = Color.White.copy(alpha = 0.1f),
         )
     }
 }

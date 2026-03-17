@@ -48,6 +48,17 @@ class Database:
                 action      TEXT NOT NULL,
                 detail      TEXT
             );
+
+            CREATE TABLE IF NOT EXISTS events (
+                id        INTEGER PRIMARY KEY AUTOINCREMENT,
+                type      TEXT NOT NULL,
+                label     TEXT NOT NULL,
+                property  TEXT NOT NULL,
+                value     TEXT NOT NULL,
+                timestamp TEXT NOT NULL
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_events_ts ON events(timestamp);
         """)
         c.commit()
 
@@ -85,10 +96,31 @@ class Database:
         rows = self.conn.execute("SELECT * FROM users ORDER BY created_at").fetchall()
         return [dict(r) for r in rows]
 
+    def update_user_role(self, username: str, role: str) -> None:
+        if role not in ("admin", "user"):
+            raise ValueError(f"Invalid role: {role}")
+        existing = self.get_user(username)
+        if existing is None:
+            raise ValueError(f"User '{username}' not found")
+        if existing["role"] == "admin" and role != "admin" and self.admin_count() <= 1:
+            raise ValueError("Cannot demote the last admin")
+        self.conn.execute(
+            "UPDATE users SET role = ? WHERE username = ?", (role, username),
+        )
+        self.conn.commit()
+
+    def admin_count(self) -> int:
+        row = self.conn.execute(
+            "SELECT COUNT(*) as cnt FROM users WHERE role = 'admin'"
+        ).fetchone()
+        return row["cnt"] if row else 0
+
     def delete_user(self, username: str) -> None:
         existing = self.get_user(username)
         if existing is None:
             raise ValueError(f"User '{username}' not found")
+        if existing["role"] == "admin" and self.admin_count() <= 1:
+            raise ValueError("Cannot delete the last admin")
         self.conn.execute("DELETE FROM users WHERE username = ?", (username,))
         self.conn.commit()
 
@@ -142,3 +174,31 @@ class Database:
                 "SELECT * FROM audit_log ORDER BY id DESC LIMIT ?", (limit,)
             ).fetchall()
         return [dict(r) for r in rows]
+
+    # ── Alarm Events ──
+
+    def insert_event(
+        self, etype: str, label: str, prop: str, value: str, timestamp: str,
+    ) -> None:
+        self.conn.execute(
+            "INSERT INTO events (type, label, property, value, timestamp) VALUES (?, ?, ?, ?, ?)",
+            (etype, label, prop, value, timestamp),
+        )
+        self.conn.commit()
+
+    def get_events(self, limit: int = 50) -> list[dict]:
+        rows = self.conn.execute(
+            "SELECT * FROM events ORDER BY id DESC LIMIT ?", (limit,)
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+    def purge_old_events(self, days: int = 90) -> int:
+        from datetime import timedelta
+        cutoff = (
+            datetime.now(timezone.utc) - timedelta(days=days)
+        ).strftime("%Y-%m-%dT%H:%M:%S")
+        cursor = self.conn.execute(
+            "DELETE FROM events WHERE timestamp < ?", (cutoff,)
+        )
+        self.conn.commit()
+        return cursor.rowcount

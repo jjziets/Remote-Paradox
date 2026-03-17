@@ -55,6 +55,64 @@ interface ParadoxApi {
         @Query("limit") limit: Int = 50,
     ): Response<AuditLogResponse>
 
+    @GET("auth/users")
+    suspend fun listUsers(
+        @Header("Authorization") auth: String,
+    ): Response<UserListResponse>
+
+    @PUT("auth/users/{username}/role")
+    suspend fun updateUserRole(
+        @Header("Authorization") auth: String,
+        @Path("username") username: String,
+        @Body req: RoleUpdateRequest,
+    ): Response<ActionResult>
+
+    @DELETE("auth/users/{username}")
+    suspend fun deleteUser(
+        @Header("Authorization") auth: String,
+        @Path("username") username: String,
+    ): Response<ActionResult>
+
+    @POST("auth/invite")
+    suspend fun createInvite(
+        @Header("Authorization") auth: String,
+    ): Response<InviteResponse>
+
+    @GET("system/update-status")
+    suspend fun piUpdateStatus(
+        @Header("Authorization") auth: String,
+    ): Response<PiUpdateStatus>
+
+    @POST("system/check-update")
+    suspend fun piCheckUpdate(
+        @Header("Authorization") auth: String,
+    ): Response<ActionResult>
+
+    @POST("system/apply-update")
+    suspend fun piApplyUpdate(
+        @Header("Authorization") auth: String,
+    ): Response<ActionResult>
+
+    @GET("system/resources")
+    suspend fun systemResources(
+        @Header("Authorization") auth: String,
+    ): Response<SystemResources>
+
+    @GET("system/wifi")
+    suspend fun systemWifi(
+        @Header("Authorization") auth: String,
+    ): Response<WifiInfo>
+
+    @POST("system/reboot")
+    suspend fun systemReboot(
+        @Header("Authorization") auth: String,
+    ): Response<ActionResult>
+
+    @GET("system/ble-clients")
+    suspend fun bleClients(
+        @Header("Authorization") auth: String,
+    ): Response<BleClientsResponse>
+
     @GET("health")
     suspend fun health(): Response<HealthResponse>
 }

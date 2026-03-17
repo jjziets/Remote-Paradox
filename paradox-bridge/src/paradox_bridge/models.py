@@ -124,5 +124,39 @@ class UserListResponse(BaseModel):
     users: list[UserInfo]
 
 
+class RoleUpdateRequest(BaseModel):
+    role: str
+
+
+class SystemResourcesResponse(BaseModel):
+    cpu_percent: float
+    memory_used_mb: int
+    memory_total_mb: int
+    memory_percent: float
+    disk_used_gb: float
+    disk_total_gb: float
+    disk_percent: float
+    uptime_seconds: int
+
+
+class WifiInfoResponse(BaseModel):
+    ssid: str = ""
+    ip_address: str = ""
+    signal_dbm: int | None = None
+    signal_percent: int | None = None
+
+
+class BleClientInfo(BaseModel):
+    address: str
+    name: str
+    username: str | None = None
+    connected_at: str
+
+
+class BleClientsResponse(BaseModel):
+    clients: list[BleClientInfo]
+    count: int
+
+
 class ErrorResponse(BaseModel):
     detail: str

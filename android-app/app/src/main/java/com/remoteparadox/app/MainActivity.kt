@@ -65,11 +65,37 @@ class MainActivity : ComponentActivity() {
                 when (state.screen) {
                     Screen.Loading -> {}
 
+                    Screen.Welcome -> WelcomeScreen(
+                        onSetupPi = { vm.goToBleSetup() },
+                        onScanQr = { vm.goToScan() },
+                        onLogin = { vm.goToLogin() },
+                    )
+
+                    Screen.BleSetup -> {
+                        val bleState by (vm.bleConnectionState ?: kotlinx.coroutines.flow.MutableStateFlow(com.remoteparadox.app.data.BleConnectionState.Disconnected)).collectAsState()
+                        val bleDevs by (vm.bleDevices ?: kotlinx.coroutines.flow.MutableStateFlow(emptyList())).collectAsState()
+                        val bleResp by (vm.bleResponse ?: kotlinx.coroutines.flow.MutableStateFlow<String?>(null)).collectAsState()
+                        BleSetupScreen(
+                            connectionState = bleState,
+                            devices = bleDevs,
+                            piStatus = bleResp,
+                            manageMode = vm.bleLaunchedFromSettings,
+                            isAdmin = vm.isAdmin,
+                            authToken = vm.tokenStore.token ?: "",
+                            onBack = { vm.goBackFromBle() },
+                            onStartScan = { vm.bleStartScan() },
+                            onConnect = { vm.bleConnect(it) },
+                            onSendCommand = { vm.bleSendCommand(it) },
+                            onDisconnect = { vm.bleDisconnect() },
+                        )
+                    }
+
                     Screen.Scan -> ScanScreen(
                         onCodeScanned = { vm.onQrScanned(it) },
                         onManualEntry = { vm.goToManualSetup() },
                         hasServerConfig = vm.hasServerConfig,
                         onLogin = { vm.goToLogin() },
+                        onBack = { vm.goToWelcome() },
                     )
 
                     Screen.Setup -> SetupScreen(
@@ -122,13 +148,33 @@ class MainActivity : ComponentActivity() {
                         soundEnabled = state.soundEnabled,
                         notificationsEnabled = state.notificationsEnabled,
                         updateState = state.update,
+                        isAdmin = vm.isAdmin,
+                        piUpdate = state.piUpdate,
+                        piSystem = state.piSystem,
                         onSoundToggle = { vm.setSoundEnabled(it) },
                         onNotificationsToggle = { vm.setNotificationsEnabled(it) },
                         onCheckUpdate = { vm.checkForUpdate() },
                         onDownloadUpdate = { vm.downloadAndInstallUpdate() },
+                        onManageUsers = { vm.goToUserManagement() },
+                        onCheckPiUpdate = { vm.checkPiUpdate() },
+                        onApplyPiUpdate = { vm.applyPiUpdate() },
+                        onRefreshPiSystem = { vm.refreshPiSystem() },
+                        onRebootPi = { vm.rebootPi() },
+                        onBleLinkPi = { vm.goToBleFromSettings() },
                         onLogout = { vm.logout() },
                         onSwitchServer = { vm.switchServer() },
                         onBack = { vm.goBackToDashboard() },
+                    )
+
+                    Screen.UserManagement -> UserManagementScreen(
+                        state = state.userMgmt,
+                        currentUsername = vm.tokenStore.username,
+                        onBack = { vm.goBackFromUserMgmt() },
+                        onRefresh = { vm.refreshUsers() },
+                        onUpdateRole = { user, role -> vm.updateUserRole(user, role) },
+                        onDelete = { vm.deleteUser(it) },
+                        onGenerateInvite = { vm.generateInvite() },
+                        onDismissInvite = { vm.dismissInvite() },
                     )
                 }
             }

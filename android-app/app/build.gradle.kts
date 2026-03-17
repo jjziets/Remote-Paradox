@@ -13,8 +13,8 @@ android {
         applicationId = "com.remoteparadox.app"
         minSdk = 26
         targetSdk = 35
-        versionCode = 13
-        versionName = "0.7.6"
+        versionCode = 49
+        versionName = "0.9.2"
         buildConfigField("String", "GITHUB_REPO", "\"jjziets/Remote-Paradox\"")
     }
 
@@ -81,4 +81,7 @@ dependencies {
 
     // Splash screen
     implementation("androidx.core:core-splashscreen:1.0.1")
+
+    // Testing
+    testImplementation("junit:junit:4.13.2")
 }

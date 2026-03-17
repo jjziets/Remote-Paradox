@@ -39,7 +39,7 @@ data class BypassRequest(
 )
 
 @Serializable
-data class ActionResult(val success: Boolean, val action: String, val message: String = "")
+data class ActionResult(val success: Boolean, val action: String = "", val message: String = "")
 
 @Serializable
 data class ZoneInfo(
@@ -118,6 +118,67 @@ data class AuditEntry(
 
 @Serializable
 data class AuditLogResponse(val entries: List<AuditEntry>)
+
+@Serializable
+data class UserInfo(
+    val username: String,
+    val role: String,
+    @SerialName("created_at") val createdAt: String,
+)
+
+@Serializable
+data class UserListResponse(val users: List<UserInfo>)
+
+@Serializable
+data class RoleUpdateRequest(val role: String)
+
+@Serializable
+data class InviteResponse(
+    val uri: String,
+    @SerialName("qr_data_uri") val qrDataUri: String = "",
+    @SerialName("expires_in") val expiresIn: Int = 900,
+)
+
+@Serializable
+data class PiUpdateStatus(
+    val pending: Boolean = false,
+    @SerialName("current_version") val currentVersion: String = "0.0.0",
+    @SerialName("new_version") val newVersion: String? = null,
+)
+
+@Serializable
+data class SystemResources(
+    @SerialName("cpu_percent") val cpuPercent: Double = 0.0,
+    @SerialName("memory_used_mb") val memoryUsedMb: Int = 0,
+    @SerialName("memory_total_mb") val memoryTotalMb: Int = 0,
+    @SerialName("memory_percent") val memoryPercent: Double = 0.0,
+    @SerialName("disk_used_gb") val diskUsedGb: Double = 0.0,
+    @SerialName("disk_total_gb") val diskTotalGb: Double = 0.0,
+    @SerialName("disk_percent") val diskPercent: Double = 0.0,
+    @SerialName("uptime_seconds") val uptimeSeconds: Int = 0,
+)
+
+@Serializable
+data class WifiInfo(
+    val ssid: String = "",
+    @SerialName("ip_address") val ipAddress: String = "",
+    @SerialName("signal_dbm") val signalDbm: Int? = null,
+    @SerialName("signal_percent") val signalPercent: Int? = null,
+)
+
+@Serializable
+data class BleClientInfo(
+    val address: String,
+    val name: String,
+    val username: String? = null,
+    @SerialName("connected_at") val connectedAt: String = "",
+)
+
+@Serializable
+data class BleClientsResponse(
+    val clients: List<BleClientInfo> = emptyList(),
+    val count: Int = 0,
+)
 
 @Serializable
 data class ErrorResponse(val detail: String)

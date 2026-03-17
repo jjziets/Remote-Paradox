@@ -169,3 +169,68 @@ class TestAuditLog:
         assert len(logs) == 1
         assert logs[0]["username"] == "john"
         db.close()
+
+
+class TestEventPersistence:
+    def test_events_table_created(self, tmp_db):
+        db = Database(tmp_db)
+        db.init()
+        tables = db.list_tables()
+        assert "events" in tables
+        db.close()
+
+    def test_insert_event(self, tmp_db):
+        db = Database(tmp_db)
+        db.init()
+        db.insert_event(
+            etype="zone", label="Front Door", prop="open",
+            value="true", timestamp="2026-03-09T10:00:00",
+        )
+        events = db.get_events(limit=10)
+        assert len(events) == 1
+        assert events[0]["type"] == "zone"
+        assert events[0]["label"] == "Front Door"
+        assert events[0]["property"] == "open"
+        assert events[0]["value"] == "true"
+        assert events[0]["timestamp"] == "2026-03-09T10:00:00"
+        db.close()
+
+    def test_get_events_ordering(self, tmp_db):
+        db = Database(tmp_db)
+        db.init()
+        db.insert_event("zone", "Door", "open", "true", "2026-03-09T10:00:00")
+        db.insert_event("zone", "Window", "open", "true", "2026-03-09T10:01:00")
+        events = db.get_events(limit=10)
+        assert len(events) == 2
+        assert events[0]["label"] == "Window"  # most recent first
+        assert events[1]["label"] == "Door"
+        db.close()
+
+    def test_get_events_limit(self, tmp_db):
+        db = Database(tmp_db)
+        db.init()
+        for i in range(20):
+            db.insert_event("zone", f"Zone {i}", "open", "true", f"2026-03-09T10:{i:02d}:00")
+        events = db.get_events(limit=5)
+        assert len(events) == 5
+        db.close()
+
+    def test_purge_old_events(self, tmp_db):
+        db = Database(tmp_db)
+        db.init()
+        db.insert_event("zone", "Old", "open", "true", "2025-01-01T00:00:00")
+        db.insert_event("zone", "Recent", "open", "true", "2026-03-09T10:00:00")
+        purged = db.purge_old_events(days=90)
+        assert purged >= 1
+        events = db.get_events(limit=10)
+        assert len(events) == 1
+        assert events[0]["label"] == "Recent"
+        db.close()
+
+    def test_purge_returns_zero_when_nothing_old(self, tmp_db):
+        db = Database(tmp_db)
+        db.init()
+        db.insert_event("zone", "Recent", "open", "true", "2026-03-09T10:00:00")
+        purged = db.purge_old_events(days=90)
+        assert purged == 0
+        db.close()
