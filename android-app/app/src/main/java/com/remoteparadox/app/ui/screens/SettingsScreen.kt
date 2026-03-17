@@ -434,7 +434,13 @@ fun SettingsScreen(
 
                         if (piUpdate.message != null) {
                             Spacer(Modifier.height(8.dp))
-                            Text(piUpdate.message, color = if (piUpdate.pending) Color(0xFFFF9800) else Color(0xFF4CAF50), fontSize = 13.sp)
+                            val msgColor = when {
+                                piUpdate.pending -> Color(0xFFFF9800)
+                                piUpdate.message.contains("up to date", ignoreCase = true) -> Color(0xFF4CAF50)
+                                piUpdate.message.startsWith("Can't") || piUpdate.message.startsWith("No connection") || piUpdate.message.startsWith("Connection error") || piUpdate.message.startsWith("Failed") -> Color.White.copy(alpha = 0.5f)
+                                else -> Color(0xFF4CAF50)
+                            }
+                            Text(piUpdate.message, color = msgColor, fontSize = 13.sp)
                         }
 
                         if (piUpdate.pending && piUpdate.newVersion != null) {

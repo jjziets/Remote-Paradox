@@ -128,6 +128,10 @@ class RoleUpdateRequest(BaseModel):
     role: str
 
 
+class PasswordResetRequest(BaseModel):
+    password: str = Field(min_length=6)
+
+
 class SystemResourcesResponse(BaseModel):
     cpu_percent: float
     memory_used_mb: int

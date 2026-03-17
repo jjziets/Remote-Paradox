@@ -71,20 +71,36 @@ AUTHENTICATED_COMMANDS = {
     "system_resources", "system_wifi", "system_reboot",
     "bypass", "ble_clients", "event_history", "audit_logs",
     "list_users", "create_invite", "update_role", "delete_user",
+    "reset_password",
 }
 
 
 # ── Client tracker ──
 
 
+_BLE_CLIENTS_FILE = Path("/tmp/ble_clients.json")
+
+
 class BleClientTracker:
-    """Track connected BLE clients and their identity."""
+    """Track connected BLE clients and persist to shared file."""
 
     def __init__(self):
         self._clients: dict[str, dict] = {}
 
+    def _persist(self) -> None:
+        try:
+            _BLE_CLIENTS_FILE.write_text(json.dumps({
+                "clients": list(self._clients.values()),
+                "count": len(self._clients),
+            }))
+        except Exception:
+            pass
+
     def client_connected(self, address: str, name: str = "Unknown") -> None:
-        # Clear stale entries — phone uses random addresses, so keep max 1
+        if address in self._clients:
+            if name != "Unknown":
+                self._clients[address]["name"] = name
+            return
         self._clients.clear()
         self._clients[address] = {
             "address": address,
@@ -93,15 +109,23 @@ class BleClientTracker:
             "connected_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
         }
         logger.info("BLE client connected: %s (%s)", address, name)
+        self._persist()
 
     def client_disconnected(self, address: str) -> None:
         removed = self._clients.pop(address, None)
         if removed:
             logger.info("BLE client disconnected: %s", address)
+        self._persist()
 
     def set_username(self, address: str, username: str) -> None:
         if address in self._clients:
             self._clients[address]["username"] = username
+            self._persist()
+
+    def set_device_name(self, address: str, device: str) -> None:
+        if address in self._clients and device:
+            self._clients[address]["name"] = device
+            self._persist()
 
     def get_clients(self) -> list[dict]:
         return list(self._clients.values())
@@ -115,6 +139,12 @@ _tracker = BleClientTracker()
 
 
 def get_tracker() -> BleClientTracker:
+    """Read BLE client state from shared file (works cross-process)."""
+    try:
+        data = json.loads(_BLE_CLIENTS_FILE.read_text())
+        _tracker._clients = {c["address"]: c for c in data.get("clients", [])}
+    except Exception:
+        pass
     return _tracker
 
 
@@ -274,10 +304,12 @@ def handle_command(data: str) -> str:
         payload = _validate_token(token)
         if payload is None:
             return json.dumps({"error": "invalid or expired token"})
-        # Set username on the BLE client tracker
         username = payload.get("sub", "")
+        device = cmd.get("device", "")
         for addr in list(_tracker._clients.keys()):
             _tracker.set_username(addr, username)
+            if device:
+                _tracker.set_device_name(addr, device)
         return json.dumps({
             "result": "authenticated",
             "username": payload.get("sub"),
@@ -289,6 +321,11 @@ def handle_command(data: str) -> str:
         payload = _validate_token(token)
         if payload is None:
             return json.dumps({"error": "authentication required"})
+
+        username = payload.get("sub", "")
+        if username:
+            for addr in list(_tracker._clients.keys()):
+                _tracker.set_username(addr, username)
 
         if action in ADMIN_ONLY_COMMANDS and payload.get("role") != "admin":
             return json.dumps({"error": "admin privileges required"})
@@ -332,6 +369,10 @@ def handle_command(data: str) -> str:
         if action == "delete_user":
             username = cmd.get("username", "")
             return _proxy_delete(f"/auth/users/{username}", token)
+        if action == "reset_password":
+            username = cmd.get("username", "")
+            password = cmd.get("password", "")
+            return _proxy_put(f"/auth/users/{username}/password", token, {"password": password})
 
     return json.dumps({"error": f"unknown command: {action}"})
 

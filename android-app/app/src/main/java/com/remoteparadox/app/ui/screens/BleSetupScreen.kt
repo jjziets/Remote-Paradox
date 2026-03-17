@@ -62,7 +62,8 @@ fun BleSetupScreen(
             step = 1
             // Authenticate over BLE so the Pi knows which user is connected
             if (authToken.isNotBlank()) {
-                onSendCommand("""{"cmd":"auth","token":"$authToken"}""")
+                val deviceName = android.os.Build.MANUFACTURER.replaceFirstChar { it.uppercase() } + " " + android.os.Build.MODEL
+                onSendCommand("""{"cmd":"auth","token":"$authToken","device":"$deviceName"}""")
             }
             onSendCommand("""{"cmd":"status"}""")
         }

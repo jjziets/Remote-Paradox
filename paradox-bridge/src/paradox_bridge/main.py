@@ -35,6 +35,7 @@ from paradox_bridge.models import (
     LoginResponse,
     PanicRequest,
     PartitionResponse,
+    PasswordResetRequest,
     RegisterRequest,
     RegisterResponse,
     SystemResourcesResponse,
@@ -457,6 +458,24 @@ def delete_user(
         raise HTTPException(status_code=400, detail=str(exc))
     audit.record(admin["sub"], "delete_user", f"deleted {username}")
     return ActionResult(success=True, action="delete_user", message=f"User '{username}' deleted")
+
+
+@app.put("/auth/users/{username}/password", response_model=ActionResult)
+def reset_user_password(
+    username: str,
+    req: PasswordResetRequest,
+    admin: Annotated[dict, Depends(require_admin)],
+    auth: Annotated[AuthService, Depends(get_auth)],
+    audit: Annotated[AuditService, Depends(get_audit)],
+):
+    if username == admin["sub"]:
+        raise HTTPException(status_code=400, detail="Cannot reset your own password")
+    try:
+        auth.reset_password(admin["sub"], username, req.password)
+    except (ValueError, PermissionError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    audit.record(admin["sub"], "reset_password", f"Reset password for {username}")
+    return ActionResult(success=True, action="reset_password", message=f"Password reset for '{username}'")
 
 
 # ── System update routes ──

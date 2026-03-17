@@ -73,6 +73,13 @@ interface ParadoxApi {
         @Path("username") username: String,
     ): Response<ActionResult>
 
+    @PUT("auth/users/{username}/password")
+    suspend fun resetPassword(
+        @Header("Authorization") auth: String,
+        @Path("username") username: String,
+        @Body req: PasswordResetRequest,
+    ): Response<ActionResult>
+
     @POST("auth/invite")
     suspend fun createInvite(
         @Header("Authorization") auth: String,

@@ -151,6 +151,72 @@ class TestUserManagement:
         assert resp.status_code == 400
 
 
+class TestResetPassword:
+    def _create_user(self, client, admin_token, username="john"):
+        inv = client.post("/auth/invite", headers=auth_header(admin_token)).json()
+        client.post("/auth/register", json={
+            "invite_code": inv["code"], "username": username, "password": "pass1234"
+        })
+
+    def test_reset_password_success(self, client, admin_token):
+        self._create_user(client, admin_token)
+        resp = client.put(
+            "/auth/users/john/password",
+            json={"password": "newpass123"},
+            headers=auth_header(admin_token),
+        )
+        assert resp.status_code == 200
+        assert resp.json()["success"] is True
+        login = client.post("/auth/login", json={"username": "john", "password": "newpass123"})
+        assert login.status_code == 200
+
+    def test_reset_password_old_password_fails(self, client, admin_token):
+        self._create_user(client, admin_token)
+        client.put(
+            "/auth/users/john/password",
+            json={"password": "newpass123"},
+            headers=auth_header(admin_token),
+        )
+        login = client.post("/auth/login", json={"username": "john", "password": "pass1234"})
+        assert login.status_code == 401
+
+    def test_reset_own_password_rejected(self, client, admin_token):
+        resp = client.put(
+            "/auth/users/admin/password",
+            json={"password": "newpass123"},
+            headers=auth_header(admin_token),
+        )
+        assert resp.status_code == 400
+
+    def test_non_admin_cannot_reset(self, client, admin_token):
+        self._create_user(client, admin_token)
+        login = client.post("/auth/login", json={"username": "john", "password": "pass1234"})
+        user_token = login.json()["token"]
+        resp = client.put(
+            "/auth/users/admin/password",
+            json={"password": "hacked"},
+            headers=auth_header(user_token),
+        )
+        assert resp.status_code == 403
+
+    def test_reset_password_too_short(self, client, admin_token):
+        self._create_user(client, admin_token)
+        resp = client.put(
+            "/auth/users/john/password",
+            json={"password": "abc"},
+            headers=auth_header(admin_token),
+        )
+        assert resp.status_code == 422
+
+    def test_reset_nonexistent_user(self, client, admin_token):
+        resp = client.put(
+            "/auth/users/nobody/password",
+            json={"password": "newpass123"},
+            headers=auth_header(admin_token),
+        )
+        assert resp.status_code == 400
+
+
 class TestAlarmRoutes:
     def test_status_when_disconnected(self, client, admin_token):
         resp = client.get("/alarm/status", headers=auth_header(admin_token))

@@ -86,6 +86,24 @@ class TestUsers:
         db.close()
 
 
+class TestUpdatePassword:
+    def test_update_password(self, tmp_db):
+        db = Database(tmp_db)
+        db.init()
+        db.create_user("john", "old_hash")
+        db.update_password("john", "new_hash")
+        user = db.get_user("john")
+        assert user["password_hash"] == "new_hash"
+        db.close()
+
+    def test_update_password_nonexistent_user_raises(self, tmp_db):
+        db = Database(tmp_db)
+        db.init()
+        with pytest.raises(ValueError, match="not found"):
+            db.update_password("nobody", "hash")
+        db.close()
+
+
 class TestInvites:
     @staticmethod
     def _db_with_admin(tmp_db):
