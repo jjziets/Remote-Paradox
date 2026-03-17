@@ -35,10 +35,12 @@ fun UserManagementScreen(
     onRefresh: () -> Unit,
     onUpdateRole: (username: String, newRole: String) -> Unit,
     onDelete: (username: String) -> Unit,
+    onResetPassword: (username: String, newPassword: String) -> Unit,
     onGenerateInvite: () -> Unit,
     onDismissInvite: () -> Unit,
 ) {
     var confirmDelete by remember { mutableStateOf<String?>(null) }
+    var resetPasswordUser by remember { mutableStateOf<String?>(null) }
 
     Scaffold(
         topBar = {
@@ -177,6 +179,7 @@ fun UserManagementScreen(
                         onUpdateRole(user.username, newRole)
                     },
                     onDelete = { confirmDelete = user.username },
+                    onResetPassword = { resetPasswordUser = user.username },
                 )
             }
 
@@ -200,6 +203,17 @@ fun UserManagementScreen(
             },
         )
     }
+
+    if (resetPasswordUser != null) {
+        ResetPasswordDialog(
+            username = resetPasswordUser!!,
+            onConfirm = { newPassword ->
+                onResetPassword(resetPasswordUser!!, newPassword)
+                resetPasswordUser = null
+            },
+            onDismiss = { resetPasswordUser = null },
+        )
+    }
 }
 
 @Composable
@@ -208,6 +222,7 @@ private fun UserCard(
     isSelf: Boolean,
     onToggleRole: () -> Unit,
     onDelete: () -> Unit,
+    onResetPassword: () -> Unit,
 ) {
     val isAdmin = user.role == "admin"
     Card(
@@ -251,6 +266,14 @@ private fun UserCard(
                 )
             }
             if (!isSelf) {
+                IconButton(onClick = onResetPassword) {
+                    Icon(
+                        Icons.Default.Lock,
+                        contentDescription = "Reset password",
+                        tint = Color(0xFF64B5F6),
+                        modifier = Modifier.size(20.dp),
+                    )
+                }
                 IconButton(onClick = onToggleRole) {
                     Icon(
                         if (isAdmin) Icons.Default.PersonRemove else Icons.Default.Security,
@@ -265,4 +288,59 @@ private fun UserCard(
             }
         }
     }
+}
+
+@Composable
+private fun ResetPasswordDialog(
+    username: String,
+    onConfirm: (String) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    var password by remember { mutableStateOf("") }
+    var confirmPassword by remember { mutableStateOf("") }
+    val mismatch = confirmPassword.isNotEmpty() && password != confirmPassword
+    val tooShort = password.isNotEmpty() && password.length < 6
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Reset Password") },
+        text = {
+            Column {
+                Text(
+                    "Set a new password for '$username'",
+                    color = Color.White.copy(alpha = 0.7f),
+                    fontSize = 14.sp,
+                )
+                Spacer(Modifier.height(12.dp))
+                OutlinedTextField(
+                    value = password,
+                    onValueChange = { password = it },
+                    label = { Text("New Password") },
+                    singleLine = true,
+                    isError = tooShort,
+                    supportingText = if (tooShort) {{ Text("At least 6 characters", color = Color(0xFFE94560)) }} else null,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                Spacer(Modifier.height(8.dp))
+                OutlinedTextField(
+                    value = confirmPassword,
+                    onValueChange = { confirmPassword = it },
+                    label = { Text("Confirm Password") },
+                    singleLine = true,
+                    isError = mismatch,
+                    supportingText = if (mismatch) {{ Text("Passwords don't match", color = Color(0xFFE94560)) }} else null,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+            }
+        },
+        confirmButton = {
+            TextButton(
+                onClick = { onConfirm(password) },
+                enabled = password.length >= 6 && password == confirmPassword,
+            ) { Text("RESET", color = if (password.length >= 6 && password == confirmPassword) Color(0xFF4CAF50) else Color.Gray) }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text("Cancel") }
+        },
+    )
 }

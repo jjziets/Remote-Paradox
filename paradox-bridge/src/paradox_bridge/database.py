@@ -115,6 +115,16 @@ class Database:
         ).fetchone()
         return row["cnt"] if row else 0
 
+    def update_password(self, username: str, new_password_hash: str) -> None:
+        existing = self.get_user(username)
+        if existing is None:
+            raise ValueError(f"User '{username}' not found")
+        self.conn.execute(
+            "UPDATE users SET password_hash = ? WHERE username = ?",
+            (new_password_hash, username),
+        )
+        self.conn.commit()
+
     def delete_user(self, username: str) -> None:
         existing = self.get_user(username)
         if existing is None:

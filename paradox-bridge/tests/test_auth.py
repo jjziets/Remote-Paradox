@@ -103,6 +103,43 @@ class TestJWT:
             auth.decode_token(tampered)
 
 
+class TestResetPassword:
+    def test_admin_can_reset_user_password(self, auth_env):
+        auth, db = auth_env
+        auth.setup_admin("admin", "secret123")
+        db.create_user("john", auth.hash_password("oldpass"), role="user")
+        auth.reset_password("admin", "john", "newpass")
+        token = auth.login("john", "newpass")
+        assert isinstance(token, str)
+
+    def test_admin_cannot_reset_own_password(self, auth_env):
+        auth, _ = auth_env
+        auth.setup_admin("admin", "secret123")
+        with pytest.raises(ValueError, match="Cannot reset your own password"):
+            auth.reset_password("admin", "admin", "newpass")
+
+    def test_non_admin_cannot_reset_password(self, auth_env):
+        auth, db = auth_env
+        auth.setup_admin("admin", "secret123")
+        db.create_user("john", auth.hash_password("pass"), role="user")
+        db.create_user("jane", auth.hash_password("pass"), role="user")
+        with pytest.raises(PermissionError, match="Admin required"):
+            auth.reset_password("john", "jane", "newpass")
+
+    def test_reset_nonexistent_user_raises(self, auth_env):
+        auth, _ = auth_env
+        auth.setup_admin("admin", "secret123")
+        with pytest.raises(ValueError, match="not found"):
+            auth.reset_password("admin", "nobody", "newpass")
+
+    def test_reset_password_too_short_raises(self, auth_env):
+        auth, db = auth_env
+        auth.setup_admin("admin", "secret123")
+        db.create_user("john", auth.hash_password("pass"), role="user")
+        with pytest.raises(ValueError, match="at least 6 characters"):
+            auth.reset_password("admin", "john", "abc")
+
+
 class TestInviteAndRegister:
     def test_generate_invite(self, auth_env):
         auth, db = auth_env

@@ -695,7 +695,13 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     fun goToSettings() {
         _state.update { it.copy(screen = Screen.Settings) }
-        if (isAdmin) refreshPiSystem()
+        if (isAdmin) {
+            refreshPiSystem()
+            // Auto-fetch Pi version if not yet loaded
+            if (_state.value.piUpdate.currentVersion == "?") {
+                checkPiUpdate()
+            }
+        }
     }
 
     fun goBackToDashboard() {
@@ -807,6 +813,29 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
+    fun resetUserPassword(username: String, newPassword: String) {
+        val a = api
+        if (a == null || (!httpReachable && isBleConnected)) {
+            bleUserAction("reset_password", mapOf("username" to username, "password" to newPassword))
+            return
+        }
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val resp = a.resetPassword(tokenStore.bearerHeader, username, PasswordResetRequest(newPassword))
+                if (resp.isSuccessful) {
+                    _state.update { it.copy(userMgmt = it.userMgmt.copy(error = null)) }
+                    refreshUsers()
+                } else {
+                    val errBody = resp.errorBody()?.string() ?: "Failed"
+                    _state.update { it.copy(userMgmt = it.userMgmt.copy(error = errBody)) }
+                }
+            } catch (e: Exception) {
+                if (isBleConnected) bleUserAction("reset_password", mapOf("username" to username, "password" to newPassword))
+                else _state.update { it.copy(userMgmt = it.userMgmt.copy(error = e.message)) }
+            }
+        }
+    }
+
     fun generateInvite() {
         val a = api
         if (a == null || (!httpReachable && isBleConnected)) {
@@ -871,7 +900,20 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     // ── Pi Update Management ──
 
     fun checkPiUpdate() {
-        val a = api ?: return
+        if (!isNetworkAvailable()) {
+            httpReachable = false
+            if (isBleConnected) {
+                checkPiUpdateViaBle()
+            } else {
+                _state.update { it.copy(piUpdate = it.piUpdate.copy(checking = false, message = "No connection — connect to Wi-Fi or BLE to check for updates")) }
+            }
+            return
+        }
+        val a = api
+        if (a == null || (!httpReachable && isBleConnected)) {
+            checkPiUpdateViaBle()
+            return
+        }
         _state.update { it.copy(piUpdate = it.piUpdate.copy(checking = true, message = null)) }
         viewModelScope.launch(Dispatchers.IO) {
             try {
@@ -888,16 +930,66 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                         ))
                     }
                 } else {
-                    _state.update { it.copy(piUpdate = it.piUpdate.copy(checking = false, message = "Failed to check")) }
+                    _state.update { it.copy(piUpdate = it.piUpdate.copy(checking = false, message = "Failed to check for updates")) }
                 }
             } catch (e: Exception) {
-                _state.update { it.copy(piUpdate = it.piUpdate.copy(checking = false, message = e.message)) }
+                if (isBleConnected) {
+                    checkPiUpdateViaBle()
+                } else {
+                    val friendly = when (e) {
+                        is java.net.UnknownHostException,
+                        is java.net.ConnectException,
+                        is java.net.SocketTimeoutException -> "Can't reach Pi — check your Wi-Fi connection"
+                        is java.io.IOException -> "Connection error — Pi may be offline"
+                        else -> "Can't check for updates: ${e.message}"
+                    }
+                    _state.update { it.copy(piUpdate = it.piUpdate.copy(checking = false, message = friendly)) }
+                }
+            }
+        }
+    }
+
+    private fun checkPiUpdateViaBle() {
+        val ble = bleClient ?: return
+        val token = tokenStore.token ?: return
+        _state.update { it.copy(piUpdate = it.piUpdate.copy(checking = true, message = null)) }
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                ble.sendCommandAsync("""{"cmd":"pi_check_update","token":"$token"}""")
+                val resp = ble.sendCommandAsync("""{"cmd":"pi_update_status","token":"$token"}""")
+                if (resp != null) {
+                    val status = json.decodeFromString<PiUpdateStatus>(resp)
+                    _state.update {
+                        it.copy(piUpdate = PiUpdateState(
+                            pending = status.pending,
+                            currentVersion = status.currentVersion,
+                            newVersion = status.newVersion,
+                            message = if (status.pending) "Update available: ${status.newVersion}" else "Pi is up to date",
+                        ))
+                    }
+                } else {
+                    _state.update { it.copy(piUpdate = it.piUpdate.copy(checking = false, message = "BLE timeout")) }
+                }
+            } catch (e: Exception) {
+                _state.update { it.copy(piUpdate = it.piUpdate.copy(checking = false, message = "BLE: ${e.message}")) }
             }
         }
     }
 
     fun applyPiUpdate() {
-        val a = api ?: return
+        if (!isNetworkAvailable()) { httpReachable = false }
+        val a = api
+        if (a == null || (!httpReachable && isBleConnected)) {
+            val ble = bleClient ?: return
+            val token = tokenStore.token ?: return
+            _state.update { it.copy(piUpdate = it.piUpdate.copy(applying = true, message = "Applying update via BLE...")) }
+            viewModelScope.launch(Dispatchers.IO) {
+                ble.sendCommandAsync("""{"cmd":"pi_apply_update","token":"$token"}""")
+                _state.update { it.copy(piUpdate = it.piUpdate.copy(applying = false, pending = false, message = "Update applied. Service restarting...")) }
+            }
+            return
+        }
+        if (a == null) return
         _state.update { it.copy(piUpdate = it.piUpdate.copy(applying = true, message = "Applying update...")) }
         viewModelScope.launch(Dispatchers.IO) {
             try {

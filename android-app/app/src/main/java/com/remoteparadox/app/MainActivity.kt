@@ -173,6 +173,7 @@ class MainActivity : ComponentActivity() {
                         onRefresh = { vm.refreshUsers() },
                         onUpdateRole = { user, role -> vm.updateUserRole(user, role) },
                         onDelete = { vm.deleteUser(it) },
+                        onResetPassword = { user, pass -> vm.resetUserPassword(user, pass) },
                         onGenerateInvite = { vm.generateInvite() },
                         onDismissInvite = { vm.dismissInvite() },
                     )

@@ -133,6 +133,9 @@ data class UserListResponse(val users: List<UserInfo>)
 data class RoleUpdateRequest(val role: String)
 
 @Serializable
+data class PasswordResetRequest(val password: String)
+
+@Serializable
 data class InviteResponse(
     val uri: String,
     @SerialName("qr_data_uri") val qrDataUri: String = "",

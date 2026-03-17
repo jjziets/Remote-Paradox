@@ -104,6 +104,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;b
   <h1>Remote Paradox</h1>
   <div class="top-btns">
     <span class="user" id="userLabel"></span>
+    <button id="btnUsers" style="display:none" onclick="doUsers()">Users</button>
     <button id="btnInvite" style="display:none" onclick="doInvite()">+ Invite</button>
     <button onclick="doRefresh()">Refresh</button>
     <button onclick="doLogout()">Logout</button>
@@ -144,6 +145,30 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;b
 
   <div id="elZones"></div>
   <div id="elHist" style="display:none"></div>
+</div>
+
+<!-- Users modal (admin) -->
+<div id="usersModal" class="modal-overlay" style="display:none" onclick="closeUsers(event)">
+  <div class="modal" onclick="event.stopPropagation()" style="text-align:left;max-width:440px">
+    <h2 style="text-align:center;margin-bottom:16px">User Management</h2>
+    <div id="usersContent"></div>
+    <div style="text-align:center;margin-top:12px">
+      <button class="close-btn" onclick="closeUsers()">Close</button>
+    </div>
+  </div>
+</div>
+
+<!-- Reset password modal -->
+<div id="resetPwModal" class="modal-overlay" style="display:none" onclick="closeResetPw(event)">
+  <div class="modal" onclick="event.stopPropagation()" style="max-width:360px">
+    <h2 style="margin-bottom:12px">Reset Password</h2>
+    <p style="opacity:.6;font-size:13px;margin-bottom:12px">New password for <b id="resetPwUser"></b></p>
+    <input id="resetPw1" type="password" placeholder="New password" style="width:100%;padding:10px;margin-bottom:8px;border-radius:8px;border:1px solid rgba(255,255,255,.2);background:#1a1a2e;color:#fff;font-size:14px">
+    <input id="resetPw2" type="password" placeholder="Confirm password" style="width:100%;padding:10px;margin-bottom:4px;border-radius:8px;border:1px solid rgba(255,255,255,.2);background:#1a1a2e;color:#fff;font-size:14px">
+    <div id="resetPwErr" class="err" style="margin:8px 0"></div>
+    <button class="btn blue" style="width:100%;margin-top:8px" onclick="doResetPw()">Reset Password</button>
+    <div style="text-align:center;margin-top:8px"><button class="close-btn" onclick="closeResetPw()">Cancel</button></div>
+  </div>
 </div>
 
 <!-- Invite QR modal -->
@@ -196,6 +221,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;b
     $('vApp').style.display = '';
     $('userLabel').textContent = username || '';
     $('btnInvite').style.display = (userRole === 'admin') ? '' : 'none';
+    $('btnUsers').style.display = (userRole === 'admin') ? '' : 'none';
     if (alarmCode) {
       $('elCodeSetup').style.display = 'none';
       $('elCtrls').style.display = '';
@@ -475,6 +501,63 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;b
   window.closeInvite = function(e) {
     if (e && e.target !== $('inviteModal')) return;
     $('inviteModal').style.display = 'none';
+  };
+
+  // ---- User Management ----
+  var _resetTarget = '';
+  window.doUsers = function() {
+    var el = $('usersContent');
+    el.innerHTML = '<p style="opacity:.5">Loading users…</p>';
+    $('usersModal').style.display = '';
+    api('GET', '/auth/users').then(function(d) {
+      var users = d.users || [];
+      if (!users.length) { el.innerHTML = '<p style="opacity:.5">No users found</p>'; return; }
+      var h = '';
+      users.forEach(function(u) {
+        var isSelf = u.username === username;
+        var badge = u.role === 'admin' ? '<span style="color:#4caf50;font-weight:700;font-size:11px"> ADMIN</span>' : '';
+        var selfBadge = isSelf ? '<span style="color:#64b5f6;font-size:11px"> (you)</span>' : '';
+        var btns = '';
+        if (!isSelf) {
+          btns = '<button style="background:none;border:1px solid rgba(100,181,246,.3);color:#64b5f6;padding:4px 10px;border-radius:6px;cursor:pointer;font-size:11px;margin-right:4px" onclick="openResetPw(\'' + u.username + '\')">Reset PW</button>'
+            + '<button style="background:none;border:1px solid rgba(233,69,96,.3);color:#e94560;padding:4px 10px;border-radius:6px;cursor:pointer;font-size:11px" onclick="doDeleteUser(\'' + u.username + '\')">Delete</button>';
+        }
+        h += '<div style="display:flex;align-items:center;justify-content:space-between;padding:8px 0;border-bottom:1px solid rgba(255,255,255,.06)">'
+          + '<div><span style="font-weight:600">' + u.username + '</span>' + badge + selfBadge + '</div>'
+          + '<div>' + btns + '</div></div>';
+      });
+      el.innerHTML = h;
+    }).catch(function() { el.innerHTML = '<p class="err" style="display:block">Failed to load users</p>'; });
+  };
+  window.closeUsers = function(e) {
+    if (e && e.target !== $('usersModal')) return;
+    $('usersModal').style.display = 'none';
+  };
+  window.doDeleteUser = function(u) {
+    if (!confirm('Delete user "' + u + '"? This cannot be undone.')) return;
+    api('DELETE', '/auth/users/' + u).then(function(d) {
+      if (d.success) doUsers(); else alert(d.message || 'Failed');
+    }).catch(function(e) { alert(String(e)); });
+  };
+  window.openResetPw = function(u) {
+    _resetTarget = u;
+    $('resetPwUser').textContent = u;
+    $('resetPw1').value = ''; $('resetPw2').value = '';
+    $('resetPwErr').style.display = 'none';
+    $('resetPwModal').style.display = '';
+  };
+  window.closeResetPw = function(e) {
+    if (e && e.target !== $('resetPwModal')) return;
+    $('resetPwModal').style.display = 'none';
+  };
+  window.doResetPw = function() {
+    var p1 = $('resetPw1').value, p2 = $('resetPw2').value;
+    if (p1.length < 6) { $('resetPwErr').textContent = 'At least 6 characters'; $('resetPwErr').style.display = ''; return; }
+    if (p1 !== p2) { $('resetPwErr').textContent = 'Passwords don\'t match'; $('resetPwErr').style.display = ''; return; }
+    api('PUT', '/auth/users/' + _resetTarget + '/password', { password: p1 }).then(function(d) {
+      if (d.success) { closeResetPw(); doUsers(); alert('Password reset for ' + _resetTarget); }
+      else { $('resetPwErr').textContent = d.message || d.detail || 'Failed'; $('resetPwErr').style.display = ''; }
+    }).catch(function(e) { $('resetPwErr').textContent = String(e); $('resetPwErr').style.display = ''; });
   };
 
   // INIT

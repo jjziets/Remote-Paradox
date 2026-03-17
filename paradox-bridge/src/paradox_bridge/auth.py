@@ -76,6 +76,18 @@ class AuthService:
                 raise ValueError("Token expired") from exc
             raise ValueError("Invalid token") from exc
 
+    # ── Password Reset ──
+
+    def reset_password(self, admin_username: str, target_username: str, new_password: str) -> None:
+        admin = self._db.get_user(admin_username)
+        if admin is None or admin["role"] != "admin":
+            raise PermissionError("Admin required")
+        if admin_username == target_username:
+            raise ValueError("Cannot reset your own password")
+        if len(new_password) < 6:
+            raise ValueError("Password must be at least 6 characters")
+        self._db.update_password(target_username, self.hash_password(new_password))
+
     # ── Invites ──
 
     def generate_invite(self, requesting_username: str) -> str:
