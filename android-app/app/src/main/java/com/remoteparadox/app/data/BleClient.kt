@@ -9,6 +9,8 @@ import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import java.util.UUID
 
 private const val TAG = "BleClient"
@@ -33,8 +35,10 @@ class BleClient(private val context: Context) {
         private val NUS_TX = UUID.fromString("6e400003-b5a3-f393-e0a9-e50e24dcca9e")
         private val CCC_DESCRIPTOR = UUID.fromString("00002902-0000-1000-8000-00805f9b34fb")
         private const val GATT_ERROR = 133
+        private const val GATT_INSUF_AUTH = 5
         private const val GATT_CONN_TIMEOUT = 8
         private const val GATT_CONN_TERMINATE_LOCAL = 22
+        private const val GATT_CONN_REFUSED = 147
         private const val MAX_RETRIES = 3
         private const val RETRY_DELAY_MS = 2000L
     }
@@ -62,6 +66,8 @@ class BleClient(private val context: Context) {
     // Chunk accumulation for multi-packet BLE responses
     private val responseBuffer = StringBuilder()
     private var bufferFlushJob: Job? = null
+    // Serialize BLE commands — only one at a time to prevent response interleaving
+    private val commandMutex = Mutex()
 
     fun startScan() {
         _devices.value = emptyList()
@@ -186,11 +192,24 @@ class BleClient(private val context: Context) {
      */
     suspend fun sendCommandAsync(json: String, timeoutMs: Long = 15_000): String? {
         if (_state.value != BleConnectionState.Connected) return null
-        _response.value = null
-        sendCommand(json)
-        return withTimeoutOrNull(timeoutMs) {
-            _response.first { it != null }
+        return commandMutex.withLock {
+            _response.value = null
+            responseBuffer.clear()
+            bufferFlushJob?.cancel()
+            sendCommand(json)
+            val result = withTimeoutOrNull(timeoutMs) {
+                _response.first { it != null }
+            }
+            result
         }
+    }
+
+    /**
+     * Send a command from the manage panel — response stays in lastResponse for UI.
+     */
+    suspend fun sendManagePanelCommand(json: String): String? {
+        return sendCommandAsync(json)
+        // Don't clear _response — the manage panel UI observes it
     }
 
     private fun onChunkReceived(chunk: String) {
@@ -238,16 +257,17 @@ class BleClient(private val context: Context) {
             if (newState == BluetoothProfile.STATE_CONNECTED && status == BluetoothGatt.GATT_SUCCESS) {
                 Log.i(TAG, "GATT connected, discovering services...")
                 connectRetries = 0
-                // Use BALANCED priority — HIGH causes 30ms interval + 5s timeout
-                // which the Pi's Broadcom chip can't sustain, dropping connections
-                g.requestConnectionPriority(BluetoothGatt.CONNECTION_PRIORITY_BALANCED)
+                // Don't request any connection priority — the parameter update
+                // causes instability with the Pi's Broadcom chip. Let Android
+                // use default params which the Pi can handle.
                 g.discoverServices()
             } else if (newState == BluetoothProfile.STATE_DISCONNECTED) {
                 rxChar = null
                 pendingDescriptorWrite = false
 
-                val retriable = status == GATT_ERROR || status == GATT_CONN_TIMEOUT ||
-                    status == GATT_CONN_TERMINATE_LOCAL
+                val retriable = status == GATT_ERROR || status == GATT_INSUF_AUTH ||
+                    status == GATT_CONN_TIMEOUT || status == GATT_CONN_TERMINATE_LOCAL ||
+                    status == GATT_CONN_REFUSED
                 if (retriable && connectRetries < MAX_RETRIES &&
                     _state.value == BleConnectionState.Connecting
                 ) {
@@ -294,8 +314,13 @@ class BleClient(private val context: Context) {
 
         override fun onDescriptorWrite(g: BluetoothGatt, descriptor: BluetoothGattDescriptor, status: Int) {
             pendingDescriptorWrite = false
-            Log.i(TAG, "CCC descriptor written, status=$status — fully connected")
-            _state.value = BleConnectionState.Connected
+            if (status == BluetoothGatt.GATT_SUCCESS) {
+                Log.i(TAG, "CCC descriptor written — fully connected")
+                _state.value = BleConnectionState.Connected
+            } else {
+                Log.w(TAG, "CCC descriptor write failed status=$status, retrying connection...")
+                retryConnect()
+            }
         }
 
         override fun onCharacteristicChanged(g: BluetoothGatt, char: BluetoothGattCharacteristic) {

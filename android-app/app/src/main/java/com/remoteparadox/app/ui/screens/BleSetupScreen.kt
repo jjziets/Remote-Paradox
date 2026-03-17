@@ -56,11 +56,18 @@ fun BleSetupScreen(
         if (piStatus != null) statusMessage = piStatus
     }
 
-    // In manage mode, auto-request status once connected
+    // In manage mode, skip FindPi if already connected
     LaunchedEffect(connectionState) {
         if (manageMode && connectionState == BleConnectionState.Connected && step == 0) {
             step = 1
             onSendCommand("""{"cmd":"status"}""")
+        }
+    }
+
+    // Also auto-advance step on initial compose if already connected
+    LaunchedEffect(Unit) {
+        if (manageMode && connectionState == BleConnectionState.Connected) {
+            step = 1
         }
     }
 

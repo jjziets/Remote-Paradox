@@ -185,7 +185,12 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     fun bleStartScan() { bleClient?.startScan() }
     fun bleConnect(address: String) { bleClient?.connect(address) }
     fun bleDisconnect() { bleClient?.disconnect() }
-    fun bleSendCommand(json: String) { bleClient?.sendCommand(json) }
+    fun bleSendCommand(json: String) {
+        val ble = bleClient ?: return
+        viewModelScope.launch(Dispatchers.IO) {
+            ble.sendManagePanelCommand(json)
+        }
+    }
 
     val bleConnectionState get() = bleClient?.connectionState
     val bleDevices get() = bleClient?.discoveredDevices
@@ -480,7 +485,11 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun refreshHistory() {
-        val a = api ?: return
+        val a = api
+        if (a == null || (!httpReachable && isBleConnected)) {
+            refreshHistoryViaBle()
+            return
+        }
         viewModelScope.launch(Dispatchers.IO) {
             try {
                 val evResp = a.eventHistory(tokenStore.bearerHeader, limit = 50)
@@ -489,7 +498,30 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 val audits = auditResp.body()?.entries.orEmpty()
                 val enriched = enrichEventsWithAudit(events, audits)
                 _state.update { it.copy(eventHistory = enriched) }
-            } catch (_: Exception) { }
+            } catch (_: Exception) {
+                if (isBleConnected) refreshHistoryViaBle()
+            }
+        }
+    }
+
+    private fun refreshHistoryViaBle() {
+        val ble = bleClient ?: return
+        val token = tokenStore.token ?: return
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val evJson = ble.sendCommandAsync("""{"cmd":"event_history","token":"$token","limit":50}""")
+                val auditJson = ble.sendCommandAsync("""{"cmd":"audit_logs","token":"$token","limit":100}""")
+                val events = evJson?.let {
+                    try { json.decodeFromString<EventHistoryResponse>(it).events } catch (_: Exception) { null }
+                }.orEmpty()
+                val audits = auditJson?.let {
+                    try { json.decodeFromString<AuditLogResponse>(it).entries } catch (_: Exception) { null }
+                }.orEmpty()
+                val enriched = enrichEventsWithAudit(events, audits)
+                _state.update { it.copy(eventHistory = enriched) }
+            } catch (e: Exception) {
+                Log.w(TAG, "BLE history refresh failed: ${e.message}")
+            }
         }
     }
 
@@ -624,15 +656,13 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                     httpReachable = true
                 }
 
-                if (httpReachable) {
-                    if (!_state.value.wsConnected) {
-                        Log.d(TAG, "WS disconnected — reconnecting")
-                        connectWebSocket()
-                    }
-                    refreshHistory()
+                if (httpReachable && !_state.value.wsConnected) {
+                    Log.d(TAG, "WS disconnected — reconnecting")
+                    connectWebSocket()
                 }
 
                 refreshStatus() // This cascades to BLE if HTTP fails
+                refreshHistory() // This cascades to BLE if HTTP fails
             }
         }
     }
@@ -676,7 +706,11 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun refreshUsers() {
-        val a = api ?: return
+        val a = api
+        if (a == null || (!httpReachable && isBleConnected)) {
+            refreshUsersViaBle()
+            return
+        }
         _state.update { it.copy(userMgmt = it.userMgmt.copy(isLoading = true, error = null)) }
         viewModelScope.launch(Dispatchers.IO) {
             try {
@@ -687,13 +721,37 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                     _state.update { it.copy(userMgmt = it.userMgmt.copy(isLoading = false, error = "Failed to load users")) }
                 }
             } catch (e: Exception) {
-                _state.update { it.copy(userMgmt = it.userMgmt.copy(isLoading = false, error = e.message)) }
+                if (isBleConnected) refreshUsersViaBle()
+                else _state.update { it.copy(userMgmt = it.userMgmt.copy(isLoading = false, error = e.message)) }
+            }
+        }
+    }
+
+    private fun refreshUsersViaBle() {
+        val ble = bleClient ?: return
+        val token = tokenStore.token ?: return
+        _state.update { it.copy(userMgmt = it.userMgmt.copy(isLoading = true, error = null)) }
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val resp = ble.sendCommandAsync("""{"cmd":"list_users","token":"$token"}""")
+                if (resp != null) {
+                    val users = json.decodeFromString<UserListResponse>(resp).users
+                    _state.update { it.copy(userMgmt = it.userMgmt.copy(users = users, isLoading = false)) }
+                } else {
+                    _state.update { it.copy(userMgmt = it.userMgmt.copy(isLoading = false, error = "BLE timeout")) }
+                }
+            } catch (e: Exception) {
+                _state.update { it.copy(userMgmt = it.userMgmt.copy(isLoading = false, error = "BLE: ${e.message}")) }
             }
         }
     }
 
     fun updateUserRole(username: String, newRole: String) {
-        val a = api ?: return
+        val a = api
+        if (a == null || (!httpReachable && isBleConnected)) {
+            bleUserAction("update_role", mapOf("username" to username, "role" to newRole))
+            return
+        }
         viewModelScope.launch(Dispatchers.IO) {
             try {
                 val resp = a.updateUserRole(tokenStore.bearerHeader, username, RoleUpdateRequest(newRole))
@@ -704,13 +762,18 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                     _state.update { it.copy(userMgmt = it.userMgmt.copy(error = errBody)) }
                 }
             } catch (e: Exception) {
-                _state.update { it.copy(userMgmt = it.userMgmt.copy(error = e.message)) }
+                if (isBleConnected) bleUserAction("update_role", mapOf("username" to username, "role" to newRole))
+                else _state.update { it.copy(userMgmt = it.userMgmt.copy(error = e.message)) }
             }
         }
     }
 
     fun deleteUser(username: String) {
-        val a = api ?: return
+        val a = api
+        if (a == null || (!httpReachable && isBleConnected)) {
+            bleUserAction("delete_user", mapOf("username" to username))
+            return
+        }
         viewModelScope.launch(Dispatchers.IO) {
             try {
                 val resp = a.deleteUser(tokenStore.bearerHeader, username)
@@ -721,13 +784,18 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                     _state.update { it.copy(userMgmt = it.userMgmt.copy(error = errBody)) }
                 }
             } catch (e: Exception) {
-                _state.update { it.copy(userMgmt = it.userMgmt.copy(error = e.message)) }
+                if (isBleConnected) bleUserAction("delete_user", mapOf("username" to username))
+                else _state.update { it.copy(userMgmt = it.userMgmt.copy(error = e.message)) }
             }
         }
     }
 
     fun generateInvite() {
-        val a = api ?: return
+        val a = api
+        if (a == null || (!httpReachable && isBleConnected)) {
+            bleGenerateInvite()
+            return
+        }
         _state.update { it.copy(userMgmt = it.userMgmt.copy(inviteUri = null, inviteQr = null)) }
         viewModelScope.launch(Dispatchers.IO) {
             try {
@@ -739,7 +807,40 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                     _state.update { it.copy(userMgmt = it.userMgmt.copy(error = "Failed to create invite")) }
                 }
             } catch (e: Exception) {
-                _state.update { it.copy(userMgmt = it.userMgmt.copy(error = e.message)) }
+                if (isBleConnected) bleGenerateInvite()
+                else _state.update { it.copy(userMgmt = it.userMgmt.copy(error = e.message)) }
+            }
+        }
+    }
+
+    private fun bleUserAction(cmd: String, extras: Map<String, Any> = emptyMap()) {
+        val ble = bleClient ?: return
+        val token = tokenStore.token ?: return
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val cmdMap = mutableMapOf<String, Any>("cmd" to cmd, "token" to token)
+                cmdMap.putAll(extras)
+                ble.sendCommandAsync(org.json.JSONObject(cmdMap).toString())
+                refreshUsers()
+            } catch (e: Exception) {
+                _state.update { it.copy(userMgmt = it.userMgmt.copy(error = "BLE: ${e.message}")) }
+            }
+        }
+    }
+
+    private fun bleGenerateInvite() {
+        val ble = bleClient ?: return
+        val token = tokenStore.token ?: return
+        _state.update { it.copy(userMgmt = it.userMgmt.copy(inviteUri = null, inviteQr = null)) }
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val resp = ble.sendCommandAsync("""{"cmd":"create_invite","token":"$token"}""")
+                if (resp != null) {
+                    val invite = json.decodeFromString<InviteResponse>(resp)
+                    _state.update { it.copy(userMgmt = it.userMgmt.copy(inviteUri = invite.uri, inviteQr = invite.qrDataUri)) }
+                }
+            } catch (e: Exception) {
+                _state.update { it.copy(userMgmt = it.userMgmt.copy(error = "BLE: ${e.message}")) }
             }
         }
     }
