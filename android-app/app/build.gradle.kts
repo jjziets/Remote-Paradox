@@ -13,8 +13,8 @@ android {
         applicationId = "com.remoteparadox.app"
         minSdk = 26
         targetSdk = 35
-        versionCode = 34
-        versionName = "0.9.1"
+        versionCode = 35
+        versionName = "0.9.2"
         buildConfigField("String", "GITHUB_REPO", "\"jjziets/Remote-Paradox\"")
     }
 

@@ -261,6 +261,7 @@ private fun BleManageContent(
         }
         val isError = parsed?.has("error") == true
         val isStatus = parsed?.has("ip") == true
+        val isNetworks = parsed?.has("networks") == true
 
         Card(
             shape = RoundedCornerShape(12.dp),
@@ -268,6 +269,7 @@ private fun BleManageContent(
                 containerColor = when {
                     isError -> Color(0xFFE94560).copy(alpha = 0.15f)
                     isStatus -> Color(0xFF4CAF50).copy(alpha = 0.10f)
+                    isNetworks -> Color(0xFF9C27B0).copy(alpha = 0.10f)
                     else -> MaterialTheme.colorScheme.surface
                 }
             ),
@@ -279,6 +281,32 @@ private fun BleManageContent(
                         Text("Error", fontWeight = FontWeight.Bold, color = Color(0xFFE94560), fontSize = 14.sp)
                         Spacer(Modifier.height(4.dp))
                         Text(parsed!!.getString("error"), color = Color(0xFFE94560).copy(alpha = 0.8f), fontSize = 13.sp)
+                    }
+                    isNetworks -> {
+                        Text("WiFi Networks", fontWeight = FontWeight.Bold, color = Color(0xFF9C27B0), fontSize = 14.sp)
+                        Spacer(Modifier.height(8.dp))
+                        val networks = parsed!!.getJSONArray("networks")
+                        if (networks.length() == 0) {
+                            Text("No networks found", color = Color.White.copy(alpha = 0.5f), fontSize = 13.sp)
+                        } else {
+                            for (i in 0 until networks.length()) {
+                                val ssid = networks.getString(i)
+                                Card(
+                                    onClick = { onWifiSsidChange(ssid) },
+                                    shape = RoundedCornerShape(8.dp),
+                                    colors = CardDefaults.cardColors(containerColor = Color.White.copy(alpha = 0.05f)),
+                                    modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp),
+                                ) {
+                                    Row(Modifier.padding(horizontal = 12.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+                                        Icon(Icons.Default.Wifi, null, tint = Color(0xFF9C27B0), modifier = Modifier.size(16.dp))
+                                        Spacer(Modifier.width(8.dp))
+                                        Text(ssid, color = Color.White, fontSize = 13.sp)
+                                    }
+                                }
+                            }
+                            Spacer(Modifier.height(4.dp))
+                            Text("Tap a network to select it", color = Color.White.copy(alpha = 0.4f), fontSize = 11.sp)
+                        }
                     }
                     isStatus -> {
                         Text("Pi Status", fontWeight = FontWeight.Bold, color = Color(0xFF4CAF50), fontSize = 14.sp)
