@@ -377,13 +377,13 @@ private fun BleManageContent(
     Spacer(Modifier.height(16.dp))
 
     OutlinedButton(
-        onClick = { onDisconnect(); onBack() },
+        onClick = { onBack() },
         modifier = Modifier.fillMaxWidth().height(44.dp),
         shape = RoundedCornerShape(10.dp),
         colors = ButtonDefaults.outlinedButtonColors(contentColor = Color.White),
         border = androidx.compose.foundation.BorderStroke(1.dp, Color.White.copy(alpha = 0.3f)),
     ) {
-        Text("Done", fontWeight = FontWeight.Medium)
+        Text("Done (BLE stays connected)", fontWeight = FontWeight.Medium)
     }
 
     Spacer(Modifier.height(24.dp))

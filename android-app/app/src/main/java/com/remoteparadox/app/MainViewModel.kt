@@ -89,6 +89,7 @@ data class AppState(
     val userMgmt: UserMgmtState = UserMgmtState(),
     val piUpdate: PiUpdateState = PiUpdateState(),
     val piSystem: PiSystemState = PiSystemState(),
+    val bleConnected: Boolean = false,
 )
 
 enum class Screen { Loading, Welcome, BleSetup, Scan, Setup, Login, Dashboard, Settings, UserManagement }
@@ -103,6 +104,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     private var wsJob: Job? = null
     private var webSocket: WebSocket? = null
     private val json = Json { ignoreUnknownKeys = true; isLenient = true }
+    private var httpReachable = true
     private var notificationId = 100
     private var lastTriggeredPartition: Int? = null
     private var lastArmedState = mutableMapOf<Int, Boolean>()
@@ -172,7 +174,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun goBackFromBle() {
-        bleDisconnect()
+        // Keep BLE connected — it serves as telemetry link when WiFi is offline
         if (bleLaunchedFromSettings) {
             _state.update { it.copy(screen = Screen.Settings) }
         } else {
@@ -188,6 +190,68 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     val bleConnectionState get() = bleClient?.connectionState
     val bleDevices get() = bleClient?.discoveredDevices
     val bleResponse get() = bleClient?.lastResponse
+
+    private val isBleConnected: Boolean
+        get() = bleClient?.connectionState?.value == BleConnectionState.Connected
+
+    // ── BLE Fallback for alarm operations ──
+
+    private fun refreshStatusViaBle() {
+        val ble = bleClient ?: return
+        val token = tokenStore.token ?: return
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                _state.update { it.copy(isLoading = true) }
+                val resp = ble.sendCommandAsync("""{"cmd":"alarm_status","token":"$token"}""")
+                if (resp == null) {
+                    _state.update { it.copy(isLoading = false, error = "BLE timeout") }
+                    return@launch
+                }
+                // Check for error response from Pi
+                val obj = try { org.json.JSONObject(resp) } catch (_: Exception) { null }
+                if (obj?.has("error") == true) {
+                    val err = obj.getString("error")
+                    Log.w(TAG, "BLE alarm_status error: $err")
+                    _state.update { it.copy(isLoading = false, error = "BLE: $err", bleConnected = true) }
+                    return@launch
+                }
+                val status = json.decodeFromString<AlarmStatus>(resp)
+                checkStatusChanges(status)
+                _state.update { it.copy(alarmStatus = status, isLoading = false, error = null, bleConnected = true) }
+            } catch (e: Exception) {
+                Log.w(TAG, "BLE status refresh failed: ${e.message}")
+                _state.update { it.copy(isLoading = false, error = "BLE: ${e.message}") }
+            }
+        }
+    }
+
+    private fun bleAlarmAction(cmdName: String, extras: Map<String, Any> = emptyMap()) {
+        val ble = bleClient ?: return
+        val token = tokenStore.token ?: return
+        _state.update { it.copy(actionInProgress = cmdName, error = null) }
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val cmdMap = mutableMapOf<String, Any>("cmd" to cmdName, "token" to token)
+                cmdMap.putAll(extras)
+                val cmdJson = org.json.JSONObject(cmdMap).toString()
+                val resp = ble.sendCommandAsync(cmdJson)
+                if (resp == null) {
+                    _state.update { it.copy(actionInProgress = null, error = "BLE timeout") }
+                    return@launch
+                }
+                val obj = org.json.JSONObject(resp)
+                if (obj.has("error")) {
+                    _state.update { it.copy(actionInProgress = null, error = obj.getString("error")) }
+                } else {
+                    _state.update { it.copy(actionInProgress = null) }
+                    delay(500)
+                    refreshStatusViaBle()
+                }
+            } catch (e: Exception) {
+                _state.update { it.copy(actionInProgress = null, error = "BLE: ${e.message}") }
+            }
+        }
+    }
 
     private fun connectApi() {
         val url = tokenStore.baseUrl ?: return
@@ -294,36 +358,63 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     fun armAway(code: String, partitionId: Int) {
         tokenStore.alarmCode = code
-        alarmAction("arm_away") { it.armAway(tokenStore.bearerHeader, ArmRequest(code, partitionId)) }
+        if (!httpReachable && isBleConnected) {
+            bleAlarmAction("arm_away", mapOf("code" to code, "partition" to partitionId))
+        } else {
+            alarmAction("arm_away") { it.armAway(tokenStore.bearerHeader, ArmRequest(code, partitionId)) }
+        }
     }
 
     fun armStay(code: String, partitionId: Int) {
         tokenStore.alarmCode = code
-        alarmAction("arm_stay") { it.armStay(tokenStore.bearerHeader, ArmRequest(code, partitionId)) }
+        if (!httpReachable && isBleConnected) {
+            bleAlarmAction("arm_stay", mapOf("code" to code, "partition" to partitionId))
+        } else {
+            alarmAction("arm_stay") { it.armStay(tokenStore.bearerHeader, ArmRequest(code, partitionId)) }
+        }
     }
 
     fun disarm(code: String, partitionId: Int) {
         tokenStore.alarmCode = code
-        alarmAction("disarm") { it.disarm(tokenStore.bearerHeader, ArmRequest(code, partitionId)) }
+        if (!httpReachable && isBleConnected) {
+            bleAlarmAction("disarm", mapOf("code" to code, "partition" to partitionId))
+        } else {
+            alarmAction("disarm") { it.disarm(tokenStore.bearerHeader, ArmRequest(code, partitionId)) }
+        }
     }
 
-    fun bypassZone(zoneId: Int, bypass: Boolean) =
-        alarmAction(if (bypass) "bypass" else "unbypass") {
-            it.bypassZone(tokenStore.bearerHeader, BypassRequest(zoneId, bypass))
+    fun bypassZone(zoneId: Int, bypass: Boolean) {
+        if (!httpReachable && isBleConnected) {
+            bleAlarmAction("bypass", mapOf("zone_id" to zoneId, "bypass" to bypass))
+        } else {
+            alarmAction(if (bypass) "bypass" else "unbypass") {
+                it.bypassZone(tokenStore.bearerHeader, BypassRequest(zoneId, bypass))
+            }
         }
+    }
 
-    fun sendPanic(panicType: String, partitionId: Int) =
-        alarmAction("panic") {
-            it.panic(tokenStore.bearerHeader, PanicRequest(partitionId, panicType))
+    fun sendPanic(panicType: String, partitionId: Int) {
+        if (!httpReachable && isBleConnected) {
+            bleAlarmAction("panic", mapOf("partition" to partitionId, "type" to panicType))
+        } else {
+            alarmAction("panic") {
+                it.panic(tokenStore.bearerHeader, PanicRequest(partitionId, panicType))
+            }
         }
+    }
 
     private fun alarmAction(name: String, call: suspend (ParadoxApi) -> retrofit2.Response<ActionResult>) {
-        val a = api ?: return
+        val a = api ?: run {
+            // No HTTP API — try BLE if connected
+            if (isBleConnected) bleAlarmAction(name)
+            return
+        }
         _state.update { it.copy(actionInProgress = name, error = null) }
         viewModelScope.launch(Dispatchers.IO) {
             try {
                 val resp = call(a)
                 if (resp.isSuccessful) {
+                    httpReachable = true
                     _state.update { it.copy(actionInProgress = null) }
                     delay(500)
                     refreshStatus()
@@ -334,18 +425,39 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                     _state.update { it.copy(actionInProgress = null, error = "Action failed") }
                 }
             } catch (e: Exception) {
-                _state.update { it.copy(actionInProgress = null, error = e.message) }
+                httpReachable = false
+                // Cascade to BLE on HTTP failure
+                if (isBleConnected) {
+                    Log.i(TAG, "HTTP failed for $name, falling back to BLE")
+                    _state.update { it.copy(actionInProgress = null) }
+                    bleAlarmAction(name)
+                } else {
+                    _state.update { it.copy(actionInProgress = null, error = e.message) }
+                }
             }
         }
     }
 
     fun refreshStatus() {
-        val a = api ?: return
+        // Update BLE state
+        _state.update { it.copy(bleConnected = isBleConnected) }
+
+        val a = api
+        if (a == null) {
+            if (isBleConnected) refreshStatusViaBle()
+            return
+        }
+        if (!httpReachable && isBleConnected) {
+            // HTTP known down — use BLE, but probe HTTP every 30s (handled in poll loop)
+            refreshStatusViaBle()
+            return
+        }
         viewModelScope.launch(Dispatchers.IO) {
             try {
                 _state.update { it.copy(isLoading = true) }
                 val resp = a.alarmStatus(tokenStore.bearerHeader)
                 if (resp.isSuccessful && resp.body() != null) {
+                    httpReachable = true
                     val body = resp.body()!!
                     checkStatusChanges(body)
                     _state.update { it.copy(alarmStatus = body, isLoading = false, error = null) }
@@ -355,7 +467,14 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                     _state.update { it.copy(isLoading = false) }
                 }
             } catch (e: Exception) {
-                _state.update { it.copy(isLoading = false, error = "Connection lost") }
+                httpReachable = false
+                // Cascade to BLE
+                if (isBleConnected) {
+                    Log.i(TAG, "HTTP unreachable, falling back to BLE for status")
+                    refreshStatusViaBle()
+                } else {
+                    _state.update { it.copy(isLoading = false, error = "Connection lost") }
+                }
             }
         }
     }
@@ -493,15 +612,27 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         refreshStatus()
         refreshHistory()
         connectWebSocket()
+        var cycleCount = 0
         wsJob = viewModelScope.launch(Dispatchers.IO) {
             while (isActive) {
                 delay(FALLBACK_POLL_INTERVAL_MS)
-                if (!_state.value.wsConnected) {
-                    Log.d(TAG, "WS disconnected — reconnecting")
-                    connectWebSocket()
+                cycleCount++
+
+                if (!httpReachable && cycleCount % 6 == 0) {
+                    // Probe HTTP recovery every ~30s
+                    Log.d(TAG, "Probing HTTP recovery...")
+                    httpReachable = true
                 }
-                refreshStatus()
-                refreshHistory()
+
+                if (httpReachable) {
+                    if (!_state.value.wsConnected) {
+                        Log.d(TAG, "WS disconnected — reconnecting")
+                        connectWebSocket()
+                    }
+                    refreshHistory()
+                }
+
+                refreshStatus() // This cascades to BLE if HTTP fails
             }
         }
     }
@@ -673,7 +804,11 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     // ── Pi System Info ──
 
     fun refreshPiSystem() {
-        val a = api ?: return
+        val a = api
+        if (a == null || (!httpReachable && isBleConnected)) {
+            refreshPiSystemViaBle()
+            return
+        }
         _state.update { it.copy(piSystem = it.piSystem.copy(loading = true, error = null)) }
         viewModelScope.launch(Dispatchers.IO) {
             try {
@@ -688,13 +823,50 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                     ))
                 }
             } catch (e: Exception) {
-                _state.update { it.copy(piSystem = it.piSystem.copy(loading = false, error = e.message)) }
+                if (isBleConnected) {
+                    refreshPiSystemViaBle()
+                } else {
+                    _state.update { it.copy(piSystem = it.piSystem.copy(loading = false, error = e.message)) }
+                }
+            }
+        }
+    }
+
+    private fun refreshPiSystemViaBle() {
+        val ble = bleClient ?: return
+        val token = tokenStore.token ?: return
+        _state.update { it.copy(piSystem = it.piSystem.copy(loading = true, error = null)) }
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val resJson = ble.sendCommandAsync("""{"cmd":"system_resources","token":"$token"}""")
+                val wifiJson = ble.sendCommandAsync("""{"cmd":"system_wifi","token":"$token"}""")
+                val bleJson = ble.sendCommandAsync("""{"cmd":"ble_clients","token":"$token"}""")
+
+                val resources = resJson?.let { try { json.decodeFromString<SystemResources>(it) } catch (_: Exception) { null } }
+                val wifi = wifiJson?.let { try { json.decodeFromString<WifiInfo>(it) } catch (_: Exception) { null } }
+                val bleClients = bleJson?.let { try { json.decodeFromString<BleClientsResponse>(it) } catch (_: Exception) { null } }
+
+                _state.update {
+                    it.copy(piSystem = PiSystemState(
+                        resources = resources,
+                        wifi = wifi,
+                        bleClients = bleClients,
+                    ))
+                }
+            } catch (e: Exception) {
+                _state.update { it.copy(piSystem = it.piSystem.copy(loading = false, error = "BLE: ${e.message}")) }
             }
         }
     }
 
     fun rebootPi() {
-        val a = api ?: return
+        val a = api
+        if (a == null && isBleConnected) {
+            bleAlarmAction("system_reboot")
+            _state.update { it.copy(piSystem = it.piSystem.copy(error = "Pi is rebooting... please wait ~60s")) }
+            return
+        }
+        if (a == null) return
         _state.update { it.copy(piSystem = it.piSystem.copy(rebooting = true, error = null)) }
         viewModelScope.launch(Dispatchers.IO) {
             try {

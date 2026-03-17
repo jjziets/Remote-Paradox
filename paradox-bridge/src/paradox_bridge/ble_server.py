@@ -13,6 +13,7 @@ Reset trust by shorting GPIO17->GND.
 
 import json
 import logging
+import os
 import subprocess
 import time
 from pathlib import Path
@@ -22,6 +23,7 @@ logger = logging.getLogger("ble_server")
 
 TRUST_FILE = Path("/opt/paradox-bridge/ble_trust.json")
 VERSION_FILE = Path("/opt/paradox-bridge/CURRENT_VERSION")
+_CONFIG_PATH = os.environ.get("PARADOX_CONFIG", "/etc/paradox-bridge/config.json")
 
 NUS_SERVICE_UUID = "6e400001-b5a3-f393-e0a9-e50e24dcca9e"
 NUS_RX_UUID = "6e400002-b5a3-f393-e0a9-e50e24dcca9e"
@@ -193,12 +195,10 @@ network={{
 
 def create_admin_user(username: str, password: str) -> str:
     try:
-        import sys
-        sys.path.insert(0, "/opt/paradox-bridge/src")
         from paradox_bridge.database import Database
         from paradox_bridge.auth import AuthService
         from paradox_bridge.config import load_config
-        cfg = load_config()
+        cfg = load_config(_CONFIG_PATH)
         db = Database(cfg.db_path)
         auth = AuthService(cfg, db)
         auth.setup_admin(username, password)
@@ -211,16 +211,15 @@ def _validate_token(token: str) -> dict | None:
     if not token:
         return None
     try:
-        import sys
-        sys.path.insert(0, "/opt/paradox-bridge/src")
         from paradox_bridge.auth import AuthService
         from paradox_bridge.config import load_config
         from paradox_bridge.database import Database
-        cfg = load_config()
+        cfg = load_config(_CONFIG_PATH)
         db = Database(cfg.db_path)
-        auth = AuthService(cfg, db)
+        auth = AuthService(db, cfg)  # AuthService(db, config) — db first, config second
         return auth.decode_token(token)
-    except Exception:
+    except Exception as e:
+        logger.warning("Token validation failed: %s", e)
         return None
 
 
@@ -650,7 +649,8 @@ class Advertisement(object):
         return {
             LE_ADVERTISEMENT_IFACE: {
                 "Type": "peripheral",
-                "ServiceUUIDs": dbus.Array([NUS_SERVICE_UUID], signature="s"),
+                # NUS UUID omitted from adv PDU — 128-bit UUID takes 18 of 31 bytes,
+                # truncating the name to "Remote Par". Phone matches by name instead.
                 "LocalName": dbus.String("Remote Paradox"),
                 "Includes": dbus.Array(["tx-power"], signature="s"),
             }

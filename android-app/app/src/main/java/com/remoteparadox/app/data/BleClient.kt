@@ -8,6 +8,7 @@ import android.util.Log
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.first
 import java.util.UUID
 
 private const val TAG = "BleClient"
@@ -58,6 +59,10 @@ class BleClient(private val context: Context) {
     private var pendingAddress: String? = null
     private var pendingDescriptorWrite = false
 
+    // Chunk accumulation for multi-packet BLE responses
+    private val responseBuffer = StringBuilder()
+    private var bufferFlushJob: Job? = null
+
     fun startScan() {
         _devices.value = emptyList()
         _state.value = BleConnectionState.Scanning
@@ -76,7 +81,6 @@ class BleClient(private val context: Context) {
                 val hasName = name?.contains("Remote Par", ignoreCase = true) == true
                 if (!hasNus && !hasName) return
                 val displayName = name ?: "Remote Paradox"
-                Log.d(TAG, "Scan hit: $displayName (${result.device.address}) rssi=${result.rssi} nus=$hasNus")
                 val dev = BleDevice(displayName, result.device.address, result.rssi)
                 val current = _devices.value.toMutableList()
                 if (current.none { it.address == dev.address }) {
@@ -152,6 +156,8 @@ class BleClient(private val context: Context) {
     fun disconnect() {
         pendingAddress = null
         connectRetries = 0
+        bufferFlushJob?.cancel()
+        responseBuffer.clear()
         gatt?.disconnect()
         gatt?.close()
         gatt = null
@@ -161,10 +167,69 @@ class BleClient(private val context: Context) {
     }
 
     fun sendCommand(json: String) {
-        if (pendingDescriptorWrite) return
-        val char = rxChar ?: return
+        if (pendingDescriptorWrite) {
+            Log.w(TAG, "sendCommand blocked: descriptor write pending")
+            return
+        }
+        val char = rxChar ?: run {
+            Log.w(TAG, "sendCommand blocked: rxChar is null")
+            return
+        }
+        Log.i(TAG, "sendCommand: ${json.take(120)}...")
         char.value = json.toByteArray(Charsets.UTF_8)
         gatt?.writeCharacteristic(char)
+    }
+
+    /**
+     * Send a BLE command and wait for the complete JSON response.
+     * Accumulates chunked NUS responses and returns when valid JSON is received.
+     */
+    suspend fun sendCommandAsync(json: String, timeoutMs: Long = 15_000): String? {
+        if (_state.value != BleConnectionState.Connected) return null
+        _response.value = null
+        sendCommand(json)
+        return withTimeoutOrNull(timeoutMs) {
+            _response.first { it != null }
+        }
+    }
+
+    private fun onChunkReceived(chunk: String) {
+        responseBuffer.append(chunk)
+        bufferFlushJob?.cancel()
+
+        val full = responseBuffer.toString()
+        // Check if we have complete JSON (object or array)
+        if (isCompleteJson(full)) {
+            Log.d(TAG, "BLE response complete (${full.length} bytes)")
+            _response.value = full
+            responseBuffer.clear()
+        } else {
+            // Not complete — flush after timeout in case last chunk was missed
+            bufferFlushJob = CoroutineScope(Dispatchers.Main).launch {
+                delay(3000)
+                if (responseBuffer.isNotEmpty()) {
+                    Log.w(TAG, "BLE response timeout flush (${responseBuffer.length} bytes)")
+                    _response.value = responseBuffer.toString()
+                    responseBuffer.clear()
+                }
+            }
+        }
+    }
+
+    private fun isCompleteJson(s: String): Boolean {
+        val trimmed = s.trim()
+        if (trimmed.isEmpty()) return false
+        return try {
+            if (trimmed.startsWith("{")) {
+                org.json.JSONObject(trimmed)
+                true
+            } else if (trimmed.startsWith("[")) {
+                org.json.JSONArray(trimmed)
+                true
+            } else false
+        } catch (_: Exception) {
+            false
+        }
     }
 
     private val gattCallback = object : BluetoothGattCallback() {
@@ -173,7 +238,9 @@ class BleClient(private val context: Context) {
             if (newState == BluetoothProfile.STATE_CONNECTED && status == BluetoothGatt.GATT_SUCCESS) {
                 Log.i(TAG, "GATT connected, discovering services...")
                 connectRetries = 0
-                g.requestConnectionPriority(BluetoothGatt.CONNECTION_PRIORITY_HIGH)
+                // Use BALANCED priority — HIGH causes 30ms interval + 5s timeout
+                // which the Pi's Broadcom chip can't sustain, dropping connections
+                g.requestConnectionPriority(BluetoothGatt.CONNECTION_PRIORITY_BALANCED)
                 g.discoverServices()
             } else if (newState == BluetoothProfile.STATE_DISCONNECTED) {
                 rxChar = null
@@ -233,7 +300,8 @@ class BleClient(private val context: Context) {
 
         override fun onCharacteristicChanged(g: BluetoothGatt, char: BluetoothGattCharacteristic) {
             if (char.uuid == NUS_TX) {
-                _response.value = String(char.value, Charsets.UTF_8)
+                val chunk = String(char.value, Charsets.UTF_8)
+                onChunkReceived(chunk)
             }
         }
     }
