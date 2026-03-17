@@ -55,6 +55,10 @@ class BleClient(private val context: Context) {
     private val _response = MutableStateFlow<String?>(null)
     val lastResponse: StateFlow<String?> = _response
 
+    // Separate response flow for the manage panel UI so dashboard responses don't leak
+    private val _managePanelResponse = MutableStateFlow<String?>(null)
+    val managePanelResponse: StateFlow<String?> = _managePanelResponse
+
     private var gatt: BluetoothGatt? = null
     private var rxChar: BluetoothGattCharacteristic? = null
     private var scanner: BluetoothLeScanner? = null
@@ -205,11 +209,12 @@ class BleClient(private val context: Context) {
     }
 
     /**
-     * Send a command from the manage panel — response stays in lastResponse for UI.
+     * Send a command from the manage panel — response goes to managePanelResponse for UI.
      */
     suspend fun sendManagePanelCommand(json: String): String? {
-        return sendCommandAsync(json)
-        // Don't clear _response — the manage panel UI observes it
+        val result = sendCommandAsync(json)
+        _managePanelResponse.value = result
+        return result
     }
 
     private fun onChunkReceived(chunk: String) {

@@ -194,7 +194,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     val bleConnectionState get() = bleClient?.connectionState
     val bleDevices get() = bleClient?.discoveredDevices
-    val bleResponse get() = bleClient?.lastResponse
+    val bleResponse get() = bleClient?.managePanelResponse
 
     private val isBleConnected: Boolean
         get() = bleClient?.connectionState?.value == BleConnectionState.Connected
@@ -443,9 +443,25 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
+    private fun isNetworkAvailable(): Boolean {
+        val cm = getApplication<Application>().getSystemService(Context.CONNECTIVITY_SERVICE) as? android.net.ConnectivityManager
+        return cm?.activeNetwork != null
+    }
+
     fun refreshStatus() {
         // Update BLE state
         _state.update { it.copy(bleConnected = isBleConnected) }
+
+        // Fast path: no network at all (airplane mode) → use BLE immediately
+        if (!isNetworkAvailable()) {
+            httpReachable = false
+            if (isBleConnected) {
+                refreshStatusViaBle()
+            } else {
+                _state.update { it.copy(isLoading = false, error = "No connection") }
+            }
+            return
+        }
 
         val a = api
         if (a == null) {
@@ -453,7 +469,6 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             return
         }
         if (!httpReachable && isBleConnected) {
-            // HTTP known down — use BLE, but probe HTTP every 30s (handled in poll loop)
             refreshStatusViaBle()
             return
         }
@@ -485,6 +500,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun refreshHistory() {
+        if (!isNetworkAvailable()) { httpReachable = false }
         val a = api
         if (a == null || (!httpReachable && isBleConnected)) {
             refreshHistoryViaBle()
@@ -706,6 +722,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun refreshUsers() {
+        if (!isNetworkAvailable()) { httpReachable = false }
         val a = api
         if (a == null || (!httpReachable && isBleConnected)) {
             refreshUsersViaBle()
@@ -905,6 +922,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     // ── Pi System Info ──
 
     fun refreshPiSystem() {
+        if (!isNetworkAvailable()) { httpReachable = false }
         val a = api
         if (a == null || (!httpReachable && isBleConnected)) {
             refreshPiSystemViaBle()

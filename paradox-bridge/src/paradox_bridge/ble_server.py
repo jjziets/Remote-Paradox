@@ -69,6 +69,8 @@ AUTHENTICATED_COMMANDS = {
     "wifi_scan", "wifi_set",
     "arm_away", "arm_stay", "disarm", "panic", "alarm_status",
     "system_resources", "system_wifi", "system_reboot",
+    "bypass", "ble_clients", "event_history", "audit_logs",
+    "list_users", "create_invite", "update_role", "delete_user",
 }
 
 
@@ -82,6 +84,8 @@ class BleClientTracker:
         self._clients: dict[str, dict] = {}
 
     def client_connected(self, address: str, name: str = "Unknown") -> None:
+        # Clear stale entries — phone uses random addresses, so keep max 1
+        self._clients.clear()
         self._clients[address] = {
             "address": address,
             "name": name,
@@ -138,7 +142,17 @@ def get_version() -> str:
 
 
 def is_trusted() -> bool:
-    return TRUST_FILE.exists()
+    if TRUST_FILE.exists():
+        return True
+    # Also check if admin users exist in database (setup via HTTP)
+    try:
+        from paradox_bridge.config import load_config
+        from paradox_bridge.database import Database
+        cfg = load_config(_CONFIG_PATH)
+        db = Database(cfg.db_path)
+        return len(db.list_users()) > 0
+    except Exception:
+        return False
 
 
 def set_trusted():
@@ -200,7 +214,7 @@ def create_admin_user(username: str, password: str) -> str:
         from paradox_bridge.config import load_config
         cfg = load_config(_CONFIG_PATH)
         db = Database(cfg.db_path)
-        auth = AuthService(cfg, db)
+        auth = AuthService(db, cfg)  # db first, config second
         auth.setup_admin(username, password)
         return "ok"
     except Exception as e:
@@ -216,7 +230,7 @@ def _validate_token(token: str) -> dict | None:
         from paradox_bridge.database import Database
         cfg = load_config(_CONFIG_PATH)
         db = Database(cfg.db_path)
-        auth = AuthService(db, cfg)  # AuthService(db, config) — db first, config second
+        auth = AuthService(db, cfg)  # db first, config second
         return auth.decode_token(token)
     except Exception as e:
         logger.warning("Token validation failed: %s", e)
@@ -260,6 +274,10 @@ def handle_command(data: str) -> str:
         payload = _validate_token(token)
         if payload is None:
             return json.dumps({"error": "invalid or expired token"})
+        # Set username on the BLE client tracker
+        username = payload.get("sub", "")
+        for addr in list(_tracker._clients.keys()):
+            _tracker.set_username(addr, username)
         return json.dumps({
             "result": "authenticated",
             "username": payload.get("sub"),
@@ -290,6 +308,30 @@ def handle_command(data: str) -> str:
             return _proxy_get("/system/wifi", token)
         if action == "system_reboot":
             return _proxy_post("/system/reboot", token)
+        if action == "bypass":
+            zone_id = cmd.get("zone_id", 0)
+            bypass = cmd.get("bypass", True)
+            return _proxy_post("/alarm/bypass", token, {"zone_id": zone_id, "bypass": bypass})
+        if action == "ble_clients":
+            clients = _tracker.get_clients()
+            return json.dumps({"clients": clients, "count": _tracker.count})
+        if action == "event_history":
+            limit = cmd.get("limit", 50)
+            return _proxy_get(f"/alarm/history?limit={limit}", token)
+        if action == "audit_logs":
+            limit = cmd.get("limit", 100)
+            return _proxy_get(f"/alarm/logs?limit={limit}", token)
+        if action == "list_users":
+            return _proxy_get("/auth/users", token)
+        if action == "create_invite":
+            return _proxy_post("/auth/invite", token)
+        if action == "update_role":
+            username = cmd.get("username", "")
+            role = cmd.get("role", "")
+            return _proxy_put(f"/auth/users/{username}/role", token, {"role": role})
+        if action == "delete_user":
+            username = cmd.get("username", "")
+            return _proxy_delete(f"/auth/users/{username}", token)
 
     return json.dumps({"error": f"unknown command: {action}"})
 
@@ -325,6 +367,36 @@ def _proxy_post(path: str, token: str, body: dict | None = None) -> str:
     except Exception as e:
         return json.dumps({"error": f"proxy failed: {e}"})
 
+
+
+def _proxy_put(path: str, token: str, body: dict | None = None) -> str:
+    import urllib.request
+    try:
+        data = json.dumps(body).encode() if body else None
+        req = urllib.request.Request(
+            f"http://127.0.0.1:8080{path}",
+            data=data,
+            headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
+            method="PUT",
+        )
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            return resp.read().decode()
+    except Exception as e:
+        return json.dumps({"error": f"proxy failed: {e}"})
+
+
+def _proxy_delete(path: str, token: str) -> str:
+    import urllib.request
+    try:
+        req = urllib.request.Request(
+            f"http://127.0.0.1:8080{path}",
+            headers={"Authorization": f"Bearer {token}"},
+            method="DELETE",
+        )
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            return resp.read().decode()
+    except Exception as e:
+        return json.dumps({"error": f"proxy failed: {e}"})
 
 def _handle_alarm_command(action: str, cmd: dict) -> str:
     import urllib.request
@@ -557,6 +629,11 @@ class Characteristic(object):
         return self._value
 
     def write_value(self, value, options):
+        # Track connected client from GATT write
+        device = str(options.get("device", ""))
+        if "/dev_" in device:
+            addr = device.split("/")[-1].replace("dev_", "").replace("_", ":")
+            _tracker.client_connected(addr)
         self._value = value
 
     def start_notify(self):
@@ -583,6 +660,11 @@ class NusRxCharacteristic(Characteristic):
         self._tx = tx_chrc
 
     def write_value(self, value, options):
+        # Track connected client from GATT write
+        device = str(options.get("device", ""))
+        if "/dev_" in device:
+            addr = device.split("/")[-1].replace("dev_", "").replace("_", ":")
+            _tracker.client_connected(addr)
         data = bytes(value).decode("utf-8", errors="replace")
         logger.info("BLE RX: %s", data[:200])
         response = handle_command(data)
@@ -649,10 +731,8 @@ class Advertisement(object):
         return {
             LE_ADVERTISEMENT_IFACE: {
                 "Type": "peripheral",
-                # NUS UUID omitted from adv PDU — 128-bit UUID takes 18 of 31 bytes,
-                # truncating the name to "Remote Par". Phone matches by name instead.
+                "ServiceUUIDs": dbus.Array([NUS_SERVICE_UUID], signature="s"),
                 "LocalName": dbus.String("Remote Paradox"),
-                "Includes": dbus.Array(["tx-power"], signature="s"),
             }
         }
 
@@ -759,6 +839,13 @@ def run_ble_server():
     subprocess.run(["sudo", "btmgmt", "le", "on"], capture_output=True)
     subprocess.run(["sudo", "btmgmt", "connectable", "on"], capture_output=True)
     subprocess.run(["sudo", "btmgmt", "bondable", "off"], capture_output=True)
+    # Set longer BLE supervision timeout (600 * 10ms = 6s) to prevent premature disconnects
+    try:
+        with open("/sys/kernel/debug/bluetooth/hci0/supervision_timeout", "w") as f: f.write("600")
+        with open("/sys/kernel/debug/bluetooth/hci0/conn_min_interval", "w") as f: f.write("6")
+        with open("/sys/kernel/debug/bluetooth/hci0/conn_max_interval", "w") as f: f.write("24")
+    except Exception as e:
+        logger.warning("Could not set BLE connection params: %s", e)
 
     dbus.mainloop.glib.DBusGMainLoop(set_as_default=True)
     bus = dbus.SystemBus()
@@ -802,6 +889,10 @@ def run_ble_server():
 
     def _on_adv_registered():
         logger.info("LE advertisement registered successfully")
+        # Disable pairing after registration — BlueZ re-enables these during GATT setup
+        subprocess.run(["sudo", "btmgmt", "sc", "off"], capture_output=True)
+        subprocess.run(["sudo", "btmgmt", "bondable", "off"], capture_output=True)
+        logger.info("Disabled secure-conn and bondable to suppress pairing popups")
 
     def _on_adv_error(error):
         logger.error("Failed to register LE advertisement: %s", error)

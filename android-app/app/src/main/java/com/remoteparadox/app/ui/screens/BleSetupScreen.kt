@@ -56,10 +56,14 @@ fun BleSetupScreen(
         if (piStatus != null) statusMessage = piStatus
     }
 
-    // In manage mode, skip FindPi if already connected
+    // In manage mode, skip FindPi if already connected, and authenticate
     LaunchedEffect(connectionState) {
         if (manageMode && connectionState == BleConnectionState.Connected && step == 0) {
             step = 1
+            // Authenticate over BLE so the Pi knows which user is connected
+            if (authToken.isNotBlank()) {
+                onSendCommand("""{"cmd":"auth","token":"$authToken"}""")
+            }
             onSendCommand("""{"cmd":"status"}""")
         }
     }
@@ -78,7 +82,7 @@ fun BleSetupScreen(
             TopAppBar(
                 title = { Text(title, fontWeight = FontWeight.Bold) },
                 navigationIcon = {
-                    IconButton(onClick = { onDisconnect(); onBack() }) {
+                    IconButton(onClick = { onBack() }) {
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back", tint = Color.White)
                     }
                 },
