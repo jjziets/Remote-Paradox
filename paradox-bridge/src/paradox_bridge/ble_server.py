@@ -657,6 +657,18 @@ class Advertisement(object):
         }
 
 
+def _re_enable_advertising():
+    """Re-enable LE advertising via hcitool after a disconnect (BlueZ workaround)."""
+    try:
+        subprocess.run(
+            ["sudo", "hcitool", "-i", "hci0", "cmd", "0x08", "0x000a", "01"],
+            capture_output=True, timeout=5,
+        )
+        logger.info("LE advertising re-enabled after disconnect")
+    except Exception as e:
+        logger.warning("Failed to re-enable advertising: %s", e)
+
+
 def _setup_device_monitoring(bus):
     """Monitor BlueZ Device1 property changes for connection tracking."""
     import dbus
@@ -672,7 +684,6 @@ def _setup_device_monitoring(bus):
             device_obj = bus.get_object(BLUEZ_SERVICE, path)
             props = dbus.Interface(device_obj, DBUS_PROP_IFACE)
             address = str(props.Get(DEVICE_IFACE, "Address"))
-            name = str(props.Get(DEVICE_IFACE, "Name")) if "Name" in changed or True else "Unknown"
             try:
                 name = str(props.Get(DEVICE_IFACE, "Name"))
             except Exception:
@@ -685,6 +696,7 @@ def _setup_device_monitoring(bus):
             _tracker.client_connected(address, name)
         else:
             _tracker.client_disconnected(address)
+            _re_enable_advertising()
 
     bus.add_signal_receiver(
         _properties_changed,
@@ -746,28 +758,10 @@ def run_ble_server():
     subprocess.run(["sudo", "hciconfig", "hci0", "up"], capture_output=True)
     subprocess.run(["sudo", "btmgmt", "le", "on"], capture_output=True)
     subprocess.run(["sudo", "btmgmt", "connectable", "on"], capture_output=True)
-    subprocess.run(["sudo", "btmgmt", "name", "Remote Paradox"], capture_output=True)
-    subprocess.run(["sudo", "btmgmt", "advertising", "on"], capture_output=True)
-
-    try:
-        subprocess.run(["sudo", "bluetoothctl", "system-alias", "Remote Paradox"],
-                        capture_output=True, timeout=5)
-        subprocess.run(["sudo", "bluetoothctl", "discoverable", "on"],
-                        capture_output=True, timeout=5)
-        subprocess.run(["sudo", "bluetoothctl", "discoverable-timeout", "0"],
-                        capture_output=True, timeout=5)
-        subprocess.run(["sudo", "bluetoothctl", "pairable", "on"],
-                        capture_output=True, timeout=5)
-    except Exception as e:
-        logger.error("Failed to configure BLE via bluetoothctl: %s", e)
+    subprocess.run(["sudo", "btmgmt", "bondable", "off"], capture_output=True)
 
     dbus.mainloop.glib.DBusGMainLoop(set_as_default=True)
     bus = dbus.SystemBus()
-
-    try:
-        _pairing_agent = register_pairing_agent(bus)
-    except Exception as e:
-        logger.warning("Failed to register pairing agent: %s", e)
 
     adapter_path = _find_adapter(bus)
     if not adapter_path:
@@ -784,8 +778,6 @@ def run_ble_server():
         bus.get_object(BLUEZ_SERVICE, adapter_path), DBUS_PROP_IFACE,
     )
     adapter_props.Set(ADAPTER_IFACE, "Powered", dbus.Boolean(True))
-    adapter_props.Set(ADAPTER_IFACE, "Discoverable", dbus.Boolean(True))
-    adapter_props.Set(ADAPTER_IFACE, "DiscoverableTimeout", dbus.UInt32(0))
 
     app = Application(bus)
     nus = NusService(bus)

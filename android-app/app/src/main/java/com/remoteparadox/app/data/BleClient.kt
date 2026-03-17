@@ -4,7 +4,6 @@ import android.annotation.SuppressLint
 import android.bluetooth.*
 import android.bluetooth.le.*
 import android.content.Context
-import android.os.ParcelUuid
 import android.util.Log
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -32,12 +31,11 @@ class BleClient(private val context: Context) {
         private val NUS_RX = UUID.fromString("6e400002-b5a3-f393-e0a9-e50e24dcca9e")
         private val NUS_TX = UUID.fromString("6e400003-b5a3-f393-e0a9-e50e24dcca9e")
         private val CCC_DESCRIPTOR = UUID.fromString("00002902-0000-1000-8000-00805f9b34fb")
-        private const val TARGET_NAME = "Remote Paradox"
         private const val GATT_ERROR = 133
         private const val GATT_CONN_TIMEOUT = 8
         private const val GATT_CONN_TERMINATE_LOCAL = 22
-        private const val MAX_RETRIES = 2
-        private const val RETRY_DELAY_MS = 1000L
+        private const val MAX_RETRIES = 3
+        private const val RETRY_DELAY_MS = 2000L
     }
 
     private val adapter: BluetoothAdapter? =
@@ -58,6 +56,7 @@ class BleClient(private val context: Context) {
     private var scanCallback: ScanCallback? = null
     private var connectRetries = 0
     private var pendingAddress: String? = null
+    private var pendingDescriptorWrite = false
 
     fun startScan() {
         _devices.value = emptyList()
@@ -70,29 +69,36 @@ class BleClient(private val context: Context) {
 
         scanCallback = object : ScanCallback() {
             override fun onScanResult(callbackType: Int, result: ScanResult) {
-                val name = result.device.name ?: return
-                if (!name.contains("Remote Paradox", ignoreCase = true)) return
-                val dev = BleDevice(name, result.device.address, result.rssi)
+                val name = result.device.name
+                    ?: result.scanRecord?.deviceName
+                val serviceUuids = result.scanRecord?.serviceUuids?.map { it.uuid } ?: emptyList()
+                val hasNus = NUS_SERVICE in serviceUuids
+                val hasName = name?.contains("Remote Par", ignoreCase = true) == true
+                if (!hasNus && !hasName) return
+                val displayName = name ?: "Remote Paradox"
+                Log.d(TAG, "Scan hit: $displayName (${result.device.address}) rssi=${result.rssi} nus=$hasNus")
+                val dev = BleDevice(displayName, result.device.address, result.rssi)
                 val current = _devices.value.toMutableList()
                 if (current.none { it.address == dev.address }) {
                     current.add(dev)
                     _devices.value = current
+                    Log.i(TAG, "Found device: ${dev.name} ${dev.address}")
                 }
             }
 
             override fun onScanFailed(errorCode: Int) {
+                Log.e(TAG, "Scan failed with error code: $errorCode")
                 _state.value = BleConnectionState.Error
             }
         }
 
-        val filters = listOf(
-            ScanFilter.Builder().build()
-        )
+        val filters = listOf(ScanFilter.Builder().build())
         val settings = ScanSettings.Builder()
             .setScanMode(ScanSettings.SCAN_MODE_LOW_LATENCY)
             .build()
 
         scanner?.startScan(filters, settings, scanCallback)
+        Log.i(TAG, "BLE scan started")
 
         CoroutineScope(Dispatchers.Main).launch {
             delay(15_000)
@@ -119,7 +125,7 @@ class BleClient(private val context: Context) {
             return
         }
 
-        Log.i(TAG, "Connecting GATT to ${device.address} (bond=${device.bondState})...")
+        Log.i(TAG, "Connecting GATT to ${device.address}...")
         connectGatt(device)
     }
 
@@ -150,6 +156,7 @@ class BleClient(private val context: Context) {
         gatt?.close()
         gatt = null
         rxChar = null
+        pendingDescriptorWrite = false
         _state.value = BleConnectionState.Disconnected
     }
 
@@ -160,19 +167,18 @@ class BleClient(private val context: Context) {
         gatt?.writeCharacteristic(char)
     }
 
-    private var pendingDescriptorWrite = false
-
     private val gattCallback = object : BluetoothGattCallback() {
         override fun onConnectionStateChange(g: BluetoothGatt, status: Int, newState: Int) {
             Log.i(TAG, "onConnectionStateChange status=$status newState=$newState")
             if (newState == BluetoothProfile.STATE_CONNECTED && status == BluetoothGatt.GATT_SUCCESS) {
                 Log.i(TAG, "GATT connected, discovering services...")
                 connectRetries = 0
+                g.requestConnectionPriority(BluetoothGatt.CONNECTION_PRIORITY_HIGH)
                 g.discoverServices()
             } else if (newState == BluetoothProfile.STATE_DISCONNECTED) {
                 rxChar = null
                 pendingDescriptorWrite = false
-                // Retry on transient GATT errors (133, 8, 22)
+
                 val retriable = status == GATT_ERROR || status == GATT_CONN_TIMEOUT ||
                     status == GATT_CONN_TERMINATE_LOCAL
                 if (retriable && connectRetries < MAX_RETRIES &&
@@ -190,12 +196,15 @@ class BleClient(private val context: Context) {
         }
 
         override fun onServicesDiscovered(g: BluetoothGatt, status: Int) {
+            Log.i(TAG, "onServicesDiscovered status=$status")
             if (status != BluetoothGatt.GATT_SUCCESS) {
+                Log.e(TAG, "Service discovery failed with status=$status")
                 _state.value = BleConnectionState.Error
                 return
             }
             val service = g.getService(NUS_SERVICE)
             if (service == null) {
+                Log.w(TAG, "NUS service not found, marking connected anyway")
                 _state.value = BleConnectionState.Connected
                 return
             }
@@ -208,14 +217,17 @@ class BleClient(private val context: Context) {
                     pendingDescriptorWrite = true
                     desc.value = BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE
                     g.writeDescriptor(desc)
+                    Log.i(TAG, "Writing CCC descriptor for TX notifications...")
                     return
                 }
             }
+            Log.i(TAG, "Connected (no CCC descriptor)")
             _state.value = BleConnectionState.Connected
         }
 
         override fun onDescriptorWrite(g: BluetoothGatt, descriptor: BluetoothGattDescriptor, status: Int) {
             pendingDescriptorWrite = false
+            Log.i(TAG, "CCC descriptor written, status=$status — fully connected")
             _state.value = BleConnectionState.Connected
         }
 

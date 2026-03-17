@@ -254,18 +254,51 @@ private fun BleManageContent(
 
     Spacer(Modifier.height(16.dp))
 
-    // Pi Status
+    // Pi Status — parse JSON and display nicely
     if (statusMessage != null) {
+        val parsed = remember(statusMessage) {
+            try { org.json.JSONObject(statusMessage) } catch (_: Exception) { null }
+        }
+        val isError = parsed?.has("error") == true
+        val isStatus = parsed?.has("ip") == true
+
         Card(
             shape = RoundedCornerShape(12.dp),
-            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+            colors = CardDefaults.cardColors(
+                containerColor = when {
+                    isError -> Color(0xFFE94560).copy(alpha = 0.15f)
+                    isStatus -> Color(0xFF4CAF50).copy(alpha = 0.10f)
+                    else -> MaterialTheme.colorScheme.surface
+                }
+            ),
             modifier = Modifier.fillMaxWidth(),
         ) {
             Column(Modifier.padding(16.dp)) {
-                Text("Pi Response", fontWeight = FontWeight.Bold, color = Color.White, fontSize = 14.sp)
-                Spacer(Modifier.height(8.dp))
-                Text(statusMessage, color = Color.White.copy(alpha = 0.7f), fontSize = 12.sp,
-                    fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace)
+                when {
+                    isError -> {
+                        Text("Error", fontWeight = FontWeight.Bold, color = Color(0xFFE94560), fontSize = 14.sp)
+                        Spacer(Modifier.height(4.dp))
+                        Text(parsed!!.getString("error"), color = Color(0xFFE94560).copy(alpha = 0.8f), fontSize = 13.sp)
+                    }
+                    isStatus -> {
+                        Text("Pi Status", fontWeight = FontWeight.Bold, color = Color(0xFF4CAF50), fontSize = 14.sp)
+                        Spacer(Modifier.height(8.dp))
+                        @Composable fun row(label: String, value: String) {
+                            Row(Modifier.fillMaxWidth().padding(vertical = 2.dp)) {
+                                Text(label, color = Color.White.copy(alpha = 0.5f), fontSize = 13.sp, modifier = Modifier.width(80.dp))
+                                Text(value, color = Color.White, fontSize = 13.sp, fontWeight = FontWeight.Medium)
+                            }
+                        }
+                        row("IP", parsed!!.optString("ip", "—"))
+                        row("WiFi", parsed.optString("ssid", "—"))
+                        row("Version", parsed.optString("version", "—"))
+                        row("Trusted", if (parsed.optBoolean("trusted")) "Yes" else "No")
+                    }
+                    else -> {
+                        Text(statusMessage, color = Color.White.copy(alpha = 0.7f), fontSize = 12.sp,
+                            fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace)
+                    }
+                }
             }
         }
         Spacer(Modifier.height(12.dp))
