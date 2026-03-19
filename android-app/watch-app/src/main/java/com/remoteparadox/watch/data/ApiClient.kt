@@ -1,8 +1,6 @@
-package com.remoteparadox.app.data
+package com.remoteparadox.watch.data
 
-import android.os.Build
 import kotlinx.serialization.json.Json
-import okhttp3.Interceptor
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import retrofit2.Retrofit
@@ -31,17 +29,8 @@ object ApiClient {
             .create(ParadoxApi::class.java)
     }
 
-    val deviceName: String = "${Build.MANUFACTURER} ${Build.MODEL}".trim()
-
     private fun buildOkHttp(fingerprint: String): OkHttpClient {
-        val deviceHeader = Interceptor { chain ->
-            val request = chain.request().newBuilder()
-                .header("X-Device-Name", deviceName)
-                .build()
-            chain.proceed(request)
-        }
         val builder = OkHttpClient.Builder()
-            .addInterceptor(deviceHeader)
             .connectTimeout(5, TimeUnit.SECONDS)
             .readTimeout(10, TimeUnit.SECONDS)
             .writeTimeout(10, TimeUnit.SECONDS)
@@ -61,20 +50,12 @@ object ApiClient {
     }
 }
 
-/**
- * TrustManager that accepts any certificate. Used when the user logs in
- * directly (without QR) against a self-signed server.
- */
 private class TrustAllManager : X509TrustManager {
     override fun checkClientTrusted(chain: Array<out X509Certificate>?, authType: String?) {}
     override fun checkServerTrusted(chain: Array<out X509Certificate>?, authType: String?) {}
     override fun getAcceptedIssuers(): Array<X509Certificate> = arrayOf()
 }
 
-/**
- * TrustManager that accepts only a certificate whose SHA-256 fingerprint
- * matches the one embedded in the QR invite code.
- */
 private class FingerprintTrustManager(private val expectedFingerprint: String) : X509TrustManager {
     override fun checkClientTrusted(chain: Array<out X509Certificate>?, authType: String?) {}
 

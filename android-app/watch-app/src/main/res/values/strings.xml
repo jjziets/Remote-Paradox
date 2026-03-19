@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Remote Paradox</string>
+    <string name="tile_label">Alarm Status</string>
+    <string name="panic_tile_label">Panic</string>
+</resources>

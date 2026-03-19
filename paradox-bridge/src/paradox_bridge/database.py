@@ -163,13 +163,21 @@ class Database:
 
     # ── Audit Log ──
 
-    def log_action(self, username: str, action: str, detail: Optional[str] = None) -> None:
+    def log_action(self, username: str, action: str, detail: Optional[str] = None, device: Optional[str] = None) -> None:
         now = datetime.now(timezone.utc).isoformat()
+        self._ensure_audit_device_column()
         self.conn.execute(
-            "INSERT INTO audit_log (timestamp, username, action, detail) VALUES (?, ?, ?, ?)",
-            (now, username, action, detail),
+            "INSERT INTO audit_log (timestamp, username, action, detail, device) VALUES (?, ?, ?, ?, ?)",
+            (now, username, action, detail, device),
         )
         self.conn.commit()
+
+    def _ensure_audit_device_column(self) -> None:
+        try:
+            self.conn.execute("SELECT device FROM audit_log LIMIT 1")
+        except sqlite3.OperationalError:
+            self.conn.execute("ALTER TABLE audit_log ADD COLUMN device TEXT")
+            self.conn.commit()
 
     def get_audit_log(
         self, limit: int = 50, username: Optional[str] = None
