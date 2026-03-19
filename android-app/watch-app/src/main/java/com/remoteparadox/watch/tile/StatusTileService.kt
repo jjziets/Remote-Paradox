@@ -130,27 +130,23 @@ class StatusTileService : TileService() {
     }
 
     private fun buildPanicCircle(clickable: Clickable): LayoutElement {
-        val circleCorner = Corner.Builder().setRadius(dp(18f)).build()
-        return Box.Builder()
-            .setWidth(dp(36f))
-            .setHeight(dp(36f))
+        val outerCorner = Corner.Builder().setRadius(dp(24f)).build()
+        val midCorner = Corner.Builder().setRadius(dp(20f)).build()
+        val innerCorner = Corner.Builder().setRadius(dp(16f)).build()
+
+        val innerFace = Box.Builder()
+            .setWidth(dp(32f))
+            .setHeight(dp(32f))
             .setHorizontalAlignment(HORIZONTAL_ALIGN_CENTER)
             .setVerticalAlignment(VERTICAL_ALIGN_CENTER)
             .setModifiers(
                 Modifiers.Builder()
                     .setBackground(
                         Background.Builder()
-                            .setColor(argb(COLOR_AMBER))
-                            .setCorner(circleCorner)
+                            .setColor(argb(0xFFB71C1C.toInt()))
+                            .setCorner(innerCorner)
                             .build()
                     )
-                    .setBorder(
-                        Border.Builder()
-                            .setWidth(dp(2f))
-                            .setColor(argb(0xFFFFD54F.toInt()))
-                            .build()
-                    )
-                    .setClickable(clickable)
                     .build()
             )
             .addContent(
@@ -159,12 +155,61 @@ class StatusTileService : TileService() {
                     .setFontStyle(
                         FontStyle.Builder()
                             .setSize(sp(20f))
-                            .setColor(argb(0xFF000000.toInt()))
+                            .setColor(argb(COLOR_WHITE))
                             .setWeight(FONT_WEIGHT_BOLD)
                             .build()
                     )
                     .build()
             )
+            .build()
+
+        val redBody = Box.Builder()
+            .setWidth(dp(40f))
+            .setHeight(dp(40f))
+            .setHorizontalAlignment(HORIZONTAL_ALIGN_CENTER)
+            .setVerticalAlignment(VERTICAL_ALIGN_CENTER)
+            .setModifiers(
+                Modifiers.Builder()
+                    .setBackground(
+                        Background.Builder()
+                            .setColor(argb(0xFFE53935.toInt()))
+                            .setCorner(midCorner)
+                            .build()
+                    )
+                    .setBorder(
+                        Border.Builder()
+                            .setWidth(dp(1f))
+                            .setColor(argb(0xFFEF5350.toInt()))
+                            .build()
+                    )
+                    .build()
+            )
+            .addContent(innerFace)
+            .build()
+
+        return Box.Builder()
+            .setWidth(dp(48f))
+            .setHeight(dp(48f))
+            .setHorizontalAlignment(HORIZONTAL_ALIGN_CENTER)
+            .setVerticalAlignment(VERTICAL_ALIGN_CENTER)
+            .setModifiers(
+                Modifiers.Builder()
+                    .setBackground(
+                        Background.Builder()
+                            .setColor(argb(0xFFFDD835.toInt()))
+                            .setCorner(outerCorner)
+                            .build()
+                    )
+                    .setBorder(
+                        Border.Builder()
+                            .setWidth(dp(1f))
+                            .setColor(argb(0xFFFFF176.toInt()))
+                            .build()
+                    )
+                    .setClickable(clickable)
+                    .build()
+            )
+            .addContent(redBody)
             .build()
     }
 

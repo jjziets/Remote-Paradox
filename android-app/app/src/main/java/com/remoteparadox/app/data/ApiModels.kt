@@ -95,6 +95,7 @@ data class PanelEvent(
     val value: String,
     val timestamp: String,
     val user: String? = null,
+    val device: String? = null,
 )
 
 @Serializable
@@ -114,6 +115,7 @@ data class AuditEntry(
     val username: String,
     val action: String,
     val detail: String? = null,
+    val device: String? = null,
 )
 
 @Serializable

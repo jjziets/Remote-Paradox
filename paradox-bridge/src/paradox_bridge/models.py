@@ -101,6 +101,7 @@ class AuditEntry(BaseModel):
     username: str
     action: str
     detail: str | None = None
+    device: str | None = None
 
 
 class AuditLogResponse(BaseModel):

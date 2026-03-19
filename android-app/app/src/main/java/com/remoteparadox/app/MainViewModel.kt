@@ -563,8 +563,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                         timestampsClose(ev.timestamp, audit.timestamp)
                 }
                 if (matchIdx >= 0) {
-                    usedAudits.add(actionAudits[matchIdx].hashCode())
-                    ev.copy(user = actionAudits[matchIdx].username)
+                    val audit = actionAudits[matchIdx]
+                    usedAudits.add(audit.hashCode())
+                    ev.copy(user = audit.username, device = audit.device)
                 } else ev
             } else ev
         }
@@ -646,6 +647,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                     _state.update {
                         it.copy(alarmStatus = status, eventHistory = events, isLoading = false, error = null)
                     }
+                    refreshHistory()
                 }
                 "pong" -> { /* keepalive ack */ }
             }
@@ -684,8 +686,10 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                     connectWebSocket()
                 }
 
-                refreshStatus() // This cascades to BLE if HTTP fails
-                refreshHistory() // This cascades to BLE if HTTP fails
+                if (!_state.value.wsConnected) {
+                    refreshStatus()
+                    refreshHistory()
+                }
             }
         }
     }

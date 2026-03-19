@@ -9,7 +9,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Annotated
 
-from fastapi import Depends, FastAPI, HTTPException, Query, WebSocket, WebSocketDisconnect, status
+from fastapi import Depends, FastAPI, HTTPException, Query, Request, WebSocket, WebSocketDisconnect, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 from paradox_bridge.alarm import AlarmService
@@ -118,6 +118,10 @@ def require_admin(user: Annotated[dict, Depends(get_current_user)]) -> dict:
     if user.get("role") != "admin":
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Admin required")
     return user
+
+
+def get_device_name(request: Request) -> str | None:
+    return request.headers.get("x-device-name") or None
 
 
 def _get_local_ip() -> str:
@@ -725,6 +729,7 @@ async def arm_away(
     user: Annotated[dict, Depends(get_current_user)],
     alarm: Annotated[AlarmService, Depends(get_alarm)],
     audit: Annotated[AuditService, Depends(get_audit)],
+    device: Annotated[str | None, Depends(get_device_name)],
 ):
     if not alarm.is_connected:
         raise HTTPException(status_code=503, detail="Alarm not connected")
@@ -732,7 +737,7 @@ async def arm_away(
         ok = await alarm.arm_away(code=req.code, partition_id=req.partition_id)
     except ConnectionError:
         raise HTTPException(status_code=503, detail="Alarm connection lost")
-    audit.record(user["sub"], "arm_away", f"partition={req.partition_id} success={ok}")
+    audit.record(user["sub"], "arm_away", f"partition={req.partition_id} success={ok}", device=device)
     return ActionResult(success=ok, action="arm_away")
 
 
@@ -742,6 +747,7 @@ async def arm_stay(
     user: Annotated[dict, Depends(get_current_user)],
     alarm: Annotated[AlarmService, Depends(get_alarm)],
     audit: Annotated[AuditService, Depends(get_audit)],
+    device: Annotated[str | None, Depends(get_device_name)],
 ):
     if not alarm.is_connected:
         raise HTTPException(status_code=503, detail="Alarm not connected")
@@ -749,7 +755,7 @@ async def arm_stay(
         ok = await alarm.arm_stay(code=req.code, partition_id=req.partition_id)
     except ConnectionError:
         raise HTTPException(status_code=503, detail="Alarm connection lost")
-    audit.record(user["sub"], "arm_stay", f"partition={req.partition_id} success={ok}")
+    audit.record(user["sub"], "arm_stay", f"partition={req.partition_id} success={ok}", device=device)
     return ActionResult(success=ok, action="arm_stay")
 
 
@@ -759,6 +765,7 @@ async def disarm(
     user: Annotated[dict, Depends(get_current_user)],
     alarm: Annotated[AlarmService, Depends(get_alarm)],
     audit: Annotated[AuditService, Depends(get_audit)],
+    device: Annotated[str | None, Depends(get_device_name)],
 ):
     if not alarm.is_connected:
         raise HTTPException(status_code=503, detail="Alarm not connected")
@@ -766,7 +773,7 @@ async def disarm(
         ok = await alarm.disarm(code=req.code, partition_id=req.partition_id)
     except ConnectionError:
         raise HTTPException(status_code=503, detail="Alarm connection lost")
-    audit.record(user["sub"], "disarm", f"partition={req.partition_id} success={ok}")
+    audit.record(user["sub"], "disarm", f"partition={req.partition_id} success={ok}", device=device)
     return ActionResult(success=ok, action="disarm")
 
 
@@ -819,6 +826,7 @@ async def panic(
     user: Annotated[dict, Depends(get_current_user)],
     alarm: Annotated[AlarmService, Depends(get_alarm)],
     audit: Annotated[AuditService, Depends(get_audit)],
+    device: Annotated[str | None, Depends(get_device_name)],
 ):
     if not alarm.is_connected:
         raise HTTPException(status_code=503, detail="Alarm not connected")
@@ -826,7 +834,7 @@ async def panic(
         ok = await alarm.send_panic(partition_id=req.partition_id, panic_type=req.panic_type)
     except ConnectionError:
         raise HTTPException(status_code=503, detail="Alarm connection lost")
-    audit.record(user["sub"], "panic", f"partition={req.partition_id} type={req.panic_type}")
+    audit.record(user["sub"], "panic", f"partition={req.partition_id} type={req.panic_type}", device=device)
     return ActionResult(success=ok, action="panic")
 
 

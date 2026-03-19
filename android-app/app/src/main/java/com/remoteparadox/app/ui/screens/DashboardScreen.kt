@@ -707,8 +707,12 @@ private fun HistoryRow(event: PanelEvent) {
                     Text("$typeIcon ${event.label}", color = Color.White, fontSize = 13.sp)
                     if (event.user != null) {
                         Spacer(Modifier.width(6.dp))
+                        val byLine = buildString {
+                            append("by ${event.user}")
+                            if (event.device != null) append(" (${event.device})")
+                        }
                         Text(
-                            "by ${event.user}",
+                            byLine,
                             color = Color(0xFF64B5F6),
                             fontSize = 11.sp,
                             fontWeight = FontWeight.Medium,
