@@ -161,6 +161,8 @@ class MainActivity : ComponentActivity() {
                         onRefreshPiSystem = { vm.refreshPiSystem() },
                         onRebootPi = { vm.rebootPi() },
                         onBleLinkPi = { vm.goToBleFromSettings() },
+                        watchSyncState = state.watchSync,
+                        onSendToWatch = { vm.sendToWatch() },
                         onLogout = { vm.logout() },
                         onSwitchServer = { vm.switchServer() },
                         onBack = { vm.goBackToDashboard() },

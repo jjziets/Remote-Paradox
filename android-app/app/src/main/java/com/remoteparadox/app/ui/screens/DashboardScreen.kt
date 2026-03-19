@@ -11,6 +11,7 @@ import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.pager.HorizontalPager
+import androidx.compose.foundation.pager.PageSize
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -19,6 +20,7 @@ import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.*
+import androidx.compose.runtime.snapshots.SnapshotStateMap
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -31,6 +33,7 @@ import com.remoteparadox.app.data.AlarmStatus
 import com.remoteparadox.app.data.PanelEvent
 import com.remoteparadox.app.data.PartitionInfo
 import com.remoteparadox.app.data.ZoneInfo
+import com.remoteparadox.app.ui.calculateVisiblePartitions
 import com.remoteparadox.app.ui.theme.*
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -57,11 +60,11 @@ fun DashboardScreen(
     onHistoryTabShown: () -> Unit = {},
 ) {
     var showCodeDialog by remember { mutableStateOf<String?>(null) }
-    var currentTab by remember { mutableIntStateOf(0) }
+    val tabPerPartition = remember { mutableStateMapOf<Int, Int>() }
 
     LaunchedEffect(requestHistoryTab) {
         if (requestHistoryTab) {
-            currentTab = 1
+            tabPerPartition[selectedPartition] = 1
             onHistoryTabShown()
         }
     }
@@ -116,10 +119,14 @@ fun DashboardScreen(
             modifier = Modifier.fillMaxSize().padding(padding),
         ) {
         Column(modifier = Modifier.fillMaxSize()) {
-            // Fixed top: connection banner + partition tabs
             Column(modifier = Modifier.padding(horizontal = 16.dp)) {
                 Spacer(Modifier.height(8.dp))
-                ConnectionBanner(alarmStatus?.connected ?: false, isLoading)
+
+                PanicButtons(
+                    connected = alarmStatus?.connected ?: false,
+                    actionInProgress = actionInProgress,
+                    onPanic = { type -> onPanic(type, currentPartition?.id ?: 1) },
+                )
 
                 if (currentPartition?.mode == "triggered") {
                     Spacer(Modifier.height(12.dp))
@@ -138,96 +145,96 @@ fun DashboardScreen(
                 }
             }
 
-            // Swipeable pager for partition content
-            HorizontalPager(
-                state = pagerState,
-                modifier = Modifier.fillMaxSize(),
-                beyondViewportPageCount = 1,
-            ) { pageIndex ->
-                val partition = partitions.getOrNull(pageIndex)
-                LazyColumn(
-                    modifier = Modifier.fillMaxSize().padding(horizontal = 16.dp),
-                    verticalArrangement = Arrangement.spacedBy(12.dp),
-                ) {
-                    item { Spacer(Modifier.height(4.dp)) }
+            BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
+                val visibleCount = calculateVisiblePartitions(maxWidth.value, pageCount)
+                val pageWidth = maxWidth / visibleCount
+                val isMultiPane = visibleCount > 1
 
-                    item { PartitionStateCard(partition) }
+                HorizontalPager(
+                    state = pagerState,
+                    modifier = Modifier.fillMaxSize(),
+                    pageSize = PageSize.Fixed(pageWidth),
+                    beyondViewportPageCount = 1,
+                    pageSpacing = if (isMultiPane) 2.dp else 0.dp,
+                ) { pageIndex ->
+                    val partition = partitions.getOrNull(pageIndex)
+                    LazyColumn(
+                        modifier = Modifier.fillMaxSize().padding(horizontal = if (isMultiPane) 8.dp else 16.dp),
+                        verticalArrangement = Arrangement.spacedBy(12.dp),
+                    ) {
+                        item { Spacer(Modifier.height(4.dp)) }
 
-                    if (error != null) {
+                        item { PartitionStateCard(partition) }
+
+                        if (error != null) {
+                            item {
+                                Card(
+                                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.error.copy(alpha = 0.15f)),
+                                    shape = RoundedCornerShape(12.dp),
+                                ) {
+                                    Text(error, modifier = Modifier.padding(16.dp), color = MaterialTheme.colorScheme.error, fontSize = 13.sp)
+                                }
+                            }
+                        }
+
                         item {
-                            Card(
-                                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.error.copy(alpha = 0.15f)),
-                                shape = RoundedCornerShape(12.dp),
+                            val pid = partition?.id ?: 1
+                            ControlButtons(
+                                partition = partition,
+                                connected = alarmStatus?.connected ?: false,
+                                actionInProgress = actionInProgress,
+                                savedCode = savedAlarmCode,
+                                onArmAway = { if (savedAlarmCode != null) onArmAway(savedAlarmCode, pid) else showCodeDialog = "arm_away" },
+                                onArmStay = { if (savedAlarmCode != null) onArmStay(savedAlarmCode, pid) else showCodeDialog = "arm_stay" },
+                                onDisarm = { if (savedAlarmCode != null) onDisarm(savedAlarmCode, pid) else showCodeDialog = "disarm" },
+                            )
+                        }
+
+                        item {
+                            val pid = partition?.id ?: 0
+                            val thisTab = tabPerPartition[pid] ?: 0
+                            TabRow(
+                                selectedTabIndex = thisTab,
+                                containerColor = MaterialTheme.colorScheme.surface,
+                                contentColor = Color.White,
+                                modifier = Modifier.clip(RoundedCornerShape(10.dp)),
                             ) {
-                                Text(error, modifier = Modifier.padding(16.dp), color = MaterialTheme.colorScheme.error, fontSize = 13.sp)
+                                Tab(selected = thisTab == 0, onClick = { tabPerPartition[pid] = 0 },
+                                    text = { Text("Zones", fontWeight = FontWeight.SemiBold) })
+                                Tab(selected = thisTab == 1, onClick = { tabPerPartition[pid] = 1 },
+                                    text = { Text("History", fontWeight = FontWeight.SemiBold) })
                             }
                         }
-                    }
 
-                    item {
-                        val pid = partition?.id ?: 1
-                        ControlButtons(
-                            partition = partition,
-                            connected = alarmStatus?.connected ?: false,
-                            actionInProgress = actionInProgress,
-                            savedCode = savedAlarmCode,
-                            onArmAway = { if (savedAlarmCode != null) onArmAway(savedAlarmCode, pid) else showCodeDialog = "arm_away" },
-                            onArmStay = { if (savedAlarmCode != null) onArmStay(savedAlarmCode, pid) else showCodeDialog = "arm_stay" },
-                            onDisarm = { if (savedAlarmCode != null) onDisarm(savedAlarmCode, pid) else showCodeDialog = "disarm" },
-                        )
-                    }
-
-                    item {
-                        val pid = partition?.id ?: 1
-                        PanicButtons(
-                            connected = alarmStatus?.connected ?: false,
-                            actionInProgress = actionInProgress,
-                            onPanic = { type -> onPanic(type, pid) },
-                        )
-                    }
-
-                    item {
-                        TabRow(
-                            selectedTabIndex = currentTab,
-                            containerColor = MaterialTheme.colorScheme.surface,
-                            contentColor = Color.White,
-                            modifier = Modifier.clip(RoundedCornerShape(10.dp)),
-                        ) {
-                            Tab(selected = currentTab == 0, onClick = { currentTab = 0 },
-                                text = { Text("Zones", fontWeight = FontWeight.SemiBold) })
-                            Tab(selected = currentTab == 1, onClick = { currentTab = 1 },
-                                text = { Text("History", fontWeight = FontWeight.SemiBold) })
-                        }
-                    }
-
-                    if (currentTab == 0) {
-                        val zones = partition?.zones.orEmpty()
-                        if (zones.isNotEmpty()) {
-                            item {
-                                Text(
-                                    "${partition?.name ?: "Zones"} — ${zones.size} zones",
-                                    fontWeight = FontWeight.Bold, color = Color.White, fontSize = 16.sp,
-                                    modifier = Modifier.padding(top = 4.dp),
-                                )
-                            }
-                            item {
-                                ZoneGrid(zones = zones, onBypass = { zoneId, bypass -> onBypass(zoneId, bypass) })
-                            }
-                        }
-                    } else {
-                        if (eventHistory.isNotEmpty()) {
-                            items(eventHistory.take(30)) { event ->
-                                HistoryRow(event)
+                        if ((tabPerPartition[partition?.id ?: 0] ?: 0) == 0) {
+                            val zones = partition?.zones.orEmpty()
+                            if (zones.isNotEmpty()) {
+                                item {
+                                    Text(
+                                        "${zones.size} Zones",
+                                        fontWeight = FontWeight.Bold, color = Color.White, fontSize = 16.sp,
+                                        modifier = Modifier.padding(top = 4.dp),
+                                    )
+                                }
+                                item {
+                                    ZoneGrid(zones = zones, onBypass = { zoneId, bypass -> onBypass(zoneId, bypass) })
+                                }
                             }
                         } else {
-                            item {
-                                Text("No events yet", color = Color.White.copy(alpha = 0.5f), fontSize = 13.sp,
-                                    modifier = Modifier.fillMaxWidth().padding(16.dp))
+                            if (eventHistory.isNotEmpty()) {
+                                items(eventHistory.take(30)) { event ->
+                                    HistoryRow(event)
+                                }
+                            } else {
+                                item {
+                                    Text("No events yet", color = Color.White.copy(alpha = 0.5f), fontSize = 13.sp,
+                                        modifier = Modifier.fillMaxWidth().padding(16.dp))
+                                }
                             }
                         }
-                    }
 
-                    item { Spacer(Modifier.height(16.dp)) }
+                        item { Spacer(Modifier.height(16.dp)) }
+                    }
                 }
             }
         }
@@ -302,8 +309,8 @@ private fun PartitionTabs(partitions: List<PartitionInfo>, selectedId: Int, onSe
                 onClick = { onSelect(p.id) },
                 label = {
                     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                        Box(Modifier.size(8.dp).clip(CircleShape).background(modeColor))
-                        Text("${p.name}$extra", fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal)
+                        Box(Modifier.size(10.dp).clip(CircleShape).background(modeColor))
+                        Text("${p.name}$extra", fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal, fontSize = 15.sp)
                     }
                 },
                 modifier = Modifier.weight(1f),
@@ -377,15 +384,15 @@ private fun PartitionStateCard(partition: PartitionInfo?) {
             ) {
                 Icon(icon, null, tint = color, modifier = Modifier.size(32.dp))
             }
-            Column {
+            Column(modifier = Modifier.weight(1f)) {
                 Text(label, fontSize = 22.sp, fontWeight = FontWeight.ExtraBold, color = color)
-                val sub = buildString {
-                    append("${partition?.name ?: "—"}  •  ${zones.size} zones  •  ${zones.count { it.open }} open")
-                    val bp = zones.count { it.bypassed }
-                    if (bp > 0) append("  •  $bp bypassed")
-                    if (alarmCount > 0) append("  •  $alarmCount alarm")
+                val openCount = zones.count { it.open }
+                val bp = zones.count { it.bypassed }
+                Text("$openCount open", fontSize = 13.sp, color = Color.White.copy(alpha = 0.6f))
+                Text("$bp bypassed", fontSize = 13.sp, color = if (bp > 0) AlarmStay.copy(alpha = 0.8f) else Color.White.copy(alpha = 0.4f))
+                if (alarmCount > 0) {
+                    Text("$alarmCount alarm", fontSize = 13.sp, fontWeight = FontWeight.Bold, color = AlarmArmed)
                 }
-                Text(sub, fontSize = 13.sp, color = Color.White.copy(alpha = 0.6f))
             }
         }
         // Status line — always present to keep card height consistent across areas
@@ -419,100 +426,69 @@ private fun ControlButtons(
     onDisarm: () -> Unit,
 ) {
     val mode = partition?.mode ?: "disarmed"
+    val ready = partition?.ready ?: true
+    val isArmed = partition?.armed == true
+    val isArming = mode == "arming"
+    val isTriggered = mode == "triggered"
+    val isEntryDelay = partition?.entryDelay == true
+    val canArm = !isArmed && !isArming && !isTriggered && !isEntryDelay
+            && ready && connected && actionInProgress == null
+
     Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-        when {
-            mode == "arming" -> {
-                Button(
-                    onClick = onDisarm,
-                    modifier = Modifier.fillMaxWidth().height(52.dp),
-                    enabled = connected && actionInProgress == null,
-                    colors = ButtonDefaults.buttonColors(containerColor = AlarmDisarmed),
-                    shape = RoundedCornerShape(12.dp),
-                ) {
-                    Icon(Icons.Default.Close, null, Modifier.size(18.dp))
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            Button(
+                onClick = onArmAway,
+                modifier = Modifier.weight(1f).height(52.dp),
+                enabled = canArm,
+                colors = ButtonDefaults.buttonColors(containerColor = AlarmArmed),
+                shape = RoundedCornerShape(12.dp),
+            ) {
+                if (actionInProgress == "arm_away") {
+                    CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp, color = Color.White)
+                } else {
+                    Icon(Icons.Default.Shield, null, Modifier.size(18.dp))
                     Spacer(Modifier.width(6.dp))
-                    Text("CANCEL ARMING", fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                    Text("ARM AWAY", fontWeight = FontWeight.Bold, fontSize = 13.sp)
                 }
             }
-            mode == "triggered" || partition?.entryDelay == true -> {
-                Button(
-                    onClick = onDisarm,
-                    modifier = Modifier.fillMaxWidth().height(56.dp),
-                    enabled = connected && actionInProgress == null,
-                    colors = ButtonDefaults.buttonColors(containerColor = AlarmDisarmed),
-                    shape = RoundedCornerShape(12.dp),
-                ) {
-                    if (actionInProgress == "disarm") {
-                        CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp, color = Color.White)
-                    } else {
-                        Icon(Icons.Default.LockOpen, null, Modifier.size(20.dp))
-                        Spacer(Modifier.width(6.dp))
-                        Text("DISARM NOW", fontWeight = FontWeight.Bold, fontSize = 16.sp)
-                    }
-                }
-            }
-            partition?.armed == true -> {
-                Button(
-                    onClick = onDisarm,
-                    modifier = Modifier.fillMaxWidth().height(52.dp),
-                    enabled = connected && actionInProgress == null,
-                    colors = ButtonDefaults.buttonColors(containerColor = AlarmDisarmed),
-                    shape = RoundedCornerShape(12.dp),
-                ) {
-                    if (actionInProgress == "disarm") {
-                        CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp, color = Color.White)
-                    } else {
-                        Icon(Icons.Default.LockOpen, null, Modifier.size(18.dp))
-                        Spacer(Modifier.width(6.dp))
-                        Text("DISARM", fontWeight = FontWeight.Bold, fontSize = 14.sp)
-                    }
-                }
-            }
-            else -> {
-                val ready = partition?.ready ?: true
-                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                    Button(
-                        onClick = onArmAway,
-                        modifier = Modifier.weight(1f).height(52.dp),
-                        enabled = connected && actionInProgress == null && ready,
-                        colors = ButtonDefaults.buttonColors(containerColor = AlarmArmed),
-                        shape = RoundedCornerShape(12.dp),
-                    ) {
-                        if (actionInProgress == "arm_away") {
-                            CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp, color = Color.White)
-                        } else {
-                            Icon(Icons.Default.Shield, null, Modifier.size(18.dp))
-                            Spacer(Modifier.width(6.dp))
-                            Text("ARM AWAY", fontWeight = FontWeight.Bold, fontSize = 13.sp)
-                        }
-                    }
-                    Button(
-                        onClick = onArmStay,
-                        modifier = Modifier.weight(1f).height(52.dp),
-                        enabled = connected && actionInProgress == null && ready,
-                        colors = ButtonDefaults.buttonColors(containerColor = AlarmStay),
-                        shape = RoundedCornerShape(12.dp),
-                    ) {
-                        if (actionInProgress == "arm_stay") {
-                            CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp, color = Color.White)
-                        } else {
-                            Icon(Icons.Default.Home, null, Modifier.size(18.dp))
-                            Spacer(Modifier.width(6.dp))
-                            Text("ARM HOME", fontWeight = FontWeight.Bold, fontSize = 13.sp)
-                        }
-                    }
-                }
-                Button(
-                    onClick = onDisarm,
-                    modifier = Modifier.fillMaxWidth().height(52.dp),
-                    enabled = connected && actionInProgress == null,
-                    colors = ButtonDefaults.buttonColors(containerColor = AlarmDisarmed),
-                    shape = RoundedCornerShape(12.dp),
-                ) {
-                    Icon(Icons.Default.LockOpen, null, Modifier.size(18.dp))
+            Button(
+                onClick = onArmStay,
+                modifier = Modifier.weight(1f).height(52.dp),
+                enabled = canArm,
+                colors = ButtonDefaults.buttonColors(containerColor = AlarmStay),
+                shape = RoundedCornerShape(12.dp),
+            ) {
+                if (actionInProgress == "arm_stay") {
+                    CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp, color = Color.White)
+                } else {
+                    Icon(Icons.Default.Home, null, Modifier.size(18.dp))
                     Spacer(Modifier.width(6.dp))
-                    Text("DISARM", fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                    Text("ARM HOME", fontWeight = FontWeight.Bold, fontSize = 13.sp)
                 }
+            }
+        }
+
+        val disarmLabel = when {
+            isTriggered || isEntryDelay -> "DISARM NOW"
+            isArming -> "CANCEL ARMING"
+            else -> "DISARM"
+        }
+        Button(
+            onClick = onDisarm,
+            modifier = Modifier.fillMaxWidth().height(52.dp),
+            enabled = connected && actionInProgress == null,
+            colors = ButtonDefaults.buttonColors(containerColor = AlarmDisarmed),
+            shape = RoundedCornerShape(12.dp),
+        ) {
+            if (actionInProgress == "disarm") {
+                CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp, color = Color.White)
+            } else {
+                Icon(
+                    if (isArming) Icons.Default.Close else Icons.Default.LockOpen,
+                    null, Modifier.size(18.dp),
+                )
+                Spacer(Modifier.width(6.dp))
+                Text(disarmLabel, fontWeight = FontWeight.Bold, fontSize = 14.sp)
             }
         }
     }
@@ -607,8 +583,8 @@ private fun PanicButton(
 @Composable
 private fun ZoneGrid(zones: List<ZoneInfo>, onBypass: (Int, Boolean) -> Unit) {
     LazyVerticalGrid(
-        columns = GridCells.Fixed(2),
-        modifier = Modifier.fillMaxWidth().heightIn(max = 600.dp),
+        columns = GridCells.Adaptive(minSize = 150.dp),
+        modifier = Modifier.fillMaxWidth().heightIn(max = 800.dp),
         horizontalArrangement = Arrangement.spacedBy(8.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp),
         userScrollEnabled = false,

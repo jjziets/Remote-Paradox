@@ -72,6 +72,12 @@ data class PiSystemState(
     val error: String? = null,
 )
 
+data class WatchSyncState(
+    val syncing: Boolean = false,
+    val message: String? = null,
+    val isError: Boolean = false,
+)
+
 data class AppState(
     val screen: Screen = Screen.Loading,
     val alarmStatus: AlarmStatus? = null,
@@ -90,6 +96,7 @@ data class AppState(
     val piUpdate: PiUpdateState = PiUpdateState(),
     val piSystem: PiSystemState = PiSystemState(),
     val bleConnected: Boolean = false,
+    val watchSync: WatchSyncState = WatchSyncState(),
 )
 
 enum class Screen { Loading, Welcome, BleSetup, Scan, Setup, Login, Dashboard, Settings, UserManagement }
@@ -1372,6 +1379,35 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             for (z in p.zones) {
                 lastZoneOpen[z.id] = z.open
                 lastZoneAlarm[z.id] = z.alarm
+            }
+        }
+    }
+
+    // ── Watch Sync ──
+
+    private val watchSync by lazy { WatchSync(getApplication()) }
+
+    fun sendToWatch() {
+        Log.d(TAG, "=== sendToWatch triggered ===")
+        _state.update { it.copy(watchSync = WatchSyncState(syncing = true)) }
+        viewModelScope.launch(Dispatchers.IO) {
+            val result = watchSync.sendCredentialsToWatch(tokenStore)
+            Log.d(TAG, "sendToWatch result: $result")
+            when (result) {
+                is WatchSyncResult.Success -> {
+                    Log.i(TAG, "Watch sync SUCCESS: sent to ${result.nodeCount} node(s)")
+                    _state.update {
+                        it.copy(watchSync = WatchSyncState(
+                            message = "Synced to ${result.nodeCount} watch${if (result.nodeCount != 1) "es" else ""}",
+                        ))
+                    }
+                }
+                is WatchSyncResult.Error -> {
+                    Log.e(TAG, "Watch sync ERROR: ${result.message}")
+                    _state.update {
+                        it.copy(watchSync = WatchSyncState(message = result.message, isError = true))
+                    }
+                }
             }
         }
     }

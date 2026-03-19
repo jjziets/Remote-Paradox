@@ -42,6 +42,8 @@ fun SettingsScreen(
     onRefreshPiSystem: () -> Unit = {},
     onRebootPi: () -> Unit = {},
     onBleLinkPi: () -> Unit = {},
+    watchSyncState: com.remoteparadox.app.WatchSyncState = com.remoteparadox.app.WatchSyncState(),
+    onSendToWatch: () -> Unit = {},
     onLogout: () -> Unit,
     onSwitchServer: () -> Unit,
     onBack: () -> Unit,
@@ -273,6 +275,34 @@ fun SettingsScreen(
                         Icon(Icons.Default.Bluetooth, null, Modifier.size(18.dp))
                         Spacer(Modifier.width(8.dp))
                         Text("BLE Link to Pi", fontWeight = FontWeight.Medium)
+                    }
+
+                    Spacer(Modifier.height(8.dp))
+
+                    OutlinedButton(
+                        onClick = onSendToWatch,
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(10.dp),
+                        colors = ButtonDefaults.outlinedButtonColors(contentColor = Color(0xFFFF9800)),
+                        border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFFFF9800).copy(alpha = 0.5f)),
+                        enabled = !watchSyncState.syncing,
+                    ) {
+                        if (watchSyncState.syncing) {
+                            CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp, color = Color(0xFFFF9800))
+                        } else {
+                            Icon(Icons.Default.Watch, null, Modifier.size(18.dp))
+                        }
+                        Spacer(Modifier.width(8.dp))
+                        Text("Send to Watch", fontWeight = FontWeight.Medium)
+                    }
+
+                    if (watchSyncState.message != null) {
+                        Spacer(Modifier.height(4.dp))
+                        Text(
+                            watchSyncState.message,
+                            color = if (watchSyncState.isError) Color(0xFFE94560) else Color(0xFF4CAF50),
+                            fontSize = 12.sp,
+                        )
                     }
                 }
             }
