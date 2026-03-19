@@ -54,6 +54,7 @@ android {
 
     buildFeatures {
         compose = true
+        buildConfig = true
     }
 }
 
@@ -97,8 +98,9 @@ dependencies {
     // Haptics
     implementation("androidx.compose.material:material-icons-extended")
 
-    // Wearable Data Layer (phone → watch sync)
+    // Wearable Data Layer (phone → watch sync + updates)
     implementation("com.google.android.gms:play-services-wearable:18.2.0")
+    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-play-services:1.9.0")
 
     // Testing
     testImplementation("junit:junit:4.13.2")

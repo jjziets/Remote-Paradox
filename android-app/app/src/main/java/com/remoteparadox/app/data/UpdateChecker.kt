@@ -45,24 +45,9 @@ object UpdateChecker {
 
     fun check(): UpdateInfo {
         val currentVersion = BuildConfig.VERSION_NAME
-        val url = "https://api.github.com/repos/${BuildConfig.GITHUB_REPO}/releases/latest"
-
-        val request = Request.Builder()
-            .url(url)
-            .header("Accept", "application/vnd.github+json")
-            .build()
-
-        val response = client.newCall(request).execute()
-        val body = response.body?.string() ?: throw Exception("Empty response")
-
-        if (!response.isSuccessful) {
-            throw Exception("GitHub API error: ${response.code}")
-        }
-
-        val release = json.decodeFromString<GitHubRelease>(body)
+        val release = fetchLatestRelease()
         val latestVersion = release.tag_name.removePrefix("v")
-
-        val apkAsset = release.assets.firstOrNull { it.name.endsWith(".apk") }
+        val apkAsset = findPhoneAsset(release.assets)
 
         return UpdateInfo(
             latestVersion = latestVersion,
@@ -74,7 +59,45 @@ object UpdateChecker {
         )
     }
 
-    private fun isNewer(latest: String, current: String): Boolean {
+    fun checkWatch(currentWatchVersion: String): UpdateInfo {
+        val release = fetchLatestRelease()
+        val latestVersion = release.tag_name.removePrefix("v")
+        val watchAsset = findWatchAsset(release.assets)
+
+        return UpdateInfo(
+            latestVersion = latestVersion,
+            currentVersion = currentWatchVersion,
+            hasUpdate = isNewer(latestVersion, currentWatchVersion),
+            releaseNotes = release.body,
+            downloadUrl = watchAsset?.browser_download_url,
+            releaseUrl = release.html_url,
+        )
+    }
+
+    fun fetchLatestRelease(): GitHubRelease {
+        val url = "https://api.github.com/repos/${BuildConfig.GITHUB_REPO}/releases/latest"
+        val request = Request.Builder()
+            .url(url)
+            .header("Accept", "application/vnd.github+json")
+            .build()
+        val response = client.newCall(request).execute()
+        val body = response.body?.string() ?: throw Exception("Empty response")
+        if (!response.isSuccessful) {
+            throw Exception("GitHub API error: ${response.code}")
+        }
+        return json.decodeFromString<GitHubRelease>(body)
+    }
+
+    fun findWatchAsset(assets: List<GitHubAsset>): GitHubAsset? {
+        return assets.firstOrNull { it.name.contains("watch", ignoreCase = true) && it.name.endsWith(".apk") }
+    }
+
+    fun findPhoneAsset(assets: List<GitHubAsset>): GitHubAsset? {
+        return assets.firstOrNull { it.name.contains("phone", ignoreCase = true) && it.name.endsWith(".apk") }
+            ?: assets.firstOrNull { it.name.endsWith(".apk") && !it.name.contains("watch", ignoreCase = true) }
+    }
+
+    fun isNewer(latest: String, current: String): Boolean {
         val lParts = latest.split(".").mapNotNull { it.toIntOrNull() }
         val cParts = current.split(".").mapNotNull { it.toIntOrNull() }
         for (i in 0 until maxOf(lParts.size, cParts.size)) {

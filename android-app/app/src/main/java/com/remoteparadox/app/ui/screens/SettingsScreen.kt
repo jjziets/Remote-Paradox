@@ -19,6 +19,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.remoteparadox.app.BuildConfig
 import com.remoteparadox.app.UpdateState
+import com.remoteparadox.app.WatchUpdateState
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -44,6 +45,9 @@ fun SettingsScreen(
     onBleLinkPi: () -> Unit = {},
     watchSyncState: com.remoteparadox.app.WatchSyncState = com.remoteparadox.app.WatchSyncState(),
     onSendToWatch: () -> Unit = {},
+    watchUpdateState: WatchUpdateState = WatchUpdateState(),
+    onCheckWatchUpdate: () -> Unit = {},
+    onDownloadWatchUpdate: () -> Unit = {},
     onLogout: () -> Unit,
     onSwitchServer: () -> Unit,
     onBack: () -> Unit,
@@ -303,6 +307,114 @@ fun SettingsScreen(
                             color = if (watchSyncState.isError) Color(0xFFE94560) else Color(0xFF4CAF50),
                             fontSize = 12.sp,
                         )
+                    }
+                }
+            }
+
+            // Watch App Update
+            Card(
+                shape = RoundedCornerShape(12.dp),
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+            ) {
+                Column(modifier = Modifier.padding(16.dp)) {
+                    Text("Watch App", fontWeight = FontWeight.Bold, color = Color.White, fontSize = 14.sp)
+                    Spacer(Modifier.height(8.dp))
+
+                    when {
+                        watchUpdateState.sending -> {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp, color = Color(0xFFFF9800))
+                                Spacer(Modifier.width(12.dp))
+                                Text("Sending APK to watch...", color = Color.White, fontSize = 14.sp)
+                            }
+                        }
+                        watchUpdateState.downloading -> {
+                            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
+                                CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp, color = Color(0xFFFF9800))
+                                Spacer(Modifier.width(12.dp))
+                                Column(Modifier.weight(1f)) {
+                                    Text("Downloading watch update...", color = Color.White, fontSize = 14.sp)
+                                    Spacer(Modifier.height(4.dp))
+                                    LinearProgressIndicator(
+                                        progress = { watchUpdateState.downloadProgress },
+                                        modifier = Modifier.fillMaxWidth(),
+                                        color = Color(0xFFFF9800),
+                                    )
+                                    Text("${(watchUpdateState.downloadProgress * 100).toInt()}%",
+                                        color = Color.White.copy(alpha = 0.5f), fontSize = 12.sp)
+                                }
+                            }
+                        }
+                        watchUpdateState.checking -> {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp, color = Color.White)
+                                Spacer(Modifier.width(12.dp))
+                                Text("Checking watch version...", color = Color.White.copy(alpha = 0.7f), fontSize = 14.sp)
+                            }
+                        }
+                        watchUpdateState.success -> {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Icon(Icons.Default.CheckCircle, null, tint = Color(0xFF4CAF50), modifier = Modifier.size(18.dp))
+                                Spacer(Modifier.width(8.dp))
+                                Text("Update sent! Confirm install on watch.", color = Color(0xFF4CAF50), fontSize = 14.sp)
+                            }
+                        }
+                        watchUpdateState.updateAvailable && watchUpdateState.latestVersion != null -> {
+                            if (watchUpdateState.watchVersion != null) {
+                                Text("Current: v${watchUpdateState.watchVersion}",
+                                    color = Color.White.copy(alpha = 0.5f), fontSize = 12.sp)
+                                Spacer(Modifier.height(4.dp))
+                            }
+                            Card(
+                                shape = RoundedCornerShape(8.dp),
+                                colors = CardDefaults.cardColors(containerColor = Color(0xFFFF9800).copy(alpha = 0.15f)),
+                            ) {
+                                Column(Modifier.padding(12.dp)) {
+                                    Text("Update available: v${watchUpdateState.latestVersion}",
+                                        color = Color(0xFFFF9800), fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                                    Spacer(Modifier.height(8.dp))
+                                    Button(
+                                        onClick = onDownloadWatchUpdate,
+                                        modifier = Modifier.fillMaxWidth().height(40.dp),
+                                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFFF9800)),
+                                        shape = RoundedCornerShape(8.dp),
+                                        enabled = watchUpdateState.downloadUrl != null,
+                                    ) {
+                                        Icon(Icons.Default.Download, null, Modifier.size(16.dp))
+                                        Spacer(Modifier.width(6.dp))
+                                        Text("Update Watch", fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                                    }
+                                }
+                            }
+                        }
+                        watchUpdateState.watchVersion != null && !watchUpdateState.updateAvailable -> {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Icon(Icons.Default.CheckCircle, null, tint = Color(0xFF4CAF50), modifier = Modifier.size(18.dp))
+                                Spacer(Modifier.width(8.dp))
+                                Text("Watch is up to date (v${watchUpdateState.watchVersion})", color = Color(0xFF4CAF50), fontSize = 14.sp)
+                            }
+                        }
+                    }
+
+                    if (watchUpdateState.error != null) {
+                        Spacer(Modifier.height(4.dp))
+                        Text(watchUpdateState.error, color = MaterialTheme.colorScheme.error, fontSize = 12.sp)
+                    }
+
+                    if (!watchUpdateState.downloading && !watchUpdateState.sending) {
+                        Spacer(Modifier.height(8.dp))
+                        OutlinedButton(
+                            onClick = onCheckWatchUpdate,
+                            modifier = Modifier.fillMaxWidth().height(40.dp),
+                            shape = RoundedCornerShape(8.dp),
+                            enabled = !watchUpdateState.checking,
+                            colors = ButtonDefaults.outlinedButtonColors(contentColor = Color(0xFFFF9800)),
+                            border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFFFF9800).copy(alpha = 0.3f)),
+                        ) {
+                            Icon(Icons.Default.Watch, null, Modifier.size(16.dp))
+                            Spacer(Modifier.width(6.dp))
+                            Text("Check Watch for Updates", fontSize = 13.sp)
+                        }
                     }
                 }
             }
