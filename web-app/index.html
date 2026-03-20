@@ -126,6 +126,26 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;b
 .res-amber{background:#ff9800}
 .res-red{background:#e94560}
 .uptime-text{font-size:12px;opacity:.5;text-align:right;margin-top:4px}
+
+/* ── Wide / tablet / landscape layout ── */
+@media (min-width:900px) {
+  .wrap{max-width:1200px;display:flex;gap:16px;align-items:flex-start}
+  .main-col{flex:3;min-width:0}
+  .hist-col{flex:1;min-width:220px;max-width:320px;position:sticky;top:72px;max-height:calc(100vh - 88px);overflow-y:auto;background:#16213e;border-radius:12px;padding:12px;order:-1}
+  .hist-col::-webkit-scrollbar{width:4px}
+  .hist-col::-webkit-scrollbar-thumb{background:rgba(255,255,255,.15);border-radius:2px}
+  .hist-col .hist{font-size:12px;padding:6px 8px}
+  .hist-col .section-title{font-size:14px;margin:0 0 8px}
+  .view-tabs .view-tab[data-view="history"]{display:none}
+  .zone-grid{grid-template-columns:1fr 1fr 1fr}
+  .panic-row{flex-wrap:nowrap}
+  .btns .btn-row{max-width:500px}
+  .state-card{gap:20px}
+  .state-label{font-size:26px}
+}
+@media (min-width:1200px) {
+  .zone-grid{grid-template-columns:1fr 1fr 1fr 1fr}
+}
 </style>
 </head>
 <body>
@@ -163,39 +183,48 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;b
 
 <!-- APP -->
 <div id="vApp" class="wrap" style="display:none">
-  <div id="elBanner" class="banner off">Connecting...</div>
-  <div id="elAlarm" style="display:none"></div>
-  <div id="elTabs" class="tabs"></div>
-  <div id="elState" class="card"></div>
-  <div id="elErr" class="err"></div>
-
-  <div id="elCodeSetup" class="code-box" style="display:none">
-    <div class="section-title">Enter your alarm code</div>
-    <div style="margin:12px 0"><input id="inCode" maxlength="6" placeholder="----"></div>
-    <button class="btn blue" style="display:inline-block;padding:12px 24px" onclick="saveCode()">Save Code</button>
+  <!-- Side history panel (visible on wide screens) -->
+  <div id="elHistSide" class="hist-col" style="display:none">
+    <div class="section-title">&#x1F4DC; History</div>
+    <div id="elHistSideContent"></div>
   </div>
 
-  <div id="elCtrls" class="btns"></div>
+  <!-- Main content column -->
+  <div class="main-col">
+    <div id="elBanner" class="banner off">Connecting...</div>
+    <div id="elAlarm" style="display:none"></div>
+    <div id="elTabs" class="tabs"></div>
+    <div id="elState" class="card"></div>
+    <div id="elErr" class="err"></div>
 
-  <div id="elPanic" class="panic-section" style="display:none">
-    <div class="panic-row">
-      <button class="btn panic" onclick="doPanic('emergency')"><span style="font-size:20px">&#x1F6A8;</span>PANIC</button>
-      <button class="btn panic medical" onclick="doPanic('medical')"><span style="font-size:20px">&#x1F3E5;</span>MEDICAL</button>
-      <button class="btn panic fire" onclick="doPanic('fire')"><span style="font-size:20px">&#x1F525;</span>FIRE</button>
+    <div id="elCodeSetup" class="code-box" style="display:none">
+      <div class="section-title">Enter your alarm code</div>
+      <div style="margin:12px 0"><input id="inCode" maxlength="6" placeholder="----"></div>
+      <button class="btn blue" style="display:inline-block;padding:12px 24px" onclick="saveCode()">Save Code</button>
     </div>
-  </div>
 
-  <div class="view-tabs">
-    <button class="view-tab active" id="vtStatus" onclick="switchView('status')">Zones</button>
-    <button class="view-tab" id="vtHistory" onclick="switchView('history')">History</button>
-    <button class="view-tab" id="vtUsers" onclick="switchView('users')" style="display:none">Users</button>
-    <button class="view-tab" id="vtSystem" onclick="switchView('system')" style="display:none">System</button>
-  </div>
+    <div id="elCtrls" class="btns"></div>
 
-  <div id="elZones"></div>
-  <div id="elHist" style="display:none"></div>
-  <div id="elUsers" style="display:none"></div>
-  <div id="elSystem" style="display:none"></div>
+    <div id="elPanic" class="panic-section" style="display:none">
+      <div class="panic-row">
+        <button class="btn panic" onclick="doPanic('emergency')"><span style="font-size:20px">&#x1F6A8;</span>PANIC</button>
+        <button class="btn panic medical" onclick="doPanic('medical')"><span style="font-size:20px">&#x1F3E5;</span>MEDICAL</button>
+        <button class="btn panic fire" onclick="doPanic('fire')"><span style="font-size:20px">&#x1F525;</span>FIRE</button>
+      </div>
+    </div>
+
+    <div class="view-tabs">
+      <button class="view-tab active" id="vtStatus" onclick="switchView('status')">Zones</button>
+      <button class="view-tab" id="vtHistory" data-view="history" onclick="switchView('history')">History</button>
+      <button class="view-tab" id="vtUsers" onclick="switchView('users')" style="display:none">Users</button>
+      <button class="view-tab" id="vtSystem" onclick="switchView('system')" style="display:none">System</button>
+    </div>
+
+    <div id="elZones"></div>
+    <div id="elHist" style="display:none"></div>
+    <div id="elUsers" style="display:none"></div>
+    <div id="elSystem" style="display:none"></div>
+  </div>
 </div>
 
 <!-- Invite QR modal -->
@@ -217,6 +246,8 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;b
   var timer = null, pollMs = 5000;
 
   var $ = function(id){ return document.getElementById(id); };
+
+  function isWide() { return window.innerWidth >= 900; }
 
   var isDevMode = location.protocol === 'file:' ||
     (location.hostname === 'localhost' && location.port !== '9433');
@@ -288,9 +319,29 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;b
       $('elCtrls').style.display = 'none';
       $('elPanic').style.display = 'none';
     }
+    applyWideLayout();
     doRefresh();
     startPoll();
   }
+
+  function applyWideLayout() {
+    var wide = isWide();
+    $('elHistSide').style.display = wide ? '' : 'none';
+    if (wide && currentView === 'history') {
+      currentView = 'status';
+      $('vtStatus').className = 'view-tab active';
+      $('vtHistory').className = 'view-tab';
+      $('elZones').style.display = '';
+      $('elHist').style.display = 'none';
+    }
+  }
+
+  window.addEventListener('resize', function() {
+    if ($('vApp').style.display !== 'none') {
+      applyWideLayout();
+      renderSideHist();
+    }
+  });
 
   function startPoll() { stopPoll(); timer = setInterval(doRefresh, pollMs); }
   function stopPoll() { if (timer) { clearInterval(timer); timer = null; } }
@@ -346,11 +397,13 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;b
     }).catch(function(){});
     api('GET', '/alarm/history?limit=50').then(function(d) {
       histEvents = d.events || [];
+      if (isWide()) renderSideHist();
       if (currentView === 'history') renderHist();
     }).catch(function(){});
   };
 
   window.switchView = function(view) {
+    if (view === 'history' && isWide()) return;
     currentView = view;
     ['status','history','users','system'].forEach(function(v){
       var tab = $('vt' + v.charAt(0).toUpperCase() + v.slice(1));
@@ -521,14 +574,12 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;b
     $('elZones').innerHTML = h;
   }
 
-  function renderHist() {
-    $('elHist').style.display = '';
+  function buildHistHtml(limit) {
     if (!histEvents.length) {
-      $('elHist').innerHTML = '<div style="opacity:.5;font-size:13px;padding:8px;text-align:center">No events yet</div>';
-      return;
+      return '<div style="opacity:.5;font-size:13px;padding:8px;text-align:center">No events yet</div>';
     }
     var h = '';
-    histEvents.slice(0,40).forEach(function(e) {
+    histEvents.slice(0, limit || 40).forEach(function(e) {
       var prop = e.property || '';
       var val = e.value;
       var col = '#4caf50';
@@ -545,7 +596,16 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;b
         '<div class="info"><div class="zn">' + icon + ' ' + esc(e.label) + userHtml + '</div><div class="ts">' + esc(ts) + '</div></div>' +
         '<span class="ev" style="color:' + col + '">' + evLabel + '</span></div>';
     });
-    $('elHist').innerHTML = h;
+    return h;
+  }
+
+  function renderHist() {
+    $('elHist').style.display = '';
+    $('elHist').innerHTML = buildHistHtml(40);
+  }
+
+  function renderSideHist() {
+    $('elHistSideContent').innerHTML = buildHistHtml(50);
   }
 
   // ── User Management ──
