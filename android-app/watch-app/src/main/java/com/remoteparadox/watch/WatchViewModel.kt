@@ -552,11 +552,25 @@ class WatchViewModel(app: Application) : AndroidViewModel(app) {
                 updatesDir.mkdirs()
                 val apkFile = File(updatesDir, "watch-update.apk")
 
-                Log.i(TAG, "Receiving APK to ${apkFile.absolutePath}")
-                channelClient.receiveFile(channel, Uri.fromFile(apkFile), false).await()
-                Log.i(TAG, "APK received: ${apkFile.length()} bytes")
-
+                Log.i(TAG, "Receiving APK via input stream...")
+                val inputStream = channelClient.getInputStream(channel).await()
+                apkFile.outputStream().use { output ->
+                    val buffer = ByteArray(8192)
+                    var totalBytes = 0L
+                    var bytesRead: Int
+                    while (inputStream.read(buffer).also { bytesRead = it } != -1) {
+                        output.write(buffer, 0, bytesRead)
+                        totalBytes += bytesRead
+                    }
+                    Log.i(TAG, "APK received: $totalBytes bytes")
+                }
+                inputStream.close()
                 channelClient.close(channel).await()
+
+                if (apkFile.length() < 1000) {
+                    Log.e(TAG, "APK too small (${apkFile.length()} bytes), skipping install")
+                    return@launch
+                }
 
                 val contentUri = FileProvider.getUriForFile(
                     ctx, "${ctx.packageName}.fileprovider", apkFile
