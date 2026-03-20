@@ -1037,9 +1037,14 @@ private fun SettingsPanelConnectionCard(
                 ) {
                     Column(modifier = Modifier.padding(12.dp)) {
                         Text(
-                            "Change PC Password (panel section 910/911)",
+                            "PC Password (panel section 911)",
                             color = Color.White.copy(alpha = 0.7f),
                             fontSize = 12.sp,
+                        )
+                        Text(
+                            "Section 910 is the PC User Code — set on the panel only, not used by PAI.",
+                            color = Color.White.copy(alpha = 0.4f),
+                            fontSize = 11.sp,
                         )
                         Spacer(Modifier.height(6.dp))
                         OutlinedTextField(
@@ -1106,7 +1111,7 @@ private fun SettingsPanelConnectionCard(
                 AlertDialog(
                     onDismissRequest = { showPasswordConfirm = false },
                     title = { Text("Update PC Password?") },
-                    text = { Text("Set the PC password to \"${newPassword.trim()}\"?\n\nMake sure this matches what you set on the panel (section 910/911).") },
+                    text = { Text("Set the PC password to \"${newPassword.trim()}\"?\n\nMake sure this matches what you set on the panel (section 911).") },
                     confirmButton = {
                         TextButton(onClick = {
                             showPasswordConfirm = false
