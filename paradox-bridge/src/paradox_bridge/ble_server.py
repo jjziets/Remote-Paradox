@@ -464,7 +464,7 @@ def _handle_alarm_command(action: str, cmd: dict) -> str:
         endpoint = endpoint_map.get(action, "")
         body = json.dumps({"partition_id": partition, "code": code}).encode()
         if action == "panic":
-            body = json.dumps({"partition_id": partition, "type": cmd.get("type", "emergency")}).encode()
+            body = json.dumps({"partition_id": partition, "panic_type": cmd.get("type", "emergency")}).encode()
 
         req = urllib.request.Request(
             f"{base}/{endpoint}",

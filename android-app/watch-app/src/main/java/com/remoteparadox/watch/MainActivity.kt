@@ -4,10 +4,33 @@ import android.os.Bundle
 import android.util.Log
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.size
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.lifecycle.viewmodel.compose.viewModel
+import androidx.wear.compose.material3.AlertDialog
+import androidx.wear.compose.material3.Button
+import androidx.wear.compose.material3.ButtonDefaults
+import androidx.wear.compose.material3.CircularProgressIndicator
+import androidx.wear.compose.material3.MaterialTheme
+import androidx.wear.compose.material3.Text
+import androidx.wear.compose.material3.TextButton
 import androidx.wear.tiles.TileService
 import com.remoteparadox.watch.data.ApiClient
 import com.remoteparadox.watch.data.ArmRequest
@@ -16,6 +39,7 @@ import com.remoteparadox.watch.data.WatchTokenStore
 import com.remoteparadox.watch.tile.StatusTileService
 import com.remoteparadox.watch.ui.DashboardScreen
 import com.remoteparadox.watch.ui.SetupScreen
+import com.remoteparadox.watch.ui.theme.AlarmRed
 import com.remoteparadox.watch.ui.theme.RemoteParadoxWatchTheme
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -34,6 +58,10 @@ class MainActivity : ComponentActivity() {
         panicHandled = false
         if (isDirectTileAction(newIntent)) {
             executeDirectAction(newIntent)
+            return
+        }
+        if (newIntent.getStringExtra("action") == "panic") {
+            showPanicConfirmation()
             return
         }
         handleTileIntent(newIntent)
@@ -128,11 +156,108 @@ class MainActivity : ComponentActivity() {
         finish()
     }
 
+    private fun showPanicConfirmation() {
+        val tokenStore = WatchTokenStore(this)
+        if (!tokenStore.isLoggedIn) {
+            Log.w("MainActivity", "Panic action but not logged in, finishing")
+            finish()
+            return
+        }
+
+        setContent {
+            RemoteParadoxWatchTheme {
+                var sending by remember { mutableStateOf(false) }
+                var sent by remember { mutableStateOf(false) }
+
+                if (sent) {
+                    LaunchedEffect(Unit) {
+                        delay(1200)
+                        finish()
+                    }
+                    Box(
+                        Modifier.fillMaxSize().background(Color.Black),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Text(
+                            "PANIC SENT",
+                            color = AlarmRed,
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 18.sp,
+                            textAlign = TextAlign.Center,
+                        )
+                    }
+                } else if (sending) {
+                    Box(
+                        Modifier.fillMaxSize().background(Color.Black),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Column(
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            verticalArrangement = Arrangement.spacedBy(8.dp),
+                        ) {
+                            CircularProgressIndicator(Modifier.size(32.dp))
+                            Text("Sending...", fontSize = 14.sp, color = Color.White)
+                        }
+                    }
+                } else {
+                    AlertDialog(
+                        visible = true,
+                        onDismissRequest = { finish() },
+                        title = { Text("PANIC", color = AlarmRed, fontWeight = FontWeight.Bold) },
+                        text = {
+                            Text(
+                                "Send emergency panic alarm?",
+                                textAlign = TextAlign.Center,
+                                style = MaterialTheme.typography.bodySmall,
+                            )
+                        },
+                        confirmButton = {
+                            Button(
+                                onClick = {
+                                    sending = true
+                                    CoroutineScope(Dispatchers.IO).launch {
+                                        try {
+                                            val api = ApiClient.create(
+                                                tokenStore.baseUrl!!,
+                                                tokenStore.certFingerprint.orEmpty(),
+                                            )
+                                            val resp = api.panic(
+                                                tokenStore.bearerHeader,
+                                                PanicRequest(partitionId = 1),
+                                            )
+                                            Log.d("MainActivity", "Panic response: ${resp.code()}")
+                                        } catch (e: Exception) {
+                                            Log.e("MainActivity", "Panic failed: ${e.message}")
+                                        }
+                                        sent = true
+                                    }
+                                },
+                                colors = ButtonDefaults.buttonColors(containerColor = AlarmRed),
+                            ) {
+                                Text("CONFIRM", fontWeight = FontWeight.Bold)
+                            }
+                        },
+                        dismissButton = {
+                            TextButton(onClick = { finish() }) {
+                                Text("Cancel")
+                            }
+                        },
+                    )
+                }
+            }
+        }
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
         if (isDirectTileAction(intent)) {
             executeDirectAction(intent!!)
+            return
+        }
+
+        if (intent?.getStringExtra("action") == "panic") {
+            showPanicConfirmation()
             return
         }
 
