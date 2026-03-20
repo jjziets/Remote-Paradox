@@ -9,6 +9,7 @@ import com.google.android.gms.wearable.MessageEvent
 import com.google.android.gms.wearable.Wearable
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.tasks.await
+import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.withTimeoutOrNull
 import java.io.File
 
@@ -17,6 +18,7 @@ private const val WATCH_VERSION_QUERY_PATH = "/paradox/watch-version-query"
 private const val WATCH_VERSION_REPLY_PATH = "/paradox/watch-version-reply"
 private const val WATCH_UPDATE_CHANNEL_PATH = "/paradox/watch-update-apk"
 private const val VERSION_QUERY_TIMEOUT_MS = 8_000L
+private const val SEND_FILE_TIMEOUT_MS = 60_000L
 
 class WatchUpdater(private val context: Context) {
 
@@ -75,11 +77,22 @@ class WatchUpdater(private val context: Context) {
                 WATCH_UPDATE_CHANNEL_PATH,
             ).await()
 
-            Log.d(TAG, "Channel opened, sending file...")
-            channelClient.sendFile(channel, Uri.fromFile(apkFile)).await()
-            Log.i(TAG, "APK sent successfully")
-
-            channelClient.close(channel).await()
+            Log.d(TAG, "Channel opened, writing APK to output stream...")
+            withTimeout(SEND_FILE_TIMEOUT_MS) {
+                val outputStream = channelClient.getOutputStream(channel).await()
+                apkFile.inputStream().use { input ->
+                    val buffer = ByteArray(8192)
+                    var bytesRead: Int
+                    var totalSent = 0L
+                    while (input.read(buffer).also { bytesRead = it } != -1) {
+                        outputStream.write(buffer, 0, bytesRead)
+                        totalSent += bytesRead
+                    }
+                    outputStream.flush()
+                    outputStream.close()
+                    Log.i(TAG, "APK streamed: $totalSent bytes")
+                }
+            }
             true
         } catch (e: Exception) {
             Log.e(TAG, "Failed to send APK to watch", e)
