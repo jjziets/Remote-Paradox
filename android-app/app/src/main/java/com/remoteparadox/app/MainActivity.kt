@@ -79,6 +79,7 @@ class MainActivity : ComponentActivity() {
                             connectionState = bleState,
                             devices = bleDevs,
                             piStatus = bleResp,
+                            bluetoothEnabled = vm.isBluetoothEnabled,
                             manageMode = vm.bleLaunchedFromSettings,
                             isAdmin = vm.isAdmin,
                             authToken = vm.tokenStore.token ?: "",

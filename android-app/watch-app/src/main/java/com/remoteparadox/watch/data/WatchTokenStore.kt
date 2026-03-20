@@ -32,6 +32,14 @@ class WatchTokenStore(context: Context) {
         get() = prefs.getString(KEY_ALARM_CODE, null)
         set(value) = prefs.edit().putString(KEY_ALARM_CODE, value).apply()
 
+    var armAwayEnabled: Boolean
+        get() = prefs.getBoolean(KEY_ARM_AWAY_ENABLED, true)
+        set(value) = prefs.edit().putBoolean(KEY_ARM_AWAY_ENABLED, value).apply()
+
+    var armStayEnabled: Boolean
+        get() = prefs.getBoolean(KEY_ARM_STAY_ENABLED, true)
+        set(value) = prefs.edit().putBoolean(KEY_ARM_STAY_ENABLED, value).apply()
+
     val isLoggedIn: Boolean get() = token != null && serverHost != null
 
     val baseUrl: String?
@@ -53,5 +61,7 @@ class WatchTokenStore(context: Context) {
         private const val KEY_PORT = "server_port"
         private const val KEY_FINGERPRINT = "cert_fingerprint"
         private const val KEY_ALARM_CODE = "alarm_code"
+        private const val KEY_ARM_AWAY_ENABLED = "arm_away_enabled"
+        private const val KEY_ARM_STAY_ENABLED = "arm_stay_enabled"
     }
 }

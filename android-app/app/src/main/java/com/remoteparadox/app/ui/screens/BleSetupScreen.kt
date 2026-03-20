@@ -28,6 +28,7 @@ fun BleSetupScreen(
     connectionState: BleConnectionState,
     devices: List<BleDevice>,
     piStatus: String?,
+    bluetoothEnabled: Boolean = true,
     manageMode: Boolean = false,
     isAdmin: Boolean = false,
     authToken: String = "",
@@ -108,6 +109,7 @@ fun BleSetupScreen(
                     connectionState = connectionState,
                     devices = devices,
                     statusMessage = statusMessage,
+                    bluetoothEnabled = bluetoothEnabled,
                     isAdmin = isAdmin,
                     authToken = authToken,
                     wifiSsid = wifiSsid,
@@ -157,6 +159,7 @@ fun BleSetupScreen(
                     0 -> FindPiStep(
                         connectionState = connectionState,
                         devices = devices,
+                        bluetoothEnabled = bluetoothEnabled,
                         onRequestPermissions = {
                             permissionLauncher.launch(arrayOf(
                                 android.Manifest.permission.BLUETOOTH_SCAN,
@@ -207,6 +210,7 @@ private fun BleManageContent(
     connectionState: BleConnectionState,
     devices: List<BleDevice>,
     statusMessage: String?,
+    bluetoothEnabled: Boolean,
     isAdmin: Boolean,
     authToken: String,
     wifiSsid: String,
@@ -227,6 +231,7 @@ private fun BleManageContent(
         FindPiStep(
             connectionState = connectionState,
             devices = devices,
+            bluetoothEnabled = bluetoothEnabled,
             onRequestPermissions = onRequestPermissions,
             onStartScan = onStartScan,
             onConnect = onConnect,
@@ -434,6 +439,7 @@ private fun BleManageContent(
 private fun FindPiStep(
     connectionState: BleConnectionState,
     devices: List<BleDevice>,
+    bluetoothEnabled: Boolean,
     onRequestPermissions: () -> Unit,
     onStartScan: () -> Unit,
     onConnect: (String) -> Unit,
@@ -446,7 +452,25 @@ private fun FindPiStep(
     )
     Spacer(Modifier.height(24.dp))
 
-    when (connectionState) {
+    if (!bluetoothEnabled) {
+        Icon(Icons.Default.BluetoothDisabled, null, tint = Color(0xFFE94560), modifier = Modifier.size(48.dp))
+        Spacer(Modifier.height(12.dp))
+        Text("Bluetooth is turned off", color = Color(0xFFE94560), fontWeight = FontWeight.Bold, fontSize = 16.sp)
+        Spacer(Modifier.height(4.dp))
+        Text("Enable Bluetooth in your device settings to search for the Pi.",
+            color = Color.White.copy(alpha = 0.6f), fontSize = 14.sp, textAlign = TextAlign.Center)
+        Spacer(Modifier.height(16.dp))
+        Button(
+            onClick = onRequestPermissions,
+            modifier = Modifier.fillMaxWidth().height(48.dp),
+            shape = RoundedCornerShape(12.dp),
+            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF2196F3)),
+        ) {
+            Icon(Icons.Default.BluetoothSearching, null, Modifier.size(20.dp))
+            Spacer(Modifier.width(8.dp))
+            Text("Retry", fontWeight = FontWeight.Bold)
+        }
+    } else when (connectionState) {
         BleConnectionState.Scanning -> {
             CircularProgressIndicator(color = MaterialTheme.colorScheme.primary)
             Spacer(Modifier.height(12.dp))
@@ -458,7 +482,7 @@ private fun FindPiStep(
             Text("Connecting...", color = Color(0xFFFF9800))
         }
         BleConnectionState.Error -> {
-            Text("Bluetooth error. Make sure Bluetooth is enabled.", color = Color(0xFFE94560))
+            Text("Bluetooth error. Check permissions and try again.", color = Color(0xFFE94560))
             Spacer(Modifier.height(12.dp))
             Button(onClick = onRequestPermissions) { Text("Retry") }
         }

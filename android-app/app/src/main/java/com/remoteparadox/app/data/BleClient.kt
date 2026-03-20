@@ -73,11 +73,20 @@ class BleClient(private val context: Context) {
     // Serialize BLE commands — only one at a time to prevent response interleaving
     private val commandMutex = Mutex()
 
+    val isBluetoothEnabled: Boolean
+        get() = adapter?.isEnabled == true
+
     fun startScan() {
         _devices.value = emptyList()
+
+        if (adapter == null || !adapter.isEnabled) {
+            _state.value = BleConnectionState.Error
+            return
+        }
+
         _state.value = BleConnectionState.Scanning
 
-        scanner = adapter?.bluetoothLeScanner ?: run {
+        scanner = adapter.bluetoothLeScanner ?: run {
             _state.value = BleConnectionState.Error
             return
         }

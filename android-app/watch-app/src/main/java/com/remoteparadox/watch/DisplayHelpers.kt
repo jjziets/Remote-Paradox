@@ -35,3 +35,16 @@ fun bypassedZones(partition: PartitionInfo): List<ZoneInfo> =
     partition.zones.filter { it.bypassed }
 
 fun isSplitScreen(status: AlarmStatus): Boolean = status.partitions.size >= 2
+
+enum class SmartAction { ARM_AWAY, ARM_STAY, DISARM, SHOW_DIALOG }
+
+fun smartAction(mode: String, armed: Boolean, armAwayEnabled: Boolean, armStayEnabled: Boolean): SmartAction {
+    val isArming = mode in listOf("arming", "exit_delay")
+    val isArmed = armed || mode == "triggered"
+    return when {
+        isArming || isArmed -> SmartAction.DISARM
+        armAwayEnabled && !armStayEnabled -> SmartAction.ARM_AWAY
+        armStayEnabled && !armAwayEnabled -> SmartAction.ARM_STAY
+        else -> SmartAction.SHOW_DIALOG
+    }
+}

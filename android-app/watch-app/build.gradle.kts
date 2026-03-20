@@ -21,8 +21,8 @@ android {
         applicationId = "com.remoteparadox.app"
         minSdk = 30
         targetSdk = 34
-        versionCode = 3
-        versionName = "1.0.0"
+        versionCode = 4
+        versionName = "1.2.0"
     }
 
     signingConfigs {
@@ -35,6 +35,11 @@ android {
     }
 
     buildTypes {
+        debug {
+            if (keystorePropertiesFile.exists()) {
+                signingConfig = signingConfigs.getByName("release")
+            }
+        }
         release {
             isMinifyEnabled = true
             isShrinkResources = true

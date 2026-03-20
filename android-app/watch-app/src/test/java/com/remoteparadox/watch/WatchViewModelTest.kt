@@ -160,6 +160,41 @@ class WatchViewModelTest {
     }
 
     @Test
+    fun `smartAction returns DISARM when armed`() {
+        assertEquals(SmartAction.DISARM, smartAction("armed_away", armed = true, armAwayEnabled = true, armStayEnabled = true))
+    }
+
+    @Test
+    fun `smartAction returns DISARM when triggered`() {
+        assertEquals(SmartAction.DISARM, smartAction("triggered", armed = true, armAwayEnabled = true, armStayEnabled = true))
+    }
+
+    @Test
+    fun `smartAction returns DISARM when arming`() {
+        assertEquals(SmartAction.DISARM, smartAction("arming", armed = false, armAwayEnabled = true, armStayEnabled = true))
+    }
+
+    @Test
+    fun `smartAction returns DISARM when exit_delay`() {
+        assertEquals(SmartAction.DISARM, smartAction("exit_delay", armed = false, armAwayEnabled = true, armStayEnabled = true))
+    }
+
+    @Test
+    fun `smartAction returns SHOW_DIALOG when both modes enabled and disarmed`() {
+        assertEquals(SmartAction.SHOW_DIALOG, smartAction("disarmed", armed = false, armAwayEnabled = true, armStayEnabled = true))
+    }
+
+    @Test
+    fun `smartAction returns ARM_AWAY when only away enabled and disarmed`() {
+        assertEquals(SmartAction.ARM_AWAY, smartAction("disarmed", armed = false, armAwayEnabled = true, armStayEnabled = false))
+    }
+
+    @Test
+    fun `smartAction returns ARM_STAY when only stay enabled and disarmed`() {
+        assertEquals(SmartAction.ARM_STAY, smartAction("disarmed", armed = false, armAwayEnabled = false, armStayEnabled = true))
+    }
+
+    @Test
     fun `bypassedZones returns only bypassed zones`() {
         val partition = PartitionInfo(
             id = 1, name = "House", armed = false, mode = "disarmed",
