@@ -15,7 +15,7 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from paradox_bridge.alarm import AlarmService
 from paradox_bridge.audit import AuditService
 from paradox_bridge.auth import AuthService
-from paradox_bridge.config import AppConfig, load_config
+from paradox_bridge.config import AppConfig, load_config, save_config_field
 from paradox_bridge.database import Database
 from paradox_bridge.models import (
     ActionResult,
@@ -41,6 +41,8 @@ from paradox_bridge.models import (
     SystemResourcesResponse,
     UserInfo,
     UserListResponse,
+    PaiStatusResponse,
+    PcPasswordUpdateRequest,
     RoleUpdateRequest,
     WifiInfoResponse,
     ZoneResponse,
@@ -669,6 +671,81 @@ def system_reboot(
         return ActionResult(success=True, action="reboot", message="Pi is rebooting...")
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/system/pai-stop", response_model=ActionResult)
+async def system_pai_stop(
+    admin: Annotated[dict, Depends(require_admin)],
+    alarm: Annotated[AlarmService, Depends(get_alarm)],
+    audit: Annotated[AuditService, Depends(get_audit)],
+):
+    if alarm.demo_mode:
+        raise HTTPException(status_code=400, detail="Not available in demo mode")
+    if not alarm.is_connected:
+        return ActionResult(success=True, action="pai_stop", message="PAI already disconnected")
+    await alarm.disconnect()
+    audit.record(admin["sub"], "pai_stop", "Admin disconnected PAI from panel")
+    return ActionResult(success=True, action="pai_stop", message="PAI disconnected — panel keypad is free")
+
+
+@app.post("/system/pai-start", response_model=ActionResult)
+async def system_pai_start(
+    admin: Annotated[dict, Depends(require_admin)],
+    alarm: Annotated[AlarmService, Depends(get_alarm)],
+    audit: Annotated[AuditService, Depends(get_audit)],
+):
+    if alarm.demo_mode:
+        raise HTTPException(status_code=400, detail="Not available in demo mode")
+    if alarm.is_connected:
+        return ActionResult(success=True, action="pai_start", message="PAI already connected")
+    try:
+        await alarm._connect_pai()
+        audit.record(admin["sub"], "pai_start", "Admin reconnected PAI to panel")
+        return ActionResult(success=True, action="pai_start", message="PAI reconnected to panel")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to reconnect: {e}")
+
+
+@app.get("/system/pai-status", response_model=PaiStatusResponse)
+def system_pai_status(
+    _admin: Annotated[dict, Depends(require_admin)],
+    alarm: Annotated[AlarmService, Depends(get_alarm)],
+):
+    pw = alarm._pc_password or ""
+    masked = pw[:1] + "*" * (len(pw) - 1) if len(pw) > 1 else "****"
+    return PaiStatusResponse(
+        connected=alarm.is_connected,
+        pc_password_masked=masked,
+        serial_port=alarm._serial_port,
+        baud=alarm._baud,
+    )
+
+
+@app.post("/system/pai-password", response_model=ActionResult)
+async def system_pai_password(
+    body: PcPasswordUpdateRequest,
+    admin: Annotated[dict, Depends(require_admin)],
+    alarm: Annotated[AlarmService, Depends(get_alarm)],
+    audit: Annotated[AuditService, Depends(get_audit)],
+):
+    if alarm.demo_mode:
+        raise HTTPException(status_code=400, detail="Not available in demo mode")
+    if alarm.is_connected:
+        raise HTTPException(
+            status_code=409,
+            detail="Stop PAI first before changing the PC password",
+        )
+    new_pw = body.pc_password.strip()
+    if not new_pw:
+        raise HTTPException(status_code=400, detail="Password cannot be empty")
+    alarm._pc_password = new_pw
+    save_config_field(_config.config_path, "panel_pc_password", new_pw)
+    audit.record(admin["sub"], "pai_password", "Admin changed panel PC password")
+    return ActionResult(
+        success=True,
+        action="pai_password",
+        message="PC password updated. Start PAI to connect with the new password.",
+    )
 
 
 @app.get("/system/ble-clients", response_model=BleClientsResponse)

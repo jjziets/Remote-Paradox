@@ -163,5 +163,14 @@ class BleClientsResponse(BaseModel):
     count: int
 
 
+class PaiStatusResponse(BaseModel):
+    connected: bool
+    pc_password_masked: str
+    serial_port: str
+    baud: int
+
+class PcPasswordUpdateRequest(BaseModel):
+    pc_password: str
+
 class ErrorResponse(BaseModel):
     detail: str

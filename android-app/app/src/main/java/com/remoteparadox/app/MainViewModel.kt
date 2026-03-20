@@ -67,6 +67,8 @@ data class PiSystemState(
     val resources: com.remoteparadox.app.data.SystemResources? = null,
     val wifi: com.remoteparadox.app.data.WifiInfo? = null,
     val bleClients: com.remoteparadox.app.data.BleClientsResponse? = null,
+    val paiStatus: com.remoteparadox.app.data.PaiStatusResponse? = null,
+    val alarmConnected: Boolean? = null,
     val loading: Boolean = false,
     val rebooting: Boolean = false,
     val error: String? = null,
@@ -1053,11 +1055,15 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 val resResp = a.systemResources(tokenStore.bearerHeader)
                 val wifiResp = a.systemWifi(tokenStore.bearerHeader)
                 val bleResp = try { a.bleClients(tokenStore.bearerHeader).body() } catch (_: Exception) { null }
+                val healthResp = try { a.health().body() } catch (_: Exception) { null }
+                val paiResp = try { a.paiStatus(tokenStore.bearerHeader).body() } catch (_: Exception) { null }
                 _state.update {
                     it.copy(piSystem = PiSystemState(
                         resources = resResp.body(),
                         wifi = wifiResp.body(),
                         bleClients = bleResp,
+                        paiStatus = paiResp,
+                        alarmConnected = paiResp?.connected ?: healthResp?.alarmConnected,
                     ))
                 }
             } catch (e: Exception) {
@@ -1122,6 +1128,54 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 }
             } catch (e: Exception) {
                 _state.update { it.copy(piSystem = it.piSystem.copy(rebooting = false, error = e.message)) }
+            }
+        }
+    }
+
+    fun paiStop() {
+        val a = api ?: return
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val resp = a.paiStop(tokenStore.bearerHeader)
+                val msg = if (resp.isSuccessful) "PAI disconnected — keypad is free"
+                    else resp.errorBody()?.string() ?: "Failed to stop PAI"
+                _state.update { it.copy(piSystem = it.piSystem.copy(error = msg)) }
+                refreshPiSystem()
+            } catch (e: Exception) {
+                _state.update { it.copy(piSystem = it.piSystem.copy(error = e.message)) }
+            }
+        }
+    }
+
+    fun paiStart() {
+        val a = api ?: return
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val resp = a.paiStart(tokenStore.bearerHeader)
+                val msg = if (resp.isSuccessful) "PAI reconnected to panel"
+                    else resp.errorBody()?.string() ?: "Failed to start PAI"
+                _state.update { it.copy(piSystem = it.piSystem.copy(error = msg)) }
+                refreshPiSystem()
+            } catch (e: Exception) {
+                _state.update { it.copy(piSystem = it.piSystem.copy(error = e.message)) }
+            }
+        }
+    }
+
+    fun paiUpdatePassword(newPassword: String) {
+        val a = api ?: return
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val resp = a.paiPassword(
+                    tokenStore.bearerHeader,
+                    com.remoteparadox.app.data.PcPasswordUpdateRequest(newPassword),
+                )
+                val msg = if (resp.isSuccessful) resp.body()?.message ?: "Password updated"
+                    else resp.errorBody()?.string() ?: "Failed to update password"
+                _state.update { it.copy(piSystem = it.piSystem.copy(error = msg)) }
+                refreshPiSystem()
+            } catch (e: Exception) {
+                _state.update { it.copy(piSystem = it.piSystem.copy(error = e.message)) }
             }
         }
     }

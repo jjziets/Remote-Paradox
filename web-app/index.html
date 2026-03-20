@@ -709,6 +709,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;b
       api('GET', '/system/resources').catch(function(){ return null; }),
       api('GET', '/system/wifi').catch(function(){ return null; }),
       api('GET', '/system/ble-clients').catch(function(){ return null; }),
+      api('GET', '/system/pai-status').catch(function(){ return null; }),
     ]).then(function(results) {
       var health = results[0] || {};
       var update = results[1] || {};
@@ -716,6 +717,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;b
       var res = results[3];
       var wifi = results[4];
       var ble = results[5];
+      var pai = results[6];
 
       var h = '';
 
@@ -781,6 +783,31 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;b
       h += '<button class="btn blue" style="width:100%;margin-bottom:8px" onclick="doCheckPiUpdate()">&#x1F50D; Check for Updates</button>';
       h += '</div>';
 
+      // ── Panel Connection (PAI) ──
+      h += '<div class="sys-card">';
+      h += '<div class="section-title" style="margin-top:0">&#x1F50C; Panel Connection (PAI)</div>';
+      var paiConn = pai ? pai.connected : health.alarm_connected;
+      if (pai) {
+        h += '<div class="sys-row"><span class="sys-label">Serial Port</span><span class="sys-value">' + esc(pai.serial_port) + '</span></div>';
+        h += '<div class="sys-row"><span class="sys-label">Baud Rate</span><span class="sys-value">' + pai.baud + '</span></div>';
+        h += '<div class="sys-row"><span class="sys-label">PC Password</span><span class="sys-value">' + esc(pai.pc_password_masked) + '</span></div>';
+        h += '<div class="sys-row"><span class="sys-label">Status</span><span class="sys-value" style="color:' + (paiConn ? '#4caf50' : '#e94560') + '">' + (paiConn ? 'Connected' : 'Disconnected') + '</span></div>';
+      }
+      h += '<div style="margin-top:8px">';
+      if (paiConn) {
+        h += '<button class="btn amber" style="width:100%;margin-bottom:8px" onclick="doPaiStop()">&#x23F9; Stop PAI &mdash; Release Panel for Keypad</button>';
+        h += '<div style="font-size:11px;opacity:.5">Disconnects the serial link so you can use the installer code on the keypad.</div>';
+      } else {
+        h += '<div style="background:rgba(255,255,255,.05);border-radius:8px;padding:12px;margin-bottom:8px">';
+        h += '<div style="font-size:12px;color:#ccc;margin-bottom:6px">Change PC Password (panel section 910/911)</div>';
+        h += '<input id="paiPwInput" type="text" placeholder="New PC password" style="width:100%;padding:8px;border-radius:6px;border:1px solid rgba(255,255,255,.2);background:rgba(255,255,255,.08);color:#fff;font-size:14px;box-sizing:border-box;margin-bottom:6px">';
+        h += '<button class="btn blue" style="width:100%" onclick="doPaiPasswordUpdate()">&#x1F511; Update Password</button>';
+        h += '</div>';
+        h += '<button class="btn green" style="width:100%;margin-bottom:4px" onclick="doPaiStart()">&#x25B6; Start PAI &mdash; Reconnect to Panel</button>';
+      }
+      h += '</div>';
+      h += '</div>';
+
       // ── Maintenance ──
       h += '<div class="sys-card">';
       h += '<div class="section-title" style="margin-top:0">&#x1F527; Maintenance</div>';
@@ -830,6 +857,29 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;b
       showErr('Check failed: ' + String(e));
       loadSystem();
     });
+  };
+
+  window.doPaiStop = function() {
+    if (!confirm('Stop PAI?\nThis disconnects from the alarm panel so you can use the keypad with the installer code.\n\nRemote arm/disarm will not work until you reconnect.')) return;
+    api('POST', '/system/pai-stop').then(function(d) {
+      if (d.success) { loadSystem(); } else { showErr(d.message || 'Failed'); }
+    }).catch(function(e){ showErr(String(e)); });
+  };
+
+  window.doPaiStart = function() {
+    api('POST', '/system/pai-start').then(function(d) {
+      if (d.success) { loadSystem(); } else { showErr(d.message || 'Failed to reconnect'); }
+    }).catch(function(e){ showErr(String(e)); });
+  };
+
+  window.doPaiPasswordUpdate = function() {
+    var inp = document.getElementById('paiPwInput');
+    var pw = (inp && inp.value || '').trim();
+    if (!pw) { showErr('Enter a new PC password'); return; }
+    if (!confirm('Update the panel PC password to "' + pw + '"?\n\nMake sure this matches what you set on the panel (section 910/911).')) return;
+    api('POST', '/system/pai-password', { pc_password: pw }).then(function(d) {
+      if (d.success) { showErr(d.message); loadSystem(); } else { showErr(d.message || 'Failed'); }
+    }).catch(function(e){ showErr(String(e)); });
   };
 
   window.doApplyPiUpdate = function() {
