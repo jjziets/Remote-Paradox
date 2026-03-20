@@ -295,7 +295,9 @@ class AlarmService:
         if self._demo_mode:
             return self._panel.send_panic(partition_id, panic_type)
         try:
-            return await self._pai.control_partition(str(partition_id), "panic")
+            return await self._pai.send_panic(
+                str(partition_id), panic_type, "1",
+            )
         except ConnectionError:
             self._connected = False
             raise
