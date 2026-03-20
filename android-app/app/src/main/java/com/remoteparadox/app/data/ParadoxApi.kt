@@ -115,6 +115,27 @@ interface ParadoxApi {
         @Header("Authorization") auth: String,
     ): Response<ActionResult>
 
+    @POST("system/pai-stop")
+    suspend fun paiStop(
+        @Header("Authorization") auth: String,
+    ): Response<ActionResult>
+
+    @POST("system/pai-start")
+    suspend fun paiStart(
+        @Header("Authorization") auth: String,
+    ): Response<ActionResult>
+
+    @GET("system/pai-status")
+    suspend fun paiStatus(
+        @Header("Authorization") auth: String,
+    ): Response<PaiStatusResponse>
+
+    @POST("system/pai-password")
+    suspend fun paiPassword(
+        @Header("Authorization") auth: String,
+        @Body body: PcPasswordUpdateRequest,
+    ): Response<ActionResult>
+
     @GET("system/ble-clients")
     suspend fun bleClients(
         @Header("Authorization") auth: String,

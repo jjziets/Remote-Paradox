@@ -61,6 +61,15 @@ def generate_default_config(path: str) -> None:
         json.dump(data, f, indent=2)
 
 
+def save_config_field(path: str, key: str, value) -> None:
+    p = Path(path)
+    with open(p) as f:
+        data = json.load(f)
+    data[key] = value
+    with open(p, "w") as f:
+        json.dump(data, f, indent=2)
+
+
 def load_config(path: str) -> AppConfig:
     p = Path(path)
     if not p.exists():

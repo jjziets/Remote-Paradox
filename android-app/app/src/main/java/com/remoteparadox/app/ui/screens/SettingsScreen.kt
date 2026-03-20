@@ -42,6 +42,9 @@ fun SettingsScreen(
     onApplyPiUpdate: () -> Unit = {},
     onRefreshPiSystem: () -> Unit = {},
     onRebootPi: () -> Unit = {},
+    onPaiStop: () -> Unit = {},
+    onPaiStart: () -> Unit = {},
+    onPaiUpdatePassword: (String) -> Unit = {},
     onBleLinkPi: () -> Unit = {},
     watchSyncState: com.remoteparadox.app.WatchSyncState = com.remoteparadox.app.WatchSyncState(),
     onSendToWatch: () -> Unit = {},
@@ -93,6 +96,7 @@ fun SettingsScreen(
                             SettingsAdminCard(onManageUsers)
                             SettingsPiSystemCard(piSystem, onRefreshPiSystem)
                             SettingsMaintenanceCard(piSystem, onRebootPi)
+                            SettingsPanelConnectionCard(piSystem, onPaiStop, onPaiStart, onPaiUpdatePassword)
                         }
                         SettingsConnectivityCard(onBleLinkPi, onSendToWatch, watchSyncState)
                         Spacer(Modifier.height(16.dp))
@@ -301,6 +305,8 @@ fun SettingsScreen(
                         }
                     }
                 }
+
+                SettingsPanelConnectionCard(piSystem, onPaiStop, onPaiStart, onPaiUpdatePassword)
             }
 
             // BLE Link (available to all users)
@@ -960,6 +966,173 @@ private fun SettingsMaintenanceCard(piSystem: com.remoteparadox.app.PiSystemStat
                 )
             }
         }
+    }
+}
+
+@Composable
+private fun SettingsPanelConnectionCard(
+    piSystem: com.remoteparadox.app.PiSystemState,
+    onPaiStop: () -> Unit,
+    onPaiStart: () -> Unit,
+    onPaiUpdatePassword: (String) -> Unit = {},
+) {
+    val connected = piSystem.alarmConnected ?: return
+    val pai = piSystem.paiStatus
+    var showStopConfirm by remember { mutableStateOf(false) }
+    var newPassword by remember { mutableStateOf("") }
+    var showPasswordConfirm by remember { mutableStateOf(false) }
+
+    Card(
+        shape = RoundedCornerShape(12.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+    ) {
+        Column(modifier = Modifier.padding(16.dp)) {
+            Text("Panel Connection (PAI)", fontWeight = FontWeight.Bold, color = Color.White, fontSize = 14.sp)
+            Spacer(Modifier.height(8.dp))
+
+            if (pai != null) {
+                SettingsInfoRow("Serial Port", pai.serialPort)
+                SettingsInfoRow("Baud Rate", pai.baud.toString())
+                SettingsInfoRow("PC Password", pai.pcPasswordMasked)
+            }
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(
+                    if (connected) Icons.Default.Link else Icons.Default.LinkOff,
+                    null,
+                    tint = if (connected) Color(0xFF4CAF50) else Color(0xFFE94560),
+                    modifier = Modifier.size(16.dp),
+                )
+                Spacer(Modifier.width(6.dp))
+                Text(
+                    if (connected) "Connected" else "Disconnected — keypad is free",
+                    color = if (connected) Color(0xFF4CAF50) else Color(0xFFE94560),
+                    fontSize = 12.sp,
+                )
+            }
+            Spacer(Modifier.height(8.dp))
+
+            if (connected) {
+                OutlinedButton(
+                    onClick = { showStopConfirm = true },
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(10.dp),
+                    colors = ButtonDefaults.outlinedButtonColors(contentColor = Color(0xFFFF9800)),
+                    border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFFFF9800).copy(alpha = 0.5f)),
+                ) {
+                    Icon(Icons.Default.Stop, null, Modifier.size(18.dp))
+                    Spacer(Modifier.width(8.dp))
+                    Text("Stop PAI — Release Panel", fontWeight = FontWeight.Medium)
+                }
+                Text(
+                    "Disconnects serial link so you can use the installer code on the keypad.",
+                    color = Color.White.copy(alpha = 0.4f),
+                    fontSize = 11.sp,
+                    modifier = Modifier.padding(top = 4.dp),
+                )
+            } else {
+                Card(
+                    shape = RoundedCornerShape(8.dp),
+                    colors = CardDefaults.cardColors(containerColor = Color.White.copy(alpha = 0.05f)),
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Column(modifier = Modifier.padding(12.dp)) {
+                        Text(
+                            "Change PC Password (panel section 910/911)",
+                            color = Color.White.copy(alpha = 0.7f),
+                            fontSize = 12.sp,
+                        )
+                        Spacer(Modifier.height(6.dp))
+                        OutlinedTextField(
+                            value = newPassword,
+                            onValueChange = { newPassword = it },
+                            placeholder = { Text("New PC password") },
+                            singleLine = true,
+                            modifier = Modifier.fillMaxWidth(),
+                            colors = OutlinedTextFieldDefaults.colors(
+                                focusedBorderColor = Color(0xFF2196F3),
+                                unfocusedBorderColor = Color.White.copy(alpha = 0.2f),
+                                focusedTextColor = Color.White,
+                                unfocusedTextColor = Color.White,
+                            ),
+                            shape = RoundedCornerShape(8.dp),
+                        )
+                        Spacer(Modifier.height(6.dp))
+                        OutlinedButton(
+                            onClick = {
+                                if (newPassword.isNotBlank()) showPasswordConfirm = true
+                            },
+                            modifier = Modifier.fillMaxWidth(),
+                            shape = RoundedCornerShape(8.dp),
+                            colors = ButtonDefaults.outlinedButtonColors(contentColor = Color(0xFF2196F3)),
+                            border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFF2196F3).copy(alpha = 0.5f)),
+                            enabled = newPassword.isNotBlank(),
+                        ) {
+                            Icon(Icons.Default.Key, null, Modifier.size(16.dp))
+                            Spacer(Modifier.width(6.dp))
+                            Text("Update Password", fontWeight = FontWeight.Medium, fontSize = 13.sp)
+                        }
+                    }
+                }
+                Spacer(Modifier.height(8.dp))
+                OutlinedButton(
+                    onClick = onPaiStart,
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(10.dp),
+                    colors = ButtonDefaults.outlinedButtonColors(contentColor = Color(0xFF4CAF50)),
+                    border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFF4CAF50).copy(alpha = 0.5f)),
+                ) {
+                    Icon(Icons.Default.PlayArrow, null, Modifier.size(18.dp))
+                    Spacer(Modifier.width(8.dp))
+                    Text("Start PAI — Reconnect to Panel", fontWeight = FontWeight.Medium)
+                }
+            }
+
+            if (showStopConfirm) {
+                AlertDialog(
+                    onDismissRequest = { showStopConfirm = false },
+                    title = { Text("Stop PAI?") },
+                    text = { Text("This disconnects from the alarm panel so you can use the keypad with the installer code.\n\nRemote arm/disarm will not work until you reconnect.") },
+                    confirmButton = {
+                        TextButton(onClick = { showStopConfirm = false; onPaiStop() }) {
+                            Text("Stop PAI", color = Color(0xFFFF9800))
+                        }
+                    },
+                    dismissButton = {
+                        TextButton(onClick = { showStopConfirm = false }) { Text("Cancel") }
+                    },
+                )
+            }
+            if (showPasswordConfirm) {
+                AlertDialog(
+                    onDismissRequest = { showPasswordConfirm = false },
+                    title = { Text("Update PC Password?") },
+                    text = { Text("Set the PC password to \"${newPassword.trim()}\"?\n\nMake sure this matches what you set on the panel (section 910/911).") },
+                    confirmButton = {
+                        TextButton(onClick = {
+                            showPasswordConfirm = false
+                            onPaiUpdatePassword(newPassword.trim())
+                            newPassword = ""
+                        }) {
+                            Text("Update", color = Color(0xFF2196F3))
+                        }
+                    },
+                    dismissButton = {
+                        TextButton(onClick = { showPasswordConfirm = false }) { Text("Cancel") }
+                    },
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun SettingsInfoRow(label: String, value: String) {
+    Row(
+        modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp),
+        horizontalArrangement = Arrangement.SpaceBetween,
+    ) {
+        Text(label, color = Color.White.copy(alpha = 0.5f), fontSize = 12.sp)
+        Text(value, color = Color.White, fontSize = 12.sp)
     }
 }
 

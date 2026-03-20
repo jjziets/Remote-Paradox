@@ -186,6 +186,19 @@ data class BleClientsResponse(
 )
 
 @Serializable
+data class PaiStatusResponse(
+    val connected: Boolean,
+    @SerialName("pc_password_masked") val pcPasswordMasked: String = "****",
+    @SerialName("serial_port") val serialPort: String = "",
+    val baud: Int = 9600,
+)
+
+@Serializable
+data class PcPasswordUpdateRequest(
+    @SerialName("pc_password") val pcPassword: String,
+)
+
+@Serializable
 data class ErrorResponse(val detail: String)
 
 data class ServerConfig(
