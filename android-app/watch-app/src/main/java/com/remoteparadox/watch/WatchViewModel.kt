@@ -1,19 +1,24 @@
 package com.remoteparadox.watch
 
 import android.app.Application
+import android.content.Intent
 import android.os.VibrationEffect
 import android.os.Vibrator
 import android.util.Log
+import androidx.core.content.FileProvider
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import com.google.android.gms.wearable.ChannelClient
 import com.google.android.gms.wearable.MessageClient
 import com.google.android.gms.wearable.MessageEvent
 import com.google.android.gms.wearable.Wearable
+import com.remoteparadox.watch.BuildConfig
 import com.remoteparadox.watch.data.*
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.tasks.await
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.jsonPrimitive
@@ -21,9 +26,15 @@ import okhttp3.Request
 import okhttp3.Response
 import okhttp3.WebSocket
 import okhttp3.WebSocketListener
+import android.net.Uri
+import java.io.File
 
 private const val TAG = "WatchVM"
 private const val POLL_INTERVAL_MS = 5_000L
+
+const val WATCH_VERSION_QUERY_PATH = "/paradox/watch-version-query"
+const val WATCH_VERSION_REPLY_PATH = "/paradox/watch-version-reply"
+const val WATCH_UPDATE_CHANNEL_PATH = "/paradox/watch-update-apk"
 
 enum class WatchScreen { Setup, Dashboard }
 
@@ -55,9 +66,19 @@ class WatchViewModel(app: Application) : AndroidViewModel(app) {
     private val json = Json { ignoreUnknownKeys = true; isLenient = true }
 
     private val messageClient: MessageClient = Wearable.getMessageClient(app)
+    private val channelClient: ChannelClient = Wearable.getChannelClient(app)
 
     private val messageListener = MessageClient.OnMessageReceivedListener { event ->
         handleSyncMessage(event)
+    }
+
+    private val channelCallback = object : ChannelClient.ChannelCallback() {
+        override fun onChannelOpened(channel: ChannelClient.Channel) {
+            if (channel.path == WATCH_UPDATE_CHANNEL_PATH) {
+                Log.i(TAG, "=== Update channel opened, receiving APK ===")
+                receiveUpdateApk(channel)
+            }
+        }
     }
 
     init {
@@ -67,7 +88,8 @@ class WatchViewModel(app: Application) : AndroidViewModel(app) {
         Log.d(TAG, "  token: ${if (tokenStore.token != null) "SET (${tokenStore.token!!.length} chars)" else "NULL"}")
 
         messageClient.addListener(messageListener)
-        Log.d(TAG, "  MessageClient listener registered (runtime)")
+        channelClient.registerChannelCallback(channelCallback)
+        Log.d(TAG, "  MessageClient + ChannelClient listeners registered")
 
         if (tokenStore.isLoggedIn) {
             Log.d(TAG, "  Already logged in, connecting API and starting updates")
@@ -84,6 +106,11 @@ class WatchViewModel(app: Application) : AndroidViewModel(app) {
         Log.d(TAG, "  path: ${event.path}")
         Log.d(TAG, "  sourceNodeId: ${event.sourceNodeId}")
         Log.d(TAG, "  data size: ${event.data?.size ?: 0} bytes")
+
+        if (event.path == WATCH_VERSION_QUERY_PATH) {
+            handleVersionQuery(event.sourceNodeId)
+            return
+        }
 
         if (event.path != WATCH_SYNC_PATH) {
             Log.d(TAG, "  IGNORING: path doesn't match $WATCH_SYNC_PATH")
@@ -461,10 +488,58 @@ class WatchViewModel(app: Application) : AndroidViewModel(app) {
         _state.update { it.copy(screen = WatchScreen.Setup, isLoading = false, error = "Session expired") }
     }
 
+    private fun handleVersionQuery(sourceNodeId: String) {
+        val version = BuildConfig.VERSION_NAME
+        Log.i(TAG, "Version query from $sourceNodeId, replying with $version")
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                messageClient.sendMessage(
+                    sourceNodeId,
+                    WATCH_VERSION_REPLY_PATH,
+                    version.toByteArray(Charsets.UTF_8),
+                ).await()
+                Log.i(TAG, "Version reply sent: $version")
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed to send version reply", e)
+            }
+        }
+    }
+
+    private fun receiveUpdateApk(channel: ChannelClient.Channel) {
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val ctx = getApplication<Application>()
+                val updatesDir = File(ctx.cacheDir, "updates")
+                updatesDir.mkdirs()
+                val apkFile = File(updatesDir, "watch-update.apk")
+
+                Log.i(TAG, "Receiving APK to ${apkFile.absolutePath}")
+                channelClient.receiveFile(channel, Uri.fromFile(apkFile), false).await()
+                Log.i(TAG, "APK received: ${apkFile.length()} bytes")
+
+                channelClient.close(channel).await()
+
+                val contentUri = FileProvider.getUriForFile(
+                    ctx, "${ctx.packageName}.fileprovider", apkFile
+                )
+                val installIntent = Intent(Intent.ACTION_VIEW).apply {
+                    setDataAndType(contentUri, "application/vnd.android.package-archive")
+                    addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                }
+                ctx.startActivity(installIntent)
+                Log.i(TAG, "PackageInstaller launched")
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed to receive update APK", e)
+            }
+        }
+    }
+
     override fun onCleared() {
         super.onCleared()
         stopRealtimeUpdates()
         messageClient.removeListener(messageListener)
-        Log.d(TAG, "MessageClient listener removed")
+        channelClient.unregisterChannelCallback(channelCallback)
+        Log.d(TAG, "MessageClient + ChannelClient listeners removed")
     }
 }

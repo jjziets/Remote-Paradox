@@ -78,6 +78,19 @@ data class WatchSyncState(
     val isError: Boolean = false,
 )
 
+data class WatchUpdateState(
+    val checking: Boolean = false,
+    val downloading: Boolean = false,
+    val sending: Boolean = false,
+    val downloadProgress: Float = 0f,
+    val updateAvailable: Boolean = false,
+    val watchVersion: String? = null,
+    val latestVersion: String? = null,
+    val error: String? = null,
+    val downloadUrl: String? = null,
+    val success: Boolean = false,
+)
+
 data class AppState(
     val screen: Screen = Screen.Loading,
     val alarmStatus: AlarmStatus? = null,
@@ -97,6 +110,7 @@ data class AppState(
     val piSystem: PiSystemState = PiSystemState(),
     val bleConnected: Boolean = false,
     val watchSync: WatchSyncState = WatchSyncState(),
+    val watchUpdate: WatchUpdateState = WatchUpdateState(),
 )
 
 enum class Screen { Loading, Welcome, BleSetup, Scan, Setup, Login, Dashboard, Settings, UserManagement }
@@ -1411,6 +1425,99 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                     _state.update {
                         it.copy(watchSync = WatchSyncState(message = result.message, isError = true))
                     }
+                }
+            }
+        }
+    }
+
+    // ── Watch Update ──
+
+    private val watchUpdater by lazy { WatchUpdater(getApplication()) }
+
+    fun checkWatchUpdate() {
+        _state.update { it.copy(watchUpdate = it.watchUpdate.copy(checking = true, error = null, success = false)) }
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val watchVersion = watchUpdater.queryWatchVersion()
+                if (watchVersion == null) {
+                    _state.update {
+                        it.copy(watchUpdate = WatchUpdateState(
+                            error = "Could not reach watch. Make sure it's connected.",
+                        ))
+                    }
+                    return@launch
+                }
+
+                val info = UpdateChecker.checkWatch(watchVersion)
+                _state.update {
+                    it.copy(watchUpdate = WatchUpdateState(
+                        watchVersion = watchVersion,
+                        latestVersion = info.latestVersion,
+                        updateAvailable = info.hasUpdate,
+                        downloadUrl = info.downloadUrl,
+                    ))
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "Watch update check failed", e)
+                _state.update {
+                    it.copy(watchUpdate = WatchUpdateState(error = "Check failed: ${e.message}"))
+                }
+            }
+        }
+    }
+
+    fun downloadAndSendWatchUpdate() {
+        val url = _state.value.watchUpdate.downloadUrl ?: return
+        _state.update { it.copy(watchUpdate = it.watchUpdate.copy(downloading = true, downloadProgress = 0f, error = null)) }
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val ctx = getApplication<Application>()
+                val updatesDir = java.io.File(ctx.cacheDir, "watch-updates")
+                updatesDir.mkdirs()
+                val apkFile = java.io.File(updatesDir, "watch-update.apk")
+
+                val request = okhttp3.Request.Builder().url(url).build()
+                val client = okhttp3.OkHttpClient.Builder()
+                    .connectTimeout(30, java.util.concurrent.TimeUnit.SECONDS)
+                    .readTimeout(5, java.util.concurrent.TimeUnit.MINUTES)
+                    .build()
+                val response = client.newCall(request).execute()
+                if (!response.isSuccessful) throw Exception("Download failed: ${response.code}")
+
+                val body = response.body ?: throw Exception("Empty download")
+                val totalBytes = body.contentLength()
+                var bytesRead = 0L
+
+                body.byteStream().use { input ->
+                    apkFile.outputStream().use { output ->
+                        val buffer = ByteArray(8192)
+                        var read: Int
+                        while (input.read(buffer).also { read = it } != -1) {
+                            output.write(buffer, 0, read)
+                            bytesRead += read
+                            if (totalBytes > 0) {
+                                val progress = bytesRead.toFloat() / totalBytes
+                                _state.update { it.copy(watchUpdate = it.watchUpdate.copy(downloadProgress = progress)) }
+                            }
+                        }
+                    }
+                }
+
+                Log.i(TAG, "Watch APK downloaded: ${apkFile.length()} bytes")
+                _state.update { it.copy(watchUpdate = it.watchUpdate.copy(downloading = false, sending = true, downloadProgress = 1f)) }
+
+                val sent = watchUpdater.sendApkToWatch(apkFile)
+                if (sent) {
+                    _state.update { it.copy(watchUpdate = it.watchUpdate.copy(sending = false, success = true)) }
+                } else {
+                    _state.update { it.copy(watchUpdate = it.watchUpdate.copy(sending = false, error = "Failed to send APK to watch")) }
+                }
+
+                apkFile.delete()
+            } catch (e: Exception) {
+                Log.e(TAG, "Watch update failed", e)
+                _state.update {
+                    it.copy(watchUpdate = it.watchUpdate.copy(downloading = false, sending = false, error = "Update failed: ${e.message}"))
                 }
             }
         }

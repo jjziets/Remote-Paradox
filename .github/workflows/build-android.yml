@@ -3,7 +3,11 @@ name: Build & Sign Android APKs
 on:
   push:
     branches: [main]
+    tags: ['v*']
   workflow_dispatch:
+
+permissions:
+  contents: write
 
 jobs:
   build:
@@ -44,19 +48,36 @@ jobs:
       - name: Build watch app (release)
         run: ./gradlew :watch-app:assembleRelease
 
+      - name: Rename APKs
+        run: |
+          cp app/build/outputs/apk/release/*.apk remote-paradox-phone.apk
+          cp watch-app/build/outputs/apk/release/*.apk remote-paradox-watch.apk
+
       - name: Upload phone APK
         uses: actions/upload-artifact@v4
         with:
           name: phone-app-release
-          path: android-app/app/build/outputs/apk/release/*.apk
+          path: android-app/remote-paradox-phone.apk
           if-no-files-found: error
 
       - name: Upload watch APK
         uses: actions/upload-artifact@v4
         with:
           name: watch-app-release
-          path: android-app/watch-app/build/outputs/apk/release/*.apk
+          path: android-app/remote-paradox-watch.apk
           if-no-files-found: error
+
+      - name: Create GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create "${{ github.ref_name }}" \
+            --title "${{ github.ref_name }}" \
+            --generate-notes \
+            remote-paradox-phone.apk \
+            remote-paradox-watch.apk
+        working-directory: android-app
 
       - name: Clean up keystore
         if: always()

@@ -1,5 +1,6 @@
 package com.remoteparadox.app.ui.screens
 
+import android.content.res.Configuration
 import androidx.compose.animation.*
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.tween
@@ -25,6 +26,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -145,95 +147,139 @@ fun DashboardScreen(
                 }
             }
 
+            val configuration = LocalConfiguration.current
+            val isLandscape = configuration.orientation == Configuration.ORIENTATION_LANDSCAPE
+
             BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
-                val visibleCount = calculateVisiblePartitions(maxWidth.value, pageCount)
-                val pageWidth = maxWidth / visibleCount
-                val isMultiPane = visibleCount > 1
+                val totalWidth = maxWidth
+                if (isLandscape) {
+                    val mainWidth = totalWidth * 3 / 4
+                    val visibleCount = calculateVisiblePartitions(mainWidth.value, pageCount)
 
-                HorizontalPager(
-                    state = pagerState,
-                    modifier = Modifier.fillMaxSize(),
-                    pageSize = PageSize.Fixed(pageWidth),
-                    beyondViewportPageCount = 1,
-                    pageSpacing = if (isMultiPane) 2.dp else 0.dp,
-                ) { pageIndex ->
-                    val partition = partitions.getOrNull(pageIndex)
-                    LazyColumn(
-                        modifier = Modifier.fillMaxSize().padding(horizontal = if (isMultiPane) 8.dp else 16.dp),
-                        verticalArrangement = Arrangement.spacedBy(12.dp),
-                    ) {
-                        item { Spacer(Modifier.height(4.dp)) }
+                    val pageWidth = mainWidth / visibleCount
+                    val isMultiPane = visibleCount > 1
+                    val zoneColumns = if (isMultiPane) 2 else 3
 
-                        item { PartitionStateCard(partition) }
+                    Row(modifier = Modifier.fillMaxSize()) {
+                        HistoryPanel(
+                            eventHistory = eventHistory,
+                            modifier = Modifier.fillMaxHeight().weight(1f),
+                        )
 
-                        if (error != null) {
-                            item {
-                                Card(
-                                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.error.copy(alpha = 0.15f)),
-                                    shape = RoundedCornerShape(12.dp),
-                                ) {
-                                    Text(error, modifier = Modifier.padding(16.dp), color = MaterialTheme.colorScheme.error, fontSize = 13.sp)
-                                }
-                            }
-                        }
-
-                        item {
-                            val pid = partition?.id ?: 1
-                            ControlButtons(
+                        HorizontalPager(
+                            state = pagerState,
+                            modifier = Modifier.fillMaxHeight().weight(3f),
+                            pageSize = PageSize.Fixed(pageWidth),
+                            beyondViewportPageCount = 1,
+                            pageSpacing = if (isMultiPane) 2.dp else 0.dp,
+                        ) { pageIndex ->
+                            val partition = partitions.getOrNull(pageIndex)
+                            PartitionContent(
                                 partition = partition,
-                                connected = alarmStatus?.connected ?: false,
+                                error = error,
+                                alarmStatus = alarmStatus,
                                 actionInProgress = actionInProgress,
-                                savedCode = savedAlarmCode,
-                                onArmAway = { if (savedAlarmCode != null) onArmAway(savedAlarmCode, pid) else showCodeDialog = "arm_away" },
-                                onArmStay = { if (savedAlarmCode != null) onArmStay(savedAlarmCode, pid) else showCodeDialog = "arm_stay" },
-                                onDisarm = { if (savedAlarmCode != null) onDisarm(savedAlarmCode, pid) else showCodeDialog = "disarm" },
+                                savedAlarmCode = savedAlarmCode,
+                                isMultiPane = isMultiPane,
+                                zoneColumns = zoneColumns,
+                                showCodeDialog = { showCodeDialog = it },
+                                onArmAway = onArmAway,
+                                onArmStay = onArmStay,
+                                onDisarm = onDisarm,
+                                onBypass = onBypass,
                             )
                         }
+                    }
+                } else {
+                    val visibleCount = calculateVisiblePartitions(maxWidth.value, pageCount)
+                    val pageWidth = maxWidth / visibleCount
+                    val isMultiPane = visibleCount > 1
 
-                        item {
-                            val pid = partition?.id ?: 0
-                            val thisTab = tabPerPartition[pid] ?: 0
-                            TabRow(
-                                selectedTabIndex = thisTab,
-                                containerColor = MaterialTheme.colorScheme.surface,
-                                contentColor = Color.White,
-                                modifier = Modifier.clip(RoundedCornerShape(10.dp)),
-                            ) {
-                                Tab(selected = thisTab == 0, onClick = { tabPerPartition[pid] = 0 },
-                                    text = { Text("Zones", fontWeight = FontWeight.SemiBold) })
-                                Tab(selected = thisTab == 1, onClick = { tabPerPartition[pid] = 1 },
-                                    text = { Text("History", fontWeight = FontWeight.SemiBold) })
-                            }
-                        }
+                    HorizontalPager(
+                        state = pagerState,
+                        modifier = Modifier.fillMaxSize(),
+                        pageSize = PageSize.Fixed(pageWidth),
+                        beyondViewportPageCount = 1,
+                        pageSpacing = if (isMultiPane) 2.dp else 0.dp,
+                    ) { pageIndex ->
+                        val partition = partitions.getOrNull(pageIndex)
+                        LazyColumn(
+                            modifier = Modifier.fillMaxSize().padding(horizontal = if (isMultiPane) 8.dp else 16.dp),
+                            verticalArrangement = Arrangement.spacedBy(12.dp),
+                        ) {
+                            item { Spacer(Modifier.height(4.dp)) }
 
-                        if ((tabPerPartition[partition?.id ?: 0] ?: 0) == 0) {
-                            val zones = partition?.zones.orEmpty()
-                            if (zones.isNotEmpty()) {
+                            item { PartitionStateCard(partition) }
+
+                            if (error != null) {
                                 item {
-                                    Text(
-                                        "${zones.size} Zones",
-                                        fontWeight = FontWeight.Bold, color = Color.White, fontSize = 16.sp,
-                                        modifier = Modifier.padding(top = 4.dp),
-                                    )
-                                }
-                                item {
-                                    ZoneGrid(zones = zones, onBypass = { zoneId, bypass -> onBypass(zoneId, bypass) })
+                                    Card(
+                                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.error.copy(alpha = 0.15f)),
+                                        shape = RoundedCornerShape(12.dp),
+                                    ) {
+                                        Text(error, modifier = Modifier.padding(16.dp), color = MaterialTheme.colorScheme.error, fontSize = 13.sp)
+                                    }
                                 }
                             }
-                        } else {
-                            if (eventHistory.isNotEmpty()) {
-                                items(eventHistory.take(30)) { event ->
-                                    HistoryRow(event)
+
+                            item {
+                                val pid = partition?.id ?: 1
+                                ControlButtons(
+                                    partition = partition,
+                                    connected = alarmStatus?.connected ?: false,
+                                    actionInProgress = actionInProgress,
+                                    savedCode = savedAlarmCode,
+                                    onArmAway = { if (savedAlarmCode != null) onArmAway(savedAlarmCode, pid) else showCodeDialog = "arm_away" },
+                                    onArmStay = { if (savedAlarmCode != null) onArmStay(savedAlarmCode, pid) else showCodeDialog = "arm_stay" },
+                                    onDisarm = { if (savedAlarmCode != null) onDisarm(savedAlarmCode, pid) else showCodeDialog = "disarm" },
+                                )
+                            }
+
+                            item {
+                                val pid = partition?.id ?: 0
+                                val thisTab = tabPerPartition[pid] ?: 0
+                                TabRow(
+                                    selectedTabIndex = thisTab,
+                                    containerColor = MaterialTheme.colorScheme.surface,
+                                    contentColor = Color.White,
+                                    modifier = Modifier.clip(RoundedCornerShape(10.dp)),
+                                ) {
+                                    Tab(selected = thisTab == 0, onClick = { tabPerPartition[pid] = 0 },
+                                        text = { Text("Zones", fontWeight = FontWeight.SemiBold) })
+                                    Tab(selected = thisTab == 1, onClick = { tabPerPartition[pid] = 1 },
+                                        text = { Text("History", fontWeight = FontWeight.SemiBold) })
+                                }
+                            }
+
+                            if ((tabPerPartition[partition?.id ?: 0] ?: 0) == 0) {
+                                val zones = partition?.zones.orEmpty()
+                                if (zones.isNotEmpty()) {
+                                    item {
+                                        Text(
+                                            "${zones.size} Zones",
+                                            fontWeight = FontWeight.Bold, color = Color.White, fontSize = 16.sp,
+                                            modifier = Modifier.padding(top = 4.dp),
+                                        )
+                                    }
+                                    item {
+                                        ZoneGrid(zones = zones, columns = 2, onBypass = { zoneId, bypass -> onBypass(zoneId, bypass) })
+                                    }
                                 }
                             } else {
-                                item {
-                                    Text("No events yet", color = Color.White.copy(alpha = 0.5f), fontSize = 13.sp,
-                                        modifier = Modifier.fillMaxWidth().padding(16.dp))
+                                if (eventHistory.isNotEmpty()) {
+                                    items(eventHistory.take(30)) { event ->
+                                        HistoryRow(event)
+                                    }
+                                } else {
+                                    item {
+                                        Text("No events yet", color = Color.White.copy(alpha = 0.5f), fontSize = 13.sp,
+                                            modifier = Modifier.fillMaxWidth().padding(16.dp))
+                                    }
                                 }
                             }
-                        }
 
-                        item { Spacer(Modifier.height(16.dp)) }
+                            item { Spacer(Modifier.height(16.dp)) }
+                        }
                     }
                 }
             }
@@ -578,12 +624,117 @@ private fun PanicButton(
     }
 }
 
+// ── Landscape partition content (no tabs, zones only) ──
+
+@Composable
+private fun PartitionContent(
+    partition: PartitionInfo?,
+    error: String?,
+    alarmStatus: AlarmStatus?,
+    actionInProgress: String?,
+    savedAlarmCode: String?,
+    isMultiPane: Boolean,
+    zoneColumns: Int,
+    showCodeDialog: (String) -> Unit,
+    onArmAway: (code: String, partitionId: Int) -> Unit,
+    onArmStay: (code: String, partitionId: Int) -> Unit,
+    onDisarm: (code: String, partitionId: Int) -> Unit,
+    onBypass: (zoneId: Int, bypass: Boolean) -> Unit,
+) {
+    LazyColumn(
+        modifier = Modifier.fillMaxSize().padding(horizontal = if (isMultiPane) 8.dp else 12.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        item { Spacer(Modifier.height(4.dp)) }
+
+        item { PartitionStateCard(partition) }
+
+        if (error != null) {
+            item {
+                Card(
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.error.copy(alpha = 0.15f)),
+                    shape = RoundedCornerShape(12.dp),
+                ) {
+                    Text(error, modifier = Modifier.padding(16.dp), color = MaterialTheme.colorScheme.error, fontSize = 13.sp)
+                }
+            }
+        }
+
+        item {
+            val pid = partition?.id ?: 1
+            ControlButtons(
+                partition = partition,
+                connected = alarmStatus?.connected ?: false,
+                actionInProgress = actionInProgress,
+                savedCode = savedAlarmCode,
+                onArmAway = { if (savedAlarmCode != null) onArmAway(savedAlarmCode, pid) else showCodeDialog("arm_away") },
+                onArmStay = { if (savedAlarmCode != null) onArmStay(savedAlarmCode, pid) else showCodeDialog("arm_stay") },
+                onDisarm = { if (savedAlarmCode != null) onDisarm(savedAlarmCode, pid) else showCodeDialog("disarm") },
+            )
+        }
+
+        val zones = partition?.zones.orEmpty()
+        if (zones.isNotEmpty()) {
+            item {
+                Text(
+                    "${zones.size} Zones",
+                    fontWeight = FontWeight.Bold, color = Color.White, fontSize = 16.sp,
+                    modifier = Modifier.padding(top = 4.dp),
+                )
+            }
+            item {
+                ZoneGrid(zones = zones, columns = zoneColumns, onBypass = { zoneId, bypass -> onBypass(zoneId, bypass) })
+            }
+        }
+
+        item { Spacer(Modifier.height(16.dp)) }
+    }
+}
+
+// ── Landscape history panel ──
+
+@Composable
+private fun HistoryPanel(eventHistory: List<PanelEvent>, modifier: Modifier = Modifier) {
+    Column(
+        modifier = modifier
+            .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.5f))
+            .padding(horizontal = 8.dp),
+    ) {
+        Spacer(Modifier.height(8.dp))
+        Text(
+            "History",
+            fontWeight = FontWeight.Bold,
+            color = Color.White,
+            fontSize = 15.sp,
+            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+        )
+        if (eventHistory.isNotEmpty()) {
+            LazyColumn(
+                modifier = Modifier.fillMaxSize(),
+                verticalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
+                items(eventHistory.take(50)) { event ->
+                    HistoryRow(event)
+                }
+                item { Spacer(Modifier.height(8.dp)) }
+            }
+        } else {
+            Text(
+                "No events yet",
+                color = Color.White.copy(alpha = 0.5f),
+                fontSize = 13.sp,
+                modifier = Modifier.padding(16.dp),
+            )
+        }
+    }
+}
+
 // ── Zone grid ──
 
 @Composable
-private fun ZoneGrid(zones: List<ZoneInfo>, onBypass: (Int, Boolean) -> Unit) {
+private fun ZoneGrid(zones: List<ZoneInfo>, columns: Int = 2, onBypass: (Int, Boolean) -> Unit) {
     LazyVerticalGrid(
-        columns = GridCells.Adaptive(minSize = 150.dp),
+        columns = GridCells.Fixed(columns),
         modifier = Modifier.fillMaxWidth().heightIn(max = 800.dp),
         horizontalArrangement = Arrangement.spacedBy(8.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp),

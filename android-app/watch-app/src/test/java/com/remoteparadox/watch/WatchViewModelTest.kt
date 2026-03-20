@@ -145,6 +145,21 @@ class WatchViewModelTest {
     }
 
     @Test
+    fun `WATCH_VERSION_QUERY_PATH is correct constant`() {
+        assertEquals("/paradox/watch-version-query", WATCH_VERSION_QUERY_PATH)
+    }
+
+    @Test
+    fun `WATCH_VERSION_REPLY_PATH is correct constant`() {
+        assertEquals("/paradox/watch-version-reply", WATCH_VERSION_REPLY_PATH)
+    }
+
+    @Test
+    fun `WATCH_UPDATE_CHANNEL_PATH is correct constant`() {
+        assertEquals("/paradox/watch-update-apk", WATCH_UPDATE_CHANNEL_PATH)
+    }
+
+    @Test
     fun `bypassedZones returns only bypassed zones`() {
         val partition = PartitionInfo(
             id = 1, name = "House", armed = false, mode = "disarmed",
