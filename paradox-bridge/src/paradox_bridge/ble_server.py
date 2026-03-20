@@ -773,7 +773,6 @@ class Advertisement(object):
             LE_ADVERTISEMENT_IFACE: {
                 "Type": "peripheral",
                 "ServiceUUIDs": dbus.Array([NUS_SERVICE_UUID], signature="s"),
-                "LocalName": dbus.String("Remote Paradox"),
             }
         }
 
@@ -906,6 +905,7 @@ def run_ble_server():
         bus.get_object(BLUEZ_SERVICE, adapter_path), DBUS_PROP_IFACE,
     )
     adapter_props.Set(ADAPTER_IFACE, "Powered", dbus.Boolean(True))
+    adapter_props.Set(ADAPTER_IFACE, "Alias", dbus.String("Remote Paradox"))
 
     app = Application(bus)
     nus = NusService(bus)
