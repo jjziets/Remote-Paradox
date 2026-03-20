@@ -4,42 +4,172 @@ import android.os.Bundle
 import android.util.Log
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.lifecycle.viewmodel.compose.viewModel
+import androidx.wear.tiles.TileService
+import com.remoteparadox.watch.data.ApiClient
+import com.remoteparadox.watch.data.ArmRequest
+import com.remoteparadox.watch.data.PanicRequest
+import com.remoteparadox.watch.data.WatchTokenStore
+import com.remoteparadox.watch.tile.StatusTileService
 import com.remoteparadox.watch.ui.DashboardScreen
 import com.remoteparadox.watch.ui.SetupScreen
 import com.remoteparadox.watch.ui.theme.RemoteParadoxWatchTheme
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 
 class MainActivity : ComponentActivity() {
 
     private var panicHandled = false
+    private var vm: WatchViewModel? = null
+    private var launchedFromTile = false
+
+    override fun onNewIntent(newIntent: android.content.Intent) {
+        super.onNewIntent(newIntent)
+        intent = newIntent
+        panicHandled = false
+        if (isDirectTileAction(newIntent)) {
+            executeDirectAction(newIntent)
+            return
+        }
+        handleTileIntent(newIntent)
+    }
+
+    private fun handleTileIntent(tileIntent: android.content.Intent) {
+        val action = tileIntent.getStringExtra("action")
+        val pid = tileIntent.getIntExtra("partition_id", -1)
+
+        when (action) {
+            "panic" -> {
+                val partitionId = if (pid >= 0) pid else vm?.state?.value?.alarmStatus?.partitions?.firstOrNull()?.id ?: 1
+                Log.d("MainActivity", "Tile action: panic for partition $partitionId")
+                vm?.panic(partitionId)
+            }
+            null -> {
+                if (tileIntent.hasExtra("partition_id") && pid >= 0) {
+                    launchedFromTile = true
+                    Log.d("MainActivity", "Tile partition tap: pid=$pid")
+                    vm?.setTilePartitionId(pid)
+                }
+            }
+        }
+    }
+
+    private fun isDirectTileAction(intent: android.content.Intent?): Boolean {
+        val action = intent?.getStringExtra("action") ?: return false
+        val pid = intent.getIntExtra("partition_id", -1)
+        return pid >= 0 && action in listOf("arm_away", "arm_stay", "disarm")
+    }
+
+    private fun executeDirectAction(intent: android.content.Intent) {
+        val action = intent.getStringExtra("action")!!
+        val pid = intent.getIntExtra("partition_id", -1)
+        val tokenStore = WatchTokenStore(this)
+
+        if (!tokenStore.isLoggedIn) {
+            Log.w("MainActivity", "Direct action but not logged in, skipping")
+            finish()
+            return
+        }
+
+        Log.d("MainActivity", "Direct tile action: $action partition=$pid (no UI)")
+        val baseUrl = tokenStore.baseUrl!!
+        val fingerprint = tokenStore.certFingerprint.orEmpty()
+        val code = tokenStore.alarmCode ?: ""
+
+        val appContext = applicationContext
+
+        CoroutineScope(Dispatchers.IO).launch {
+            try {
+                val api = ApiClient.create(baseUrl, fingerprint)
+                val auth = tokenStore.bearerHeader
+
+                val beforeStatus = try {
+                    val r = api.alarmStatus(auth)
+                    if (r.isSuccessful) r.body() else null
+                } catch (_: Exception) { null }
+                val beforeMode = beforeStatus?.partitions?.find { it.id == pid }?.mode
+                Log.d("MainActivity", "Before mode: $beforeMode")
+
+                val resp = when (action) {
+                    "arm_away" -> api.armAway(auth, ArmRequest(code, pid))
+                    "arm_stay" -> api.armStay(auth, ArmRequest(code, pid))
+                    "disarm" -> api.disarm(auth, ArmRequest(code, pid))
+                    else -> null
+                }
+                Log.d("MainActivity", "Action $action response: ${resp?.code()}")
+
+                val updater = TileService.getUpdater(appContext)
+                repeat(15) { i ->
+                    delay(300)
+                    try {
+                        val statusResp = api.alarmStatus(auth)
+                        val currentMode = statusResp.body()?.partitions?.find { it.id == pid }?.mode
+                        updater.requestUpdate(StatusTileService::class.java)
+                        Log.d("MainActivity", "Poll $i: mode=$currentMode (was $beforeMode)")
+                        if (currentMode != null && currentMode != beforeMode) {
+                            Log.d("MainActivity", "State changed, stopping refresh")
+                            return@launch
+                        }
+                    } catch (e: Exception) {
+                        Log.w("MainActivity", "Poll $i failed: ${e.message}")
+                    }
+                }
+                Log.d("MainActivity", "Refresh burst done (15 polls, no change detected)")
+            } catch (e: Exception) {
+                Log.e("MainActivity", "Direct action failed: ${e.message}")
+            }
+        }
+
+        finish()
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+
+        if (isDirectTileAction(intent)) {
+            executeDirectAction(intent!!)
+            return
+        }
+
         setContent {
             RemoteParadoxWatchTheme {
-                val vm: WatchViewModel = viewModel()
-                val state by vm.state.collectAsState()
+                val viewModel: WatchViewModel = viewModel()
+                this@MainActivity.vm = viewModel
+                val state by viewModel.state.collectAsState()
 
-                if (!panicHandled && intent?.getStringExtra("action") == "panic"
-                    && state.screen == WatchScreen.Dashboard
+                if (!panicHandled && state.screen == WatchScreen.Dashboard
+                    && intent != null
+                    && (intent.hasExtra("action") || intent.hasExtra("partition_id"))
+                    && state.tilePartitionId == null
                 ) {
                     panicHandled = true
-                    val partitionId = state.alarmStatus?.partitions?.firstOrNull()?.id ?: 1
-                    Log.d("MainActivity", "Panic from tile for partition $partitionId")
-                    vm.panic(partitionId)
+                    handleTileIntent(intent)
+                }
+
+                LaunchedEffect(state.tileActionDone) {
+                    if (state.tileActionDone && launchedFromTile) {
+                        Log.d("MainActivity", "Tile action done — finishing activity")
+                        delay(150)
+                        viewModel.resetTileActionDone()
+                        launchedFromTile = false
+                        finish()
+                    }
                 }
 
                 when (state.screen) {
                     WatchScreen.Setup -> SetupScreen(
                         isLoading = state.isLoading,
                         error = state.loginError,
-                        savedHost = vm.tokenStore.serverHost,
-                        savedPort = vm.tokenStore.serverPort,
-                        savedAlarmCode = vm.tokenStore.alarmCode,
+                        savedHost = viewModel.tokenStore.serverHost,
+                        savedPort = viewModel.tokenStore.serverPort,
+                        savedAlarmCode = viewModel.tokenStore.alarmCode,
                         onLogin = { host, port, user, pass, code ->
-                            vm.login(host, port, user, pass, code)
+                            viewModel.login(host, port, user, pass, code)
                         },
                     )
 
@@ -49,15 +179,22 @@ class MainActivity : ComponentActivity() {
                         actionInProgress = state.actionInProgress,
                         error = state.error,
                         pendingArm = state.pendingArm,
-                        onArmAway = { vm.armAway(it) },
-                        onArmStay = { vm.armStay(it) },
-                        onDisarm = { vm.disarm(it) },
-                        onPanic = { vm.panic(it) },
-                        onBypassZone = { zoneId, thenArm -> vm.bypassZone(zoneId, thenArm) },
-                        onBypassAllAndArm = { vm.bypassAllAndArm() },
-                        onDismissPendingArm = { vm.dismissPendingArm() },
-                        onUnbypassZone = { vm.unbypassZone(it) },
-                        onLogout = { vm.logout() },
+                        tilePartitionId = state.tilePartitionId,
+                        armAwayEnabled = state.armAwayEnabled,
+                        armStayEnabled = state.armStayEnabled,
+                        onArmAway = { viewModel.armAway(it) },
+                        onArmStay = { viewModel.armStay(it) },
+                        onDisarm = { viewModel.disarm(it) },
+                        onPanic = { viewModel.panic(it) },
+                        onBypassZone = { zoneId, thenArm -> viewModel.bypassZone(zoneId, thenArm) },
+                        onBypassAllAndArm = { viewModel.bypassAllAndArm() },
+                        onDismissPendingArm = { viewModel.dismissPendingArm() },
+                        onUnbypassZone = { viewModel.unbypassZone(it) },
+                        onClearTilePartition = { viewModel.clearTilePartitionId() },
+                        onTileDialogDismissed = { if (launchedFromTile) viewModel.markTileActionDone() },
+                        onToggleArmAway = { viewModel.toggleArmAway() },
+                        onToggleArmStay = { viewModel.toggleArmStay() },
+                        onLogout = { viewModel.logout() },
                     )
                 }
             }

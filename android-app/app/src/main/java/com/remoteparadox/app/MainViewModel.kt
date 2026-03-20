@@ -198,6 +198,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         // Keep BLE connected — it serves as telemetry link when WiFi is offline
         if (bleLaunchedFromSettings) {
             _state.update { it.copy(screen = Screen.Settings) }
+            if (isAdmin) refreshPiSystem()
         } else {
             _state.update { it.copy(screen = Screen.Welcome) }
         }
@@ -216,6 +217,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     val bleConnectionState get() = bleClient?.connectionState
     val bleDevices get() = bleClient?.discoveredDevices
     val bleResponse get() = bleClient?.managePanelResponse
+    val isBluetoothEnabled get() = bleClient?.isBluetoothEnabled ?: false
 
     private val isBleConnected: Boolean
         get() = bleClient?.connectionState?.value == BleConnectionState.Connected

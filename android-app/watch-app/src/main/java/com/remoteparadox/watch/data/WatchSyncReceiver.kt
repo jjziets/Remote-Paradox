@@ -3,12 +3,16 @@ package com.remoteparadox.watch.data
 import android.content.Intent
 import android.util.Log
 import com.google.android.gms.wearable.MessageEvent
+import com.google.android.gms.wearable.Wearable
 import com.google.android.gms.wearable.WearableListenerService
+import com.remoteparadox.watch.BuildConfig
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 
 private const val TAG = "WatchSyncRx"
 const val WATCH_SYNC_PATH = "/paradox/sync-credentials"
+private const val WATCH_VERSION_QUERY_PATH = "/paradox/watch-version-query"
+private const val WATCH_VERSION_REPLY_PATH = "/paradox/watch-version-reply"
 const val ACTION_CREDENTIALS_RECEIVED = "com.remoteparadox.watch.CREDENTIALS_RECEIVED"
 
 @Serializable
@@ -35,6 +39,17 @@ class WatchSyncReceiver : WearableListenerService() {
         Log.d(TAG, "  path: ${event.path}")
         Log.d(TAG, "  sourceNodeId: ${event.sourceNodeId}")
         Log.d(TAG, "  data size: ${event.data?.size ?: 0} bytes")
+
+        if (event.path == WATCH_VERSION_QUERY_PATH) {
+            val version = BuildConfig.VERSION_NAME
+            Log.i(TAG, "Version query from ${event.sourceNodeId}, replying with $version")
+            Wearable.getMessageClient(this).sendMessage(
+                event.sourceNodeId,
+                WATCH_VERSION_REPLY_PATH,
+                version.toByteArray(Charsets.UTF_8),
+            )
+            return
+        }
 
         if (event.path != WATCH_SYNC_PATH) {
             Log.d(TAG, "  IGNORING: path doesn't match $WATCH_SYNC_PATH")

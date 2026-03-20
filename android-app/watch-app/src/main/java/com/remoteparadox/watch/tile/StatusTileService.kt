@@ -26,6 +26,7 @@ private const val COLOR_GREEN = 0xCC2E7D32.toInt()
 private const val COLOR_RED = 0xCCC62828.toInt()
 private const val COLOR_AMBER = 0xCCF9A825.toInt()
 private const val COLOR_PULSE_RED = 0xFFB71C1C.toInt()
+private const val COLOR_PULSE_BRIGHT = 0xFFFF1744.toInt()
 private const val COLOR_DARK_BG = 0xFF1A1A1A.toInt()
 private const val COLOR_WHITE = 0xFFFFFFFF.toInt()
 private const val COLOR_BEVEL_LIGHT = 0x33FFFFFF.toInt()
@@ -48,9 +49,11 @@ class StatusTileService : TileService() {
             buildStatusLayout(status)
         }
 
+        val isTriggered = status?.partitions?.any { it.mode == "triggered" } == true
+
         val tile = Tile.Builder()
             .setResourcesVersion(RESOURCES_VERSION)
-            .setFreshnessIntervalMillis(10_000)
+            .setFreshnessIntervalMillis(if (isTriggered) 1_000 else 10_000)
             .setTileTimeline(
                 Timeline.Builder()
                     .addTimelineEntry(
@@ -90,30 +93,79 @@ class StatusTileService : TileService() {
         val parts = status.partitions
         if (parts.isEmpty()) return buildErrorLayout("No areas")
 
-        val clickable = Clickable.Builder()
+        val activityClass = "com.remoteparadox.watch.MainActivity"
+        val tokenStore = WatchTokenStore(this)
+
+        val panicClickable = buildActionClickable(activityClass, action = "panic")
+
+        return if (parts.size == 1) {
+            buildSinglePartitionTile(
+                parts[0],
+                buildSmartClickable(activityClass, parts[0], tokenStore),
+                panicClickable,
+            )
+        } else {
+            buildDualPartitionTile(
+                parts[0], parts[1],
+                buildSmartClickable(activityClass, parts[0], tokenStore),
+                buildSmartClickable(activityClass, parts[1], tokenStore),
+                panicClickable,
+            )
+        }
+    }
+
+    private fun buildSmartClickable(
+        activityClass: String,
+        partition: com.remoteparadox.watch.data.PartitionInfo,
+        tokenStore: WatchTokenStore,
+    ): Clickable {
+        val isArmed = partition.armed || partition.mode == "triggered"
+        val isArming = partition.mode in listOf("arming", "exit_delay")
+        val bothEnabled = tokenStore.armAwayEnabled && tokenStore.armStayEnabled
+
+        return when {
+            isArming || isArmed -> buildActionClickable(activityClass, "disarm", partition.id)
+            !bothEnabled && tokenStore.armAwayEnabled -> buildActionClickable(activityClass, "arm_away", partition.id)
+            !bothEnabled && tokenStore.armStayEnabled -> buildActionClickable(activityClass, "arm_stay", partition.id)
+            else -> buildPartitionClickable(activityClass, partition.id)
+        }
+    }
+
+    private fun buildActionClickable(activityClass: String, action: String, partitionId: Int? = null): Clickable {
+        val activityBuilder = ActionBuilders.AndroidActivity.Builder()
+            .setPackageName(packageName)
+            .setClassName(activityClass)
+            .addKeyToExtraMapping(
+                "action",
+                ActionBuilders.AndroidStringExtra.Builder().setValue(action).build()
+            )
+        if (partitionId != null) {
+            activityBuilder.addKeyToExtraMapping(
+                "partition_id",
+                ActionBuilders.AndroidIntExtra.Builder().setValue(partitionId).build()
+            )
+        }
+        return Clickable.Builder()
             .setOnClick(
                 ActionBuilders.LaunchAction.Builder()
-                    .setAndroidActivity(
-                        ActionBuilders.AndroidActivity.Builder()
-                            .setPackageName(packageName)
-                            .setClassName("$packageName.MainActivity")
-                            .build()
-                    )
+                    .setAndroidActivity(activityBuilder.build())
                     .build()
             )
             .build()
+    }
 
-        val panicClickable = Clickable.Builder()
+    private fun buildPartitionClickable(activityClass: String, partitionId: Int): Clickable {
+        return Clickable.Builder()
             .setOnClick(
                 ActionBuilders.LaunchAction.Builder()
                     .setAndroidActivity(
                         ActionBuilders.AndroidActivity.Builder()
                             .setPackageName(packageName)
-                            .setClassName("$packageName.MainActivity")
+                            .setClassName(activityClass)
                             .addKeyToExtraMapping(
-                                "action",
-                                ActionBuilders.AndroidStringExtra.Builder()
-                                    .setValue("panic")
+                                "partition_id",
+                                ActionBuilders.AndroidIntExtra.Builder()
+                                    .setValue(partitionId)
                                     .build()
                             )
                             .build()
@@ -121,12 +173,6 @@ class StatusTileService : TileService() {
                     .build()
             )
             .build()
-
-        return if (parts.size == 1) {
-            buildSinglePartitionTile(parts[0], clickable, panicClickable)
-        } else {
-            buildDualPartitionTile(parts[0], parts[1], clickable, panicClickable)
-        }
     }
 
     private fun buildPanicCircle(clickable: Clickable): LayoutElement {
@@ -213,190 +259,23 @@ class StatusTileService : TileService() {
             .build()
     }
 
-    private fun buildSinglePartitionTile(
-        partition: com.remoteparadox.watch.data.PartitionInfo,
-        clickable: Clickable,
-        panicClickable: Clickable,
-    ): LayoutElement {
-        val bgColor = modeToColor(partition.mode)
-        val textColor = modeToTextColor(partition.mode)
-        val label = modeToLabel(partition.mode)
-        val triggeredZones = partition.zones
-            .filter { it.alarm || it.wasInAlarm }
-            .joinToString(", ") { it.name }
-
-        val columnBuilder = Column.Builder()
-            .setHorizontalAlignment(HORIZONTAL_ALIGN_CENTER)
-            .addContent(
-                Text.Builder()
-                    .setText(partition.name)
-                    .setFontStyle(
-                        FontStyle.Builder()
-                            .setSize(sp(30f))
-                            .setColor(argb(textColor))
-                            .setWeight(FONT_WEIGHT_BOLD)
-                            .build()
-                    )
-                    .build()
-            )
-            .addContent(Spacer.Builder().setHeight(dp(4f)).build())
-            .addContent(
-                Text.Builder()
-                    .setText(label)
-                    .setFontStyle(
-                        FontStyle.Builder()
-                            .setSize(sp(16f))
-                            .setColor(argb(textColor))
-                            .build()
-                    )
-                    .build()
-            )
-
-        if (triggeredZones.isNotBlank()) {
-            columnBuilder
-                .addContent(Spacer.Builder().setHeight(dp(4f)).build())
-                .addContent(
-                    Text.Builder()
-                        .setText(triggeredZones)
-                        .setFontStyle(
-                            FontStyle.Builder()
-                                .setSize(sp(13f))
-                                .setColor(argb(textColor))
-                                .build()
-                        )
-                        .setMaxLines(2)
-                        .build()
-                )
-        }
-
-        val corner = Corner.Builder().setRadius(dp(CORNER_RADIUS)).build()
-
-        val statusCard = Box.Builder()
-            .setWidth(expand())
+    private fun buildPanicColumn(panicClickable: Clickable): LayoutElement {
+        return Box.Builder()
+            .setWidth(weight(1f))
             .setHeight(expand())
             .setHorizontalAlignment(HORIZONTAL_ALIGN_CENTER)
             .setVerticalAlignment(VERTICAL_ALIGN_CENTER)
-            .setModifiers(
-                Modifiers.Builder()
-                    .setBackground(
-                        Background.Builder()
-                            .setColor(argb(bgColor))
-                            .setCorner(corner)
-                            .build()
-                    )
-                    .setBorder(
-                        Border.Builder()
-                            .setWidth(dp(1.5f))
-                            .setColor(argb(COLOR_BEVEL_LIGHT))
-                            .build()
-                    )
-                    .setPadding(
-                        Padding.Builder()
-                            .setAll(dp(8f))
-                            .build()
-                    )
-                    .setClickable(clickable)
-                    .build()
-            )
-            .addContent(columnBuilder.build())
-            .build()
-
-        return Box.Builder()
-            .setWidth(expand())
-            .setHeight(expand())
-            .setHorizontalAlignment(HORIZONTAL_ALIGN_START)
-            .setVerticalAlignment(VERTICAL_ALIGN_BOTTOM)
-            .setModifiers(
-                Modifiers.Builder()
-                    .setBackground(
-                        Background.Builder()
-                            .setColor(argb(COLOR_DARK_BG))
-                            .build()
-                    )
-                    .build()
-            )
-            .addContent(statusCard)
-            .addContent(
-                Box.Builder()
-                    .setWidth(expand())
-                    .setHeight(expand())
-                    .setHorizontalAlignment(HORIZONTAL_ALIGN_START)
-                    .setVerticalAlignment(VERTICAL_ALIGN_BOTTOM)
-                    .setModifiers(
-                        Modifiers.Builder()
-                            .setPadding(
-                                Padding.Builder()
-                                    .setStart(dp(16f))
-                                    .setBottom(dp(16f))
-                                    .build()
-                            )
-                            .build()
-                    )
-                    .addContent(buildPanicCircle(panicClickable))
-                    .build()
-            )
+            .addContent(buildPanicCircle(panicClickable))
             .build()
     }
 
-    private fun buildDualPartitionTile(
-        top: com.remoteparadox.watch.data.PartitionInfo,
-        bottom: com.remoteparadox.watch.data.PartitionInfo,
-        clickable: Clickable,
-        panicClickable: Clickable,
-    ): LayoutElement {
-        val zones = Column.Builder()
-            .setWidth(expand())
-            .setHeight(expand())
-            .setModifiers(
-                Modifiers.Builder()
-                    .setClickable(clickable)
-                    .build()
-            )
-            .addContent(buildHalfPartition(top, weight(1f)))
-            .addContent(Spacer.Builder().setHeight(dp(4f)).build())
-            .addContent(buildHalfPartition(bottom, weight(1f)))
-            .build()
-
-        return Box.Builder()
-            .setWidth(expand())
-            .setHeight(expand())
-            .setModifiers(
-                Modifiers.Builder()
-                    .setBackground(
-                        Background.Builder()
-                            .setColor(argb(COLOR_DARK_BG))
-                            .build()
-                    )
-                    .setPadding(
-                        Padding.Builder().setAll(dp(4f)).build()
-                    )
-                    .build()
-            )
-            .addContent(zones)
-            .addContent(
-                Box.Builder()
-                    .setWidth(expand())
-                    .setHeight(expand())
-                    .setHorizontalAlignment(HORIZONTAL_ALIGN_START)
-                    .setVerticalAlignment(VERTICAL_ALIGN_CENTER)
-                    .setModifiers(
-                        Modifiers.Builder()
-                            .setPadding(
-                                Padding.Builder()
-                                    .setStart(dp(8f))
-                                    .build()
-                            )
-                            .build()
-                    )
-                    .addContent(buildPanicCircle(panicClickable))
-                    .build()
-            )
-            .build()
-    }
-
-    private fun buildHalfPartition(
+    private fun buildPartitionCard(
         partition: com.remoteparadox.watch.data.PartitionInfo,
-        height: ContainerDimension,
+        clickable: Clickable,
+        nameSize: Float = 22f,
+        statusSize: Float = 13f,
+        triggerSize: Float = 11f,
+        height: ContainerDimension = expand(),
     ): LayoutElement {
         val bgColor = modeToColor(partition.mode)
         val textColor = modeToTextColor(partition.mode)
@@ -414,7 +293,7 @@ class StatusTileService : TileService() {
                     .setText(partition.name)
                     .setFontStyle(
                         FontStyle.Builder()
-                            .setSize(sp(20f))
+                            .setSize(sp(nameSize))
                             .setColor(argb(textColor))
                             .setWeight(FONT_WEIGHT_BOLD)
                             .build()
@@ -426,7 +305,7 @@ class StatusTileService : TileService() {
                     .setText(label)
                     .setFontStyle(
                         FontStyle.Builder()
-                            .setSize(sp(12f))
+                            .setSize(sp(statusSize))
                             .setColor(argb(textColor))
                             .build()
                     )
@@ -439,11 +318,11 @@ class StatusTileService : TileService() {
                     .setText(triggeredZones)
                     .setFontStyle(
                         FontStyle.Builder()
-                            .setSize(sp(11f))
+                            .setSize(sp(triggerSize))
                             .setColor(argb(textColor))
                             .build()
                     )
-                    .setMaxLines(1)
+                    .setMaxLines(2)
                     .build()
             )
         }
@@ -467,9 +346,78 @@ class StatusTileService : TileService() {
                             .setColor(argb(COLOR_BEVEL_LIGHT))
                             .build()
                     )
+                    .setClickable(clickable)
                     .build()
             )
             .addContent(columnBuilder.build())
+            .build()
+    }
+
+    private fun buildSinglePartitionTile(
+        partition: com.remoteparadox.watch.data.PartitionInfo,
+        clickable: Clickable,
+        panicClickable: Clickable,
+    ): LayoutElement {
+        return Row.Builder()
+            .setWidth(expand())
+            .setHeight(expand())
+            .setVerticalAlignment(VERTICAL_ALIGN_CENTER)
+            .setModifiers(
+                Modifiers.Builder()
+                    .setBackground(
+                        Background.Builder()
+                            .setColor(argb(COLOR_DARK_BG))
+                            .build()
+                    )
+                    .setPadding(Padding.Builder().setAll(dp(4f)).build())
+                    .build()
+            )
+            .addContent(buildPanicColumn(panicClickable))
+            .addContent(Spacer.Builder().setWidth(dp(4f)).build())
+            .addContent(
+                Box.Builder()
+                    .setWidth(weight(3f))
+                    .setHeight(expand())
+                    .addContent(
+                        buildPartitionCard(partition, clickable, nameSize = 26f, statusSize = 14f, triggerSize = 12f)
+                    )
+                    .build()
+            )
+            .build()
+    }
+
+    private fun buildDualPartitionTile(
+        top: com.remoteparadox.watch.data.PartitionInfo,
+        bottom: com.remoteparadox.watch.data.PartitionInfo,
+        topClickable: Clickable,
+        bottomClickable: Clickable,
+        panicClickable: Clickable,
+    ): LayoutElement {
+        val partitions = Column.Builder()
+            .setWidth(weight(3f))
+            .setHeight(expand())
+            .addContent(buildPartitionCard(top, topClickable, nameSize = 18f, statusSize = 11f, triggerSize = 10f, height = weight(1f)))
+            .addContent(Spacer.Builder().setHeight(dp(4f)).build())
+            .addContent(buildPartitionCard(bottom, bottomClickable, nameSize = 18f, statusSize = 11f, triggerSize = 10f, height = weight(1f)))
+            .build()
+
+        return Row.Builder()
+            .setWidth(expand())
+            .setHeight(expand())
+            .setVerticalAlignment(VERTICAL_ALIGN_CENTER)
+            .setModifiers(
+                Modifiers.Builder()
+                    .setBackground(
+                        Background.Builder()
+                            .setColor(argb(COLOR_DARK_BG))
+                            .build()
+                    )
+                    .setPadding(Padding.Builder().setAll(dp(4f)).build())
+                    .build()
+            )
+            .addContent(buildPanicColumn(panicClickable))
+            .addContent(Spacer.Builder().setWidth(dp(4f)).build())
+            .addContent(partitions)
             .build()
     }
 
@@ -524,7 +472,7 @@ class StatusTileService : TileService() {
         "disarmed" -> COLOR_GREEN
         "armed_away", "armed_home" -> COLOR_RED
         "arming", "entry_delay", "exit_delay" -> COLOR_AMBER
-        "triggered" -> COLOR_PULSE_RED
+        "triggered" -> if (System.currentTimeMillis() / 1000 % 2 == 0L) COLOR_PULSE_RED else COLOR_PULSE_BRIGHT
         else -> COLOR_AMBER
     }
 

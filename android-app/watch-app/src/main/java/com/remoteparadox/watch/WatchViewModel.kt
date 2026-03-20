@@ -53,11 +53,20 @@ data class WatchState(
     val wsConnected: Boolean = false,
     val loginError: String? = null,
     val pendingArm: PendingArm? = null,
+    val tilePartitionId: Int? = null,
+    val tileActionDone: Boolean = false,
+    val armAwayEnabled: Boolean = true,
+    val armStayEnabled: Boolean = true,
 )
 
 class WatchViewModel(app: Application) : AndroidViewModel(app) {
     val tokenStore = WatchTokenStore(app)
-    private val _state = MutableStateFlow(WatchState())
+    private val _state = MutableStateFlow(
+        WatchState(
+            armAwayEnabled = tokenStore.armAwayEnabled,
+            armStayEnabled = tokenStore.armStayEnabled,
+        )
+    )
     val state = _state.asStateFlow()
 
     private var api: ParadoxApi? = null
@@ -275,6 +284,36 @@ class WatchViewModel(app: Application) : AndroidViewModel(app) {
 
     fun dismissPendingArm() {
         _state.update { it.copy(pendingArm = null) }
+    }
+
+    fun setTilePartitionId(id: Int) {
+        _state.update { it.copy(tilePartitionId = id) }
+    }
+
+    fun clearTilePartitionId() {
+        _state.update { it.copy(tilePartitionId = null) }
+    }
+
+    fun markTileActionDone() {
+        _state.update { it.copy(tileActionDone = true) }
+    }
+
+    fun resetTileActionDone() {
+        _state.update { it.copy(tileActionDone = false) }
+    }
+
+    fun toggleArmAway() {
+        val newVal = !tokenStore.armAwayEnabled
+        if (!newVal && !tokenStore.armStayEnabled) return
+        tokenStore.armAwayEnabled = newVal
+        _state.update { it.copy(armAwayEnabled = newVal) }
+    }
+
+    fun toggleArmStay() {
+        val newVal = !tokenStore.armStayEnabled
+        if (!newVal && !tokenStore.armAwayEnabled) return
+        tokenStore.armStayEnabled = newVal
+        _state.update { it.copy(armStayEnabled = newVal) }
     }
 
     fun bypassZone(zoneId: Int, thenArm: Boolean = false) {

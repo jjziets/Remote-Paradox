@@ -9,6 +9,7 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.*
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -40,6 +41,9 @@ fun DashboardScreen(
     actionInProgress: String?,
     error: String?,
     pendingArm: PendingArm?,
+    tilePartitionId: Int? = null,
+    armAwayEnabled: Boolean = true,
+    armStayEnabled: Boolean = true,
     onArmAway: (Int) -> Unit,
     onArmStay: (Int) -> Unit,
     onDisarm: (Int) -> Unit,
@@ -48,6 +52,10 @@ fun DashboardScreen(
     onBypassAllAndArm: () -> Unit,
     onDismissPendingArm: () -> Unit,
     onUnbypassZone: (Int) -> Unit,
+    onClearTilePartition: () -> Unit = {},
+    onTileDialogDismissed: () -> Unit = {},
+    onToggleArmAway: () -> Unit = {},
+    onToggleArmStay: () -> Unit = {},
     onLogout: () -> Unit,
 ) {
     if (status == null) {
@@ -91,6 +99,11 @@ fun DashboardScreen(
                     onArmStay = onArmStay,
                     onDisarm = onDisarm,
                     isSplit = true,
+                    armAwayEnabled = armAwayEnabled,
+                    armStayEnabled = armStayEnabled,
+                    autoShowActions = tilePartitionId == status.partitions[0].id,
+                    onAutoShown = onClearTilePartition,
+                    onDialogDismissed = onTileDialogDismissed,
                 )
             }
             item { Spacer(modifier = Modifier.height(4.dp)) }
@@ -102,6 +115,11 @@ fun DashboardScreen(
                     onArmStay = onArmStay,
                     onDisarm = onDisarm,
                     isSplit = true,
+                    armAwayEnabled = armAwayEnabled,
+                    armStayEnabled = armStayEnabled,
+                    autoShowActions = tilePartitionId == status.partitions[1].id,
+                    onAutoShown = onClearTilePartition,
+                    onDialogDismissed = onTileDialogDismissed,
                 )
             }
         } else {
@@ -113,6 +131,11 @@ fun DashboardScreen(
                     onArmStay = onArmStay,
                     onDisarm = onDisarm,
                     isSplit = false,
+                    armAwayEnabled = armAwayEnabled,
+                    armStayEnabled = armStayEnabled,
+                    autoShowActions = tilePartitionId == status.partitions[0].id,
+                    onAutoShown = onClearTilePartition,
+                    onDialogDismissed = onTileDialogDismissed,
                 )
             }
         }
@@ -147,6 +170,35 @@ fun DashboardScreen(
             }
         }
 
+        item { Spacer(modifier = Modifier.height(16.dp)) }
+
+        item {
+            Text(
+                text = "Settings",
+                style = MaterialTheme.typography.titleSmall,
+                fontWeight = FontWeight.Bold,
+                color = Color.White.copy(alpha = 0.7f),
+            )
+        }
+
+        item {
+            SettingToggle(
+                label = "Arm Away",
+                checked = armAwayEnabled,
+                enabled = !armAwayEnabled || armStayEnabled,
+                onToggle = onToggleArmAway,
+            )
+        }
+
+        item {
+            SettingToggle(
+                label = "Arm Stay",
+                checked = armStayEnabled,
+                enabled = !armStayEnabled || armAwayEnabled,
+                onToggle = onToggleArmStay,
+            )
+        }
+
         item { Spacer(modifier = Modifier.height(8.dp)) }
 
         item {
@@ -169,10 +221,41 @@ fun PartitionCard(
     onArmStay: (Int) -> Unit,
     onDisarm: (Int) -> Unit,
     isSplit: Boolean,
+    armAwayEnabled: Boolean = true,
+    armStayEnabled: Boolean = true,
+    autoShowActions: Boolean = false,
+    onAutoShown: () -> Unit = {},
+    onDialogDismissed: () -> Unit = {},
 ) {
     val color = partitionDisplayColor(partition.mode)
     val triggeredZones = triggeredZoneNames(partition)
     var showActions by remember { mutableStateOf(false) }
+    var openedFromTile by remember { mutableStateOf(false) }
+
+    val isArming = partition.mode in listOf("arming", "exit_delay")
+    val isArmed = partition.armed || partition.mode == "triggered"
+    val needsDialog = !isArmed && !isArming && armAwayEnabled && armStayEnabled
+
+    fun handleDirectAction() {
+        when {
+            isArming || isArmed -> onDisarm(partition.id)
+            armAwayEnabled -> onArmAway(partition.id)
+            armStayEnabled -> onArmStay(partition.id)
+        }
+    }
+
+    LaunchedEffect(autoShowActions) {
+        if (autoShowActions) {
+            onAutoShown()
+            if (needsDialog) {
+                showActions = true
+                openedFromTile = true
+            } else {
+                handleDirectAction()
+                onDialogDismissed()
+            }
+        }
+    }
 
     val isPulsing = color == PartitionColor.ALARM_RED
     val pulseAlpha by if (isPulsing) {
@@ -188,8 +271,6 @@ fun PartitionCard(
     } else {
         remember { mutableFloatStateOf(1.0f) }
     }
-
-    val isArming = partition.mode in listOf("arming", "exit_delay")
 
     val bgColor = when (color) {
         PartitionColor.GREEN -> AlarmGreen
@@ -208,14 +289,24 @@ fun PartitionCard(
 
     val cardHeight = if (isSplit) 70.dp else 140.dp
 
+    val dismissDialog = {
+        showActions = false
+        if (openedFromTile) {
+            openedFromTile = false
+            onDialogDismissed()
+        }
+    }
+
     ActionDialog(
         visible = showActions,
         partition = partition,
         actionInProgress = actionInProgress,
-        onArmAway = { onArmAway(partition.id); showActions = false },
-        onArmStay = { onArmStay(partition.id); showActions = false },
-        onDisarm = { onDisarm(partition.id); showActions = false },
-        onDismiss = { showActions = false },
+        armAwayEnabled = armAwayEnabled,
+        armStayEnabled = armStayEnabled,
+        onArmAway = { onArmAway(partition.id); dismissDialog() },
+        onArmStay = { onArmStay(partition.id); dismissDialog() },
+        onDisarm = { onDisarm(partition.id); dismissDialog() },
+        onDismiss = dismissDialog,
     )
 
     val cardShape = RoundedCornerShape(16.dp)
@@ -228,10 +319,10 @@ fun PartitionCard(
             .background(animatedBg)
             .border(1.5.dp, Color.White.copy(alpha = 0.2f), cardShape)
             .clickable {
-                if (isArming) {
-                    onDisarm(partition.id)
-                } else {
+                if (needsDialog) {
                     showActions = true
+                } else {
+                    handleDirectAction()
                 }
             },
         contentAlignment = Alignment.Center,
@@ -248,7 +339,13 @@ fun PartitionCard(
             )
             Spacer(modifier = Modifier.height(2.dp))
             Text(
-                text = if (isArming) "Arming… tap to cancel" else statusLabel(partition.mode),
+                text = when {
+                    isArming -> "Arming… tap to cancel"
+                    isArmed -> "Tap to disarm"
+                    needsDialog -> statusLabel(partition.mode)
+                    armAwayEnabled -> "Tap to arm away"
+                    else -> "Tap to arm stay"
+                },
                 fontSize = if (isSplit) 13.sp else 16.sp,
                 color = textColor,
                 fontWeight = FontWeight.Bold,
@@ -281,6 +378,8 @@ fun ActionDialog(
     visible: Boolean,
     partition: PartitionInfo,
     actionInProgress: String?,
+    armAwayEnabled: Boolean = true,
+    armStayEnabled: Boolean = true,
     onArmAway: () -> Unit,
     onArmStay: () -> Unit,
     onDisarm: () -> Unit,
@@ -303,24 +402,28 @@ fun ActionDialog(
                 }
             }
         } else {
-            item {
-                Button(
-                    onClick = onArmAway,
-                    enabled = actionInProgress == null,
-                    colors = ButtonDefaults.buttonColors(containerColor = AlarmRed),
-                    modifier = Modifier.fillMaxWidth(),
-                ) {
-                    Text("Arm Away", fontSize = 14.sp)
+            if (armAwayEnabled) {
+                item {
+                    Button(
+                        onClick = onArmAway,
+                        enabled = actionInProgress == null,
+                        colors = ButtonDefaults.buttonColors(containerColor = AlarmRed),
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        Text("Arm Away", fontSize = 14.sp)
+                    }
                 }
             }
-            item {
-                Button(
-                    onClick = onArmStay,
-                    enabled = actionInProgress == null,
-                    colors = ButtonDefaults.buttonColors(containerColor = AlarmYellow),
-                    modifier = Modifier.fillMaxWidth(),
-                ) {
-                    Text("Arm Stay", fontSize = 14.sp)
+            if (armStayEnabled) {
+                item {
+                    Button(
+                        onClick = onArmStay,
+                        enabled = actionInProgress == null,
+                        colors = ButtonDefaults.buttonColors(containerColor = AlarmYellow),
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        Text("Arm Stay", fontSize = 14.sp)
+                    }
                 }
             }
         }
@@ -482,5 +585,39 @@ fun BypassedZoneRow(
         ) {
             Text("Clear", fontSize = 10.sp, color = Color.White)
         }
+    }
+}
+
+@Composable
+fun SettingToggle(
+    label: String,
+    checked: Boolean,
+    enabled: Boolean,
+    onToggle: () -> Unit,
+) {
+    val bgColor = if (checked) AlarmGreen.copy(alpha = 0.4f) else DarkSurface
+    val shape = RoundedCornerShape(12.dp)
+
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(shape)
+            .background(bgColor)
+            .clickable(enabled = enabled) { onToggle() }
+            .padding(horizontal = 12.dp, vertical = 8.dp),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            text = label,
+            fontSize = 13.sp,
+            color = if (enabled) Color.White else Color.White.copy(alpha = 0.4f),
+        )
+        Text(
+            text = if (checked) "ON" else "OFF",
+            fontSize = 11.sp,
+            fontWeight = FontWeight.Bold,
+            color = if (checked) AlarmGreen else Color.White.copy(alpha = 0.5f),
+        )
     }
 }

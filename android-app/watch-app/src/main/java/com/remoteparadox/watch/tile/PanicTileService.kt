@@ -28,7 +28,7 @@ class PanicTileService : TileService() {
                     .setAndroidActivity(
                         ActionBuilders.AndroidActivity.Builder()
                             .setPackageName(packageName)
-                            .setClassName("$packageName.MainActivity")
+                            .setClassName("com.remoteparadox.watch.MainActivity")
                             .addKeyToExtraMapping(
                                 "action",
                                 ActionBuilders.AndroidStringExtra.Builder()
