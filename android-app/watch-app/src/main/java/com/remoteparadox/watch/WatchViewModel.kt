@@ -307,6 +307,7 @@ class WatchViewModel(app: Application) : AndroidViewModel(app) {
         if (!newVal && !tokenStore.armStayEnabled) return
         tokenStore.armAwayEnabled = newVal
         _state.update { it.copy(armAwayEnabled = newVal) }
+        requestTileUpdate()
     }
 
     fun toggleArmStay() {
@@ -314,6 +315,16 @@ class WatchViewModel(app: Application) : AndroidViewModel(app) {
         if (!newVal && !tokenStore.armAwayEnabled) return
         tokenStore.armStayEnabled = newVal
         _state.update { it.copy(armStayEnabled = newVal) }
+        requestTileUpdate()
+    }
+
+    private fun requestTileUpdate() {
+        try {
+            val updater = androidx.wear.tiles.TileService.getUpdater(getApplication())
+            updater.requestUpdate(com.remoteparadox.watch.tile.StatusTileService::class.java)
+        } catch (e: Exception) {
+            Log.w(TAG, "Tile update request failed: ${e.message}")
+        }
     }
 
     fun bypassZone(zoneId: Int, thenArm: Boolean = false) {

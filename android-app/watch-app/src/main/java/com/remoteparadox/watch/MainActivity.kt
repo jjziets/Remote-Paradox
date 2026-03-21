@@ -109,10 +109,15 @@ class MainActivity : ComponentActivity() {
         val fingerprint = tokenStore.certFingerprint.orEmpty()
         val code = tokenStore.alarmCode ?: ""
 
+        tokenStore.setPendingAction(pid)
+
         val appContext = applicationContext
 
         CoroutineScope(Dispatchers.IO).launch {
             try {
+                val updater = TileService.getUpdater(appContext)
+                updater.requestUpdate(StatusTileService::class.java)
+
                 val api = ApiClient.create(baseUrl, fingerprint)
                 val auth = tokenStore.bearerHeader
 
@@ -131,7 +136,6 @@ class MainActivity : ComponentActivity() {
                 }
                 Log.d("MainActivity", "Action $action response: ${resp?.code()}")
 
-                val updater = TileService.getUpdater(appContext)
                 repeat(15) { i ->
                     delay(300)
                     try {
@@ -140,16 +144,21 @@ class MainActivity : ComponentActivity() {
                         updater.requestUpdate(StatusTileService::class.java)
                         Log.d("MainActivity", "Poll $i: mode=$currentMode (was $beforeMode)")
                         if (currentMode != null && currentMode != beforeMode) {
-                            Log.d("MainActivity", "State changed, stopping refresh")
+                            Log.d("MainActivity", "State changed, clearing pending")
+                            val ts = WatchTokenStore(appContext)
+                            ts.clearPendingAction()
+                            updater.requestUpdate(StatusTileService::class.java)
                             return@launch
                         }
                     } catch (e: Exception) {
                         Log.w("MainActivity", "Poll $i failed: ${e.message}")
                     }
                 }
+                WatchTokenStore(appContext).clearPendingAction()
                 Log.d("MainActivity", "Refresh burst done (15 polls, no change detected)")
             } catch (e: Exception) {
                 Log.e("MainActivity", "Direct action failed: ${e.message}")
+                WatchTokenStore(appContext).clearPendingAction()
             }
         }
 

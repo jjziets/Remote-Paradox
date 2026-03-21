@@ -40,6 +40,29 @@ class WatchTokenStore(context: Context) {
         get() = prefs.getBoolean(KEY_ARM_STAY_ENABLED, true)
         set(value) = prefs.edit().putBoolean(KEY_ARM_STAY_ENABLED, value).apply()
 
+    var pendingActionPartition: Int
+        get() = prefs.getInt(KEY_PENDING_PARTITION, -1)
+        set(value) = prefs.edit().putInt(KEY_PENDING_PARTITION, value).apply()
+
+    var pendingActionTime: Long
+        get() = prefs.getLong(KEY_PENDING_TIME, 0L)
+        set(value) = prefs.edit().putLong(KEY_PENDING_TIME, value).apply()
+
+    fun setPendingAction(partitionId: Int) {
+        pendingActionPartition = partitionId
+        pendingActionTime = System.currentTimeMillis()
+    }
+
+    fun clearPendingAction() {
+        pendingActionPartition = -1
+        pendingActionTime = 0L
+    }
+
+    fun isPendingAction(partitionId: Int): Boolean {
+        if (pendingActionPartition != partitionId) return false
+        return System.currentTimeMillis() - pendingActionTime < 5000
+    }
+
     val isLoggedIn: Boolean get() = token != null && serverHost != null
 
     val baseUrl: String?
@@ -63,5 +86,7 @@ class WatchTokenStore(context: Context) {
         private const val KEY_ALARM_CODE = "alarm_code"
         private const val KEY_ARM_AWAY_ENABLED = "arm_away_enabled"
         private const val KEY_ARM_STAY_ENABLED = "arm_stay_enabled"
+        private const val KEY_PENDING_PARTITION = "pending_action_partition"
+        private const val KEY_PENDING_TIME = "pending_action_time"
     }
 }

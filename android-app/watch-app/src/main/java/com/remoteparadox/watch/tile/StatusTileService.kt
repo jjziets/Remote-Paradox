@@ -27,6 +27,7 @@ private const val COLOR_RED = 0xCCC62828.toInt()
 private const val COLOR_AMBER = 0xCCF9A825.toInt()
 private const val COLOR_PULSE_RED = 0xFFB71C1C.toInt()
 private const val COLOR_PULSE_BRIGHT = 0xFFFF1744.toInt()
+private const val COLOR_PENDING = 0xFF444444.toInt()
 private const val COLOR_DARK_BG = 0xFF1A1A1A.toInt()
 private const val COLOR_WHITE = 0xFFFFFFFF.toInt()
 private const val COLOR_BEVEL_LIGHT = 0x33FFFFFF.toInt()
@@ -42,18 +43,19 @@ class StatusTileService : TileService() {
         }
 
         val status = fetchStatusBlocking(tokenStore)
+        val hasPending = status?.partitions?.any { tokenStore.isPendingAction(it.id) } == true
 
         val layout = if (status == null) {
             buildErrorLayout("Offline")
         } else {
-            buildStatusLayout(status)
+            buildStatusLayout(status, tokenStore)
         }
 
         val isTriggered = status?.partitions?.any { it.mode == "triggered" } == true
 
         val tile = Tile.Builder()
             .setResourcesVersion(RESOURCES_VERSION)
-            .setFreshnessIntervalMillis(if (isTriggered) 1_000 else 10_000)
+            .setFreshnessIntervalMillis(if (isTriggered || hasPending) 1_000 else 10_000)
             .setTileTimeline(
                 Timeline.Builder()
                     .addTimelineEntry(
@@ -89,12 +91,11 @@ class StatusTileService : TileService() {
         }
     }
 
-    private fun buildStatusLayout(status: AlarmStatus): LayoutElement {
+    private fun buildStatusLayout(status: AlarmStatus, tokenStore: WatchTokenStore): LayoutElement {
         val parts = status.partitions
         if (parts.isEmpty()) return buildErrorLayout("No areas")
 
         val activityClass = "com.remoteparadox.watch.MainActivity"
-        val tokenStore = WatchTokenStore(this)
 
         val panicClickable = buildActionClickable(activityClass, action = "panic")
 
@@ -103,6 +104,7 @@ class StatusTileService : TileService() {
                 parts[0],
                 buildSmartClickable(activityClass, parts[0], tokenStore),
                 panicClickable,
+                pending = tokenStore.isPendingAction(parts[0].id),
             )
         } else {
             buildDualPartitionTile(
@@ -110,6 +112,8 @@ class StatusTileService : TileService() {
                 buildSmartClickable(activityClass, parts[0], tokenStore),
                 buildSmartClickable(activityClass, parts[1], tokenStore),
                 panicClickable,
+                pendingTop = tokenStore.isPendingAction(parts[0].id),
+                pendingBottom = tokenStore.isPendingAction(parts[1].id),
             )
         }
     }
@@ -276,10 +280,11 @@ class StatusTileService : TileService() {
         statusSize: Float = 13f,
         triggerSize: Float = 11f,
         height: ContainerDimension = expand(),
+        pending: Boolean = false,
     ): LayoutElement {
-        val bgColor = modeToColor(partition.mode)
+        val bgColor = if (pending) COLOR_PENDING else modeToColor(partition.mode)
         val textColor = modeToTextColor(partition.mode)
-        val label = modeToLabel(partition.mode)
+        val label = if (pending) "Sending…" else modeToLabel(partition.mode)
         val triggeredZones = partition.zones
             .filter { it.alarm || it.wasInAlarm }
             .joinToString(", ") { it.name }
@@ -357,6 +362,7 @@ class StatusTileService : TileService() {
         partition: com.remoteparadox.watch.data.PartitionInfo,
         clickable: Clickable,
         panicClickable: Clickable,
+        pending: Boolean = false,
     ): LayoutElement {
         return Row.Builder()
             .setWidth(expand())
@@ -379,7 +385,7 @@ class StatusTileService : TileService() {
                     .setWidth(weight(3f))
                     .setHeight(expand())
                     .addContent(
-                        buildPartitionCard(partition, clickable, nameSize = 26f, statusSize = 14f, triggerSize = 12f)
+                        buildPartitionCard(partition, clickable, nameSize = 26f, statusSize = 14f, triggerSize = 12f, pending = pending)
                     )
                     .build()
             )
@@ -392,13 +398,15 @@ class StatusTileService : TileService() {
         topClickable: Clickable,
         bottomClickable: Clickable,
         panicClickable: Clickable,
+        pendingTop: Boolean = false,
+        pendingBottom: Boolean = false,
     ): LayoutElement {
         val partitions = Column.Builder()
             .setWidth(weight(3f))
             .setHeight(expand())
-            .addContent(buildPartitionCard(top, topClickable, nameSize = 18f, statusSize = 11f, triggerSize = 10f, height = weight(1f)))
+            .addContent(buildPartitionCard(top, topClickable, nameSize = 18f, statusSize = 11f, triggerSize = 10f, height = weight(1f), pending = pendingTop))
             .addContent(Spacer.Builder().setHeight(dp(4f)).build())
-            .addContent(buildPartitionCard(bottom, bottomClickable, nameSize = 18f, statusSize = 11f, triggerSize = 10f, height = weight(1f)))
+            .addContent(buildPartitionCard(bottom, bottomClickable, nameSize = 18f, statusSize = 11f, triggerSize = 10f, height = weight(1f), pending = pendingBottom))
             .build()
 
         return Row.Builder()
