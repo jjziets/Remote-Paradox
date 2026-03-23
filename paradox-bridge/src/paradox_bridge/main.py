@@ -12,6 +12,7 @@ from typing import Annotated
 from fastapi import Depends, FastAPI, HTTPException, Query, Request, WebSocket, WebSocketDisconnect, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
+from paradox_bridge import __version__ as BRIDGE_VERSION
 from paradox_bridge.alarm import AlarmService
 from paradox_bridge.audit import AuditService
 from paradox_bridge.auth import AuthService
@@ -509,18 +510,19 @@ APPLY_SCRIPT = Path("/opt/paradox-bridge/scripts/apply_update.sh")
 
 @app.get("/system/version")
 def system_version():
-    ver = VERSION_FILE.read_text().strip() if VERSION_FILE.exists() else "0.0.0"
-    return {"version": ver}
+    return {"version": BRIDGE_VERSION}
 
 
 @app.get("/system/update-status")
 def update_status(_admin: Annotated[dict, Depends(require_admin)]):
     if not UPDATE_STATUS_FILE.exists():
-        return {"pending": False, "current_version": VERSION_FILE.read_text().strip() if VERSION_FILE.exists() else "0.0.0"}
+        return {"pending": False, "current_version": BRIDGE_VERSION}
     try:
-        return json.loads(UPDATE_STATUS_FILE.read_text())
+        data = json.loads(UPDATE_STATUS_FILE.read_text())
+        data["current_version"] = BRIDGE_VERSION
+        return data
     except Exception:
-        return {"pending": False}
+        return {"pending": False, "current_version": BRIDGE_VERSION}
 
 
 @app.post("/system/check-update")

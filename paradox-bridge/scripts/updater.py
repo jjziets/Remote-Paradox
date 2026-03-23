@@ -3,6 +3,7 @@
 
 import json
 import os
+import re
 import shutil
 import tarfile
 import tempfile
@@ -19,6 +20,12 @@ API_URL = f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest"
 
 
 def current_version() -> str:
+    """Get the installed bridge version from the package metadata."""
+    try:
+        from importlib.metadata import version as pkg_version
+        return pkg_version("paradox-bridge")
+    except Exception:
+        pass
     if VERSION_FILE.exists():
         return VERSION_FILE.read_text().strip()
     return "0.0.0"
@@ -36,6 +43,19 @@ def fetch_latest_release() -> dict | None:
 
 def version_tuple(v: str) -> tuple[int, ...]:
     return tuple(int(x) for x in v.lstrip("v").split(".") if x.isdigit())
+
+
+def extract_bridge_version_from_staging() -> str | None:
+    """Read the bridge version from pyproject.toml in the staged tarball."""
+    for toml_path in STAGING_DIR.rglob("paradox-bridge/pyproject.toml"):
+        try:
+            text = toml_path.read_text()
+            match = re.search(r'^version\s*=\s*"([^"]+)"', text, re.MULTILINE)
+            if match:
+                return match.group(1)
+        except Exception:
+            pass
+    return None
 
 
 def download_and_stage(tarball_url: str, tag: str) -> bool:
@@ -56,14 +76,23 @@ def download_and_stage(tarball_url: str, tag: str) -> bool:
 
         os.unlink(tmp_path)
 
+        bridge_version = extract_bridge_version_from_staging() or tag.lstrip("v")
+
+        cur = current_version()
+        if version_tuple(bridge_version) <= version_tuple(cur):
+            print(f"[updater] Bridge already up to date ({cur})")
+            shutil.rmtree(STAGING_DIR, ignore_errors=True)
+            clear_status_if_not_pending()
+            return False
+
         status = {
             "pending": True,
-            "current_version": current_version(),
-            "new_version": tag.lstrip("v"),
+            "current_version": cur,
+            "new_version": bridge_version,
             "tag": tag,
         }
         STATUS_FILE.write_text(json.dumps(status))
-        print(f"[updater] Staged {tag}, awaiting approval")
+        print(f"[updater] Staged bridge {bridge_version} (from {tag}), awaiting approval")
         return True
     except Exception as e:
         print(f"[updater] Failed to stage: {e}")
@@ -71,25 +100,27 @@ def download_and_stage(tarball_url: str, tag: str) -> bool:
 
 
 def check_and_stage():
+    cur = current_version()
     release = fetch_latest_release()
     if not release:
         return
 
     tag = release.get("tag_name", "")
-    latest = version_tuple(tag)
-    cur = version_tuple(current_version())
-
-    if latest <= cur:
-        print(f"[updater] Up to date ({current_version()})")
-        clear_status_if_not_pending()
-        return
-
     tarball_url = release.get("tarball_url")
     if not tarball_url:
         print("[updater] No tarball URL in release")
         return
 
-    print(f"[updater] New release {tag} (current: {current_version()})")
+    if STATUS_FILE.exists():
+        try:
+            existing = json.loads(STATUS_FILE.read_text())
+            if existing.get("pending") and existing.get("tag") == tag:
+                print(f"[updater] Update {tag} already staged")
+                return
+        except Exception:
+            pass
+
+    print(f"[updater] Checking release {tag} (installed bridge: {cur})")
     download_and_stage(tarball_url, tag)
 
 

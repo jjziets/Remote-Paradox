@@ -13,6 +13,7 @@ if [ ! -d "$STAGING_DIR" ]; then
 fi
 
 NEW_VERSION=$(python3 -c "import json; print(json.load(open('$STATUS_FILE')).get('new_version','unknown'))" 2>/dev/null || echo "unknown")
+RELEASE_TAG=$(python3 -c "import json; print(json.load(open('$STATUS_FILE')).get('tag',''))" 2>/dev/null || echo "")
 
 # The tarball extracts to a directory like jjziets-Remote-Paradox-<hash>/
 EXTRACTED=$(find "$STAGING_DIR" -maxdepth 1 -type d ! -path "$STAGING_DIR" | head -1)
@@ -48,7 +49,14 @@ fi
 # Reinstall deps in case they changed
 "$VENV/bin/pip" install -q -e "$INSTALL_DIR" 2>/dev/null || true
 
-echo "$NEW_VERSION" > "$VERSION_FILE"
+# Write bridge version from pyproject.toml (not from release tag)
+BRIDGE_VER=$(python3 -c "
+import re
+with open('$INSTALL_DIR/pyproject.toml') as f:
+    m = re.search(r'^version\s*=\s*\"([^\"]+)\"', f.read(), re.MULTILINE)
+    print(m.group(1) if m else '$NEW_VERSION')
+" 2>/dev/null || echo "$NEW_VERSION")
+echo "$BRIDGE_VER" > "$VERSION_FILE"
 
 python3 -c "
 import json

@@ -62,6 +62,14 @@ class TestHealth:
         assert resp.status_code == 200
         assert resp.json()["demo_mode"] is True
 
+    def test_system_version_uses_package_version(self, client):
+        resp = client.get("/system/version")
+        assert resp.status_code == 200
+        ver = resp.json()["version"]
+        from paradox_bridge import __version__
+        assert ver == __version__
+        assert ver != "0.0.0"
+
 
 class TestLogin:
     def test_login_success(self, client):
