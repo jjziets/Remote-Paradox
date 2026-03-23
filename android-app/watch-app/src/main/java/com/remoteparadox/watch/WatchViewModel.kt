@@ -1,18 +1,14 @@
 package com.remoteparadox.watch
 
 import android.app.Application
-import android.content.Intent
 import android.os.VibrationEffect
 import android.os.Vibrator
 import android.util.Log
-import androidx.core.content.FileProvider
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
-import com.google.android.gms.wearable.ChannelClient
 import com.google.android.gms.wearable.MessageClient
 import com.google.android.gms.wearable.MessageEvent
 import com.google.android.gms.wearable.Wearable
-import com.remoteparadox.watch.BuildConfig
 import com.remoteparadox.watch.data.*
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -26,8 +22,6 @@ import okhttp3.Request
 import okhttp3.Response
 import okhttp3.WebSocket
 import okhttp3.WebSocketListener
-import android.net.Uri
-import java.io.File
 
 private const val TAG = "WatchVM"
 private const val POLL_INTERVAL_MS = 5_000L
@@ -76,19 +70,9 @@ class WatchViewModel(app: Application) : AndroidViewModel(app) {
     private val json = Json { ignoreUnknownKeys = true; isLenient = true }
 
     private val messageClient: MessageClient = Wearable.getMessageClient(app)
-    private val channelClient: ChannelClient = Wearable.getChannelClient(app)
 
     private val messageListener = MessageClient.OnMessageReceivedListener { event ->
         handleSyncMessage(event)
-    }
-
-    private val channelCallback = object : ChannelClient.ChannelCallback() {
-        override fun onChannelOpened(channel: ChannelClient.Channel) {
-            if (channel.path == WATCH_UPDATE_CHANNEL_PATH) {
-                Log.i(TAG, "=== Update channel opened, receiving APK ===")
-                receiveUpdateApk(channel)
-            }
-        }
     }
 
     init {
@@ -98,8 +82,7 @@ class WatchViewModel(app: Application) : AndroidViewModel(app) {
         Log.d(TAG, "  token: ${if (tokenStore.token != null) "SET (${tokenStore.token!!.length} chars)" else "NULL"}")
 
         messageClient.addListener(messageListener)
-        channelClient.registerChannelCallback(channelCallback)
-        Log.d(TAG, "  MessageClient + ChannelClient listeners registered")
+        Log.d(TAG, "  MessageClient listener registered")
 
         if (tokenStore.isLoggedIn) {
             Log.d(TAG, "  Already logged in, connecting API and starting updates")
@@ -116,11 +99,6 @@ class WatchViewModel(app: Application) : AndroidViewModel(app) {
         Log.d(TAG, "  path: ${event.path}")
         Log.d(TAG, "  sourceNodeId: ${event.sourceNodeId}")
         Log.d(TAG, "  data size: ${event.data?.size ?: 0} bytes")
-
-        if (event.path == WATCH_VERSION_QUERY_PATH) {
-            handleVersionQuery(event.sourceNodeId)
-            return
-        }
 
         if (event.path != WATCH_SYNC_PATH) {
             Log.d(TAG, "  IGNORING: path doesn't match $WATCH_SYNC_PATH")
@@ -559,72 +537,10 @@ class WatchViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    private fun handleVersionQuery(sourceNodeId: String) {
-        val version = BuildConfig.VERSION_NAME
-        Log.i(TAG, "Version query from $sourceNodeId, replying with $version")
-        viewModelScope.launch(Dispatchers.IO) {
-            try {
-                messageClient.sendMessage(
-                    sourceNodeId,
-                    WATCH_VERSION_REPLY_PATH,
-                    version.toByteArray(Charsets.UTF_8),
-                ).await()
-                Log.i(TAG, "Version reply sent: $version")
-            } catch (e: Exception) {
-                Log.e(TAG, "Failed to send version reply", e)
-            }
-        }
-    }
-
-    private fun receiveUpdateApk(channel: ChannelClient.Channel) {
-        viewModelScope.launch(Dispatchers.IO) {
-            try {
-                val ctx = getApplication<Application>()
-                val updatesDir = File(ctx.cacheDir, "updates")
-                updatesDir.mkdirs()
-                val apkFile = File(updatesDir, "watch-update.apk")
-
-                Log.i(TAG, "Receiving APK via input stream...")
-                val inputStream = channelClient.getInputStream(channel).await()
-                apkFile.outputStream().use { output ->
-                    val buffer = ByteArray(8192)
-                    var totalBytes = 0L
-                    var bytesRead: Int
-                    while (inputStream.read(buffer).also { bytesRead = it } != -1) {
-                        output.write(buffer, 0, bytesRead)
-                        totalBytes += bytesRead
-                    }
-                    Log.i(TAG, "APK received: $totalBytes bytes")
-                }
-                inputStream.close()
-                channelClient.close(channel).await()
-
-                if (apkFile.length() < 1000) {
-                    Log.e(TAG, "APK too small (${apkFile.length()} bytes), skipping install")
-                    return@launch
-                }
-
-                val contentUri = FileProvider.getUriForFile(
-                    ctx, "${ctx.packageName}.fileprovider", apkFile
-                )
-                val installIntent = Intent(Intent.ACTION_VIEW).apply {
-                    setDataAndType(contentUri, "application/vnd.android.package-archive")
-                    addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                }
-                ctx.startActivity(installIntent)
-                Log.i(TAG, "PackageInstaller launched")
-            } catch (e: Exception) {
-                Log.e(TAG, "Failed to receive update APK", e)
-            }
-        }
-    }
-
     override fun onCleared() {
         super.onCleared()
         stopRealtimeUpdates()
         messageClient.removeListener(messageListener)
-        channelClient.unregisterChannelCallback(channelCallback)
-        Log.d(TAG, "MessageClient + ChannelClient listeners removed")
+        Log.d(TAG, "MessageClient listener removed")
     }
 }
