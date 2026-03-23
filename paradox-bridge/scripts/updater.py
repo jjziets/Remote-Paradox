@@ -72,7 +72,11 @@ def download_and_stage(tarball_url: str, tag: str) -> bool:
         STAGING_DIR.mkdir(parents=True)
 
         with tarfile.open(tmp_path, "r:gz") as tar:
-            tar.extractall(STAGING_DIR, filter="data")
+            import sys
+            if sys.version_info >= (3, 12):
+                tar.extractall(STAGING_DIR, filter="data")
+            else:
+                tar.extractall(STAGING_DIR)
 
         os.unlink(tmp_path)
 
