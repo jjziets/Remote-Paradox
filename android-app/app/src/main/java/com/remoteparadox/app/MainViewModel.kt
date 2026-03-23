@@ -34,6 +34,7 @@ import okhttp3.WebSocketListener
 private const val TAG = "MainViewModel"
 private const val WS_RECONNECT_DELAY_MS = 3_000L
 private const val FALLBACK_POLL_INTERVAL_MS = 5_000L
+private const val TOKEN_REFRESH_AGE_MS = 36 * 60 * 60 * 1000L // 36 hours
 
 data class UpdateState(
     val checking: Boolean = false,
@@ -499,6 +500,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         }
         viewModelScope.launch(Dispatchers.IO) {
             try {
+                maybeRefreshToken()
                 _state.update { it.copy(isLoading = true) }
                 val resp = a.alarmStatus(tokenStore.bearerHeader)
                 if (resp.isSuccessful && resp.body() != null) {
@@ -513,7 +515,6 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 }
             } catch (e: Exception) {
                 httpReachable = false
-                // Cascade to BLE
                 if (isBleConnected) {
                     Log.i(TAG, "HTTP unreachable, falling back to BLE for status")
                     refreshStatusViaBle()
@@ -1580,6 +1581,25 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     // ── Session ──
+
+    private suspend fun maybeRefreshToken() {
+        val a = api ?: return
+        if (tokenStore.tokenAgeMs < TOKEN_REFRESH_AGE_MS) return
+        try {
+            Log.i(TAG, "Token is ${tokenStore.tokenAgeMs / 3600000}h old, refreshing...")
+            val resp = a.refreshToken(tokenStore.bearerHeader)
+            if (resp.isSuccessful && resp.body() != null) {
+                tokenStore.token = resp.body()!!.token
+                Log.i(TAG, "Token refreshed successfully")
+            } else if (resp.code() == 401) {
+                Log.w(TAG, "Token refresh failed with 401, token has expired")
+            } else {
+                Log.w(TAG, "Token refresh failed: ${resp.code()}")
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "Token refresh error: ${e.message}")
+        }
+    }
 
     private fun handleTokenExpired() {
         stopRealtimeUpdates()

@@ -34,6 +34,11 @@ interface ParadoxApi {
         @Body req: BypassRequest,
     ): Response<ActionResult>
 
+    @POST("auth/refresh")
+    suspend fun refreshToken(
+        @Header("Authorization") auth: String,
+    ): Response<LoginResponse>
+
     @POST("alarm/panic")
     suspend fun panic(
         @Header("Authorization") auth: String,

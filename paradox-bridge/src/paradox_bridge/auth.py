@@ -61,6 +61,10 @@ class AuthService:
         payload = {"sub": username, "role": role, "iat": now, "exp": now}
         return jwt.encode(payload, self._config.jwt_secret, algorithm=_JWT_ALGORITHM)
 
+    def refresh_token(self, token: str) -> str:
+        payload = self.decode_token(token)
+        return self._create_token(payload["sub"], payload["role"])
+
     def decode_token(self, token: str) -> dict:
         try:
             payload = jwt.decode(

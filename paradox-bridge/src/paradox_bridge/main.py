@@ -362,6 +362,19 @@ def login(req: LoginRequest, auth: Annotated[AuthService, Depends(get_auth)]):
     return LoginResponse(token=token, username=req.username, role=user["role"])
 
 
+@app.post("/auth/refresh")
+def refresh(
+    creds: Annotated[HTTPAuthorizationCredentials, Depends(_bearer)],
+    auth: Annotated[AuthService, Depends(get_auth)],
+):
+    try:
+        new_token = auth.refresh_token(creds.credentials)
+        payload = auth.decode_token(new_token)
+        return {"token": new_token, "username": payload["sub"], "role": payload["role"]}
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=str(exc))
+
+
 @app.post("/auth/register", response_model=RegisterResponse)
 def register(
     req: RegisterRequest,

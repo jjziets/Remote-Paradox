@@ -81,6 +81,24 @@ class TestLogin:
         assert resp.status_code == 401
 
 
+class TestRefreshEndpoint:
+    def test_refresh_returns_new_token(self, client, admin_token):
+        resp = client.post("/auth/refresh", headers=auth_header(admin_token))
+        assert resp.status_code == 200
+        data = resp.json()
+        assert "token" in data
+        assert data["username"] == "admin"
+        assert data["role"] == "admin"
+
+    def test_refresh_without_token_fails(self, client):
+        resp = client.post("/auth/refresh")
+        assert resp.status_code in (401, 403)
+
+    def test_refresh_with_bad_token_fails(self, client):
+        resp = client.post("/auth/refresh", headers=auth_header("not.a.real.token"))
+        assert resp.status_code == 401
+
+
 class TestInviteAndRegister:
     def test_create_invite_as_admin(self, client, admin_token):
         resp = client.post("/auth/invite", headers=auth_header(admin_token))

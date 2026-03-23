@@ -31,6 +31,7 @@ import java.io.File
 
 private const val TAG = "WatchVM"
 private const val POLL_INTERVAL_MS = 5_000L
+private const val TOKEN_REFRESH_AGE_MS = 36 * 60 * 60 * 1000L // 36 hours
 
 const val WATCH_VERSION_QUERY_PATH = "/paradox/watch-version-query"
 const val WATCH_VERSION_REPLY_PATH = "/paradox/watch-version-reply"
@@ -223,6 +224,7 @@ class WatchViewModel(app: Application) : AndroidViewModel(app) {
         }
         viewModelScope.launch(Dispatchers.IO) {
             try {
+                maybeRefreshToken()
                 Log.d(TAG, "refreshStatus: fetching alarm status...")
                 _state.update { it.copy(isLoading = true) }
                 val resp = a.alarmStatus(tokenStore.bearerHeader)
@@ -536,6 +538,25 @@ class WatchViewModel(app: Application) : AndroidViewModel(app) {
     private fun handleTokenExpired() {
         stopRealtimeUpdates()
         _state.update { it.copy(screen = WatchScreen.Setup, isLoading = false, error = "Session expired") }
+    }
+
+    private suspend fun maybeRefreshToken() {
+        val a = api ?: return
+        if (tokenStore.tokenAgeMs < TOKEN_REFRESH_AGE_MS) return
+        try {
+            Log.i(TAG, "Token is ${tokenStore.tokenAgeMs / 3600000}h old, refreshing...")
+            val resp = a.refreshToken(tokenStore.bearerHeader)
+            if (resp.isSuccessful && resp.body() != null) {
+                tokenStore.token = resp.body()!!.token
+                Log.i(TAG, "Token refreshed successfully")
+            } else if (resp.code() == 401) {
+                Log.w(TAG, "Token refresh failed with 401, token has expired")
+            } else {
+                Log.w(TAG, "Token refresh failed: ${resp.code()}")
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "Token refresh error: ${e.message}")
+        }
     }
 
     private fun handleVersionQuery(sourceNodeId: String) {

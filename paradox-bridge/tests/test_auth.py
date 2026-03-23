@@ -103,6 +103,34 @@ class TestJWT:
             auth.decode_token(tampered)
 
 
+class TestRefreshToken:
+    def test_refresh_returns_valid_token(self, auth_env):
+        auth, _ = auth_env
+        auth.setup_admin("admin", "secret123")
+        old_token = auth.login("admin", "secret123")
+        new_token = auth.refresh_token(old_token)
+        assert isinstance(new_token, str)
+        assert len(new_token) > 20
+        payload = auth.decode_token(new_token)
+        assert payload["sub"] == "admin"
+        assert payload["role"] == "admin"
+
+    def test_refresh_expired_token_fails(self, auth_env):
+        auth, _ = auth_env
+        auth.setup_admin("admin", "secret123")
+        expired = auth._create_expired_token_for_test("admin", "admin")
+        with pytest.raises(ValueError, match="expired"):
+            auth.refresh_token(expired)
+
+    def test_refresh_tampered_token_fails(self, auth_env):
+        auth, _ = auth_env
+        auth.setup_admin("admin", "secret123")
+        token = auth.login("admin", "secret123")
+        tampered = token[:-4] + "XXXX"
+        with pytest.raises(ValueError, match="Invalid token"):
+            auth.refresh_token(tampered)
+
+
 class TestResetPassword:
     def test_admin_can_reset_user_password(self, auth_env):
         auth, db = auth_env

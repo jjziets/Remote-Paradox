@@ -20,7 +20,19 @@ class TokenStore(context: Context) {
 
     var token: String?
         get() = prefs.getString(KEY_TOKEN, null)
-        set(value) = prefs.edit().putString(KEY_TOKEN, value).apply()
+        set(value) {
+            prefs.edit()
+                .putString(KEY_TOKEN, value)
+                .putLong(KEY_TOKEN_SAVED_AT, System.currentTimeMillis())
+                .apply()
+        }
+
+    val tokenAgeMs: Long
+        get() {
+            val savedAt = prefs.getLong(KEY_TOKEN_SAVED_AT, 0L)
+            if (savedAt == 0L) return Long.MAX_VALUE
+            return System.currentTimeMillis() - savedAt
+        }
 
     var username: String?
         get() = prefs.getString(KEY_USERNAME, null)
@@ -97,6 +109,7 @@ class TokenStore(context: Context) {
     }
 
     companion object {
+        private const val KEY_TOKEN_SAVED_AT = "token_saved_at"
         private const val KEY_TOKEN = "jwt_token"
         private const val KEY_USERNAME = "username"
         private const val KEY_ROLE = "role"
