@@ -126,6 +126,11 @@ class StatusTileService : TileService() {
         val isArmed = partition.armed || partition.mode == "triggered"
         val isArming = partition.mode in listOf("arming", "exit_delay")
         val bothEnabled = tokenStore.armAwayEnabled && tokenStore.armStayEnabled
+        val isDisarmed = partition.mode == "disarmed"
+
+        if (isDisarmed && !partition.ready) {
+            return buildPartitionClickable(activityClass, partition.id)
+        }
 
         return when {
             isArming || isArmed -> buildActionClickable(activityClass, "disarm", partition.id)
@@ -285,6 +290,7 @@ class StatusTileService : TileService() {
         val bgColor = if (pending) COLOR_PENDING else modeToColor(partition.mode)
         val textColor = modeToTextColor(partition.mode)
         val label = if (pending) "Sending…" else modeToLabel(partition.mode)
+        val isDisarmedNotReady = partition.mode == "disarmed" && !partition.ready
         val triggeredZones = partition.zones
             .filter { it.alarm || it.wasInAlarm }
             .joinToString(", ") { it.name }
@@ -316,6 +322,21 @@ class StatusTileService : TileService() {
                     )
                     .build()
             )
+
+        if (isDisarmedNotReady && !pending) {
+            columnBuilder.addContent(
+                Text.Builder()
+                    .setText("Not Ready")
+                    .setFontStyle(
+                        FontStyle.Builder()
+                            .setSize(sp(triggerSize))
+                            .setColor(argb(0xFFFFD54F.toInt()))
+                            .setWeight(FONT_WEIGHT_BOLD)
+                            .build()
+                    )
+                    .build()
+            )
+        }
 
         if (triggeredZones.isNotBlank()) {
             columnBuilder.addContent(

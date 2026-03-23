@@ -128,6 +128,16 @@ class MainActivity : ComponentActivity() {
                 val beforeMode = beforeStatus?.partitions?.find { it.id == pid }?.mode
                 Log.d("MainActivity", "Before mode: $beforeMode")
 
+                if (action in listOf("arm_away", "arm_stay")) {
+                    val partition = beforeStatus?.partitions?.find { it.id == pid }
+                    if (partition != null && !partition.ready) {
+                        Log.d("MainActivity", "Partition not ready, open zones — falling back to app UI")
+                        tokenStore.clearPendingAction()
+                        updater.requestUpdate(StatusTileService::class.java)
+                        return@launch
+                    }
+                }
+
                 val resp = when (action) {
                     "arm_away" -> api.armAway(auth, ArmRequest(code, pid))
                     "arm_stay" -> api.armStay(auth, ArmRequest(code, pid))
