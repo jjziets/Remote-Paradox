@@ -69,6 +69,9 @@ class AlarmService:
         self._prev_part_state: dict[int, dict] = {}
         self._on_status_change: Optional[StatusChangeCallback] = None
         self._status_changed = False
+        self._action_user: Optional[str] = None
+        self._action_device: Optional[str] = None
+        self._action_context_time: float = 0.0
 
         if demo_mode:
             self._panel = VirtualPanel()
@@ -105,6 +108,19 @@ class AlarmService:
     @property
     def panel(self) -> Optional[VirtualPanel]:
         return self._panel
+
+    def set_action_context(self, user: Optional[str] = None, device: Optional[str] = None) -> None:
+        self._action_user = user
+        self._action_device = device
+        self._action_context_time = time.time()
+
+    def clear_action_context(self) -> None:
+        pass  # context auto-expires via _get_action_context
+
+    def _get_action_context(self) -> tuple[Optional[str], Optional[str]]:
+        if self._action_user and (time.time() - self._action_context_time < 15):
+            return self._action_user, self._action_device
+        return None, None
 
     def _require_connection(self) -> None:
         if not self.is_connected and not self._demo_mode:
@@ -218,13 +234,20 @@ class AlarmService:
                 for z in sorted(vp.zones.values(), key=lambda x: x["id"])
                 if z["partition_id"] == pid
             ]
-            parts.append(PartitionStatus(
+            ps = PartitionStatus(
                 id=pid, name=p["label"],
                 armed=p["arm"], mode=mode,
                 entry_delay=p["entry_delay"],
                 ready=p["ready_status"],
                 zones=zones,
-            ))
+            )
+            self._track_partition_changes(pid, ps)
+            for zi in zones:
+                self._track_zone_changes(zi.id, zi)
+            parts.append(ps)
+        if self._status_changed and self._on_status_change:
+            self._status_changed = False
+            self._on_status_change()
         return AlarmStatus(partitions=parts)
 
     # ── Partition control (maps to PAI commands) ──
@@ -307,13 +330,21 @@ class AlarmService:
     def _record_event(self, etype: str, label: str, prop: str, value: object) -> None:
         val_str = str(value).lower() if isinstance(value, bool) else str(value)
         ts = time.strftime("%Y-%m-%dT%H:%M:%S")
-        self._events.appendleft({
+        ctx_user, ctx_device = self._get_action_context() if etype == "partition" else (None, None)
+        user = ctx_user
+        device = ctx_device
+        event = {
             "type": etype, "label": label, "property": prop,
             "value": val_str, "timestamp": ts,
-        })
+        }
+        if user:
+            event["user"] = user
+        if device:
+            event["device"] = device
+        self._events.appendleft(event)
         if self._db is not None:
             try:
-                self._db.insert_event(etype, label, prop, val_str, ts)
+                self._db.insert_event(etype, label, prop, val_str, ts, user=user, device=device)
             except Exception:
                 logger.exception("Failed to persist event to database")
         self._status_changed = True
@@ -345,14 +376,30 @@ class AlarmService:
 
     def get_zone_history(self, limit: int = 50) -> list[dict]:
         if self._demo_mode:
-            return self._panel.get_events(limit=limit)
+            panel_events = self._panel.get_events(limit=limit)
+            enriched = list(self._events)[:limit]
+            if enriched:
+                merged = {(e["timestamp"], e["label"], e["property"]): e for e in panel_events}
+                for e in enriched:
+                    merged[(e["timestamp"], e["label"], e["property"])] = e
+                return sorted(merged.values(), key=lambda e: e["timestamp"], reverse=True)[:limit]
+            return panel_events
         if self._db is not None:
             rows = self._db.get_events(limit=limit)
-            return [
-                {"type": r["type"], "label": r["label"], "property": r["property"],
-                 "value": r["value"], "timestamp": r["timestamp"]}
-                for r in rows
-            ]
+            result = []
+            for r in rows:
+                e = {
+                    "type": r["type"], "label": r["label"], "property": r["property"],
+                    "value": r["value"], "timestamp": r["timestamp"],
+                }
+                user = r.get("user")
+                device = r.get("device")
+                if user:
+                    e["user"] = user
+                if device:
+                    e["device"] = device
+                result.append(e)
+            return result
         return list(self._events)[:limit]
 
     def _seed_events_from_db(self) -> None:

@@ -1,6 +1,8 @@
 package com.remoteparadox.watch.data
 
+import android.os.Build
 import kotlinx.serialization.json.Json
+import okhttp3.Interceptor
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import retrofit2.Retrofit
@@ -14,6 +16,7 @@ import javax.net.ssl.X509TrustManager
 
 object ApiClient {
     val json = Json { ignoreUnknownKeys = true; isLenient = true }
+    val deviceName: String = "${Build.MANUFACTURER} ${Build.MODEL}".trim()
 
     private var _httpClient: OkHttpClient? = null
     val httpClient: OkHttpClient get() = _httpClient ?: OkHttpClient()
@@ -30,7 +33,14 @@ object ApiClient {
     }
 
     private fun buildOkHttp(fingerprint: String): OkHttpClient {
+        val deviceHeader = Interceptor { chain ->
+            val request = chain.request().newBuilder()
+                .header("X-Device-Name", deviceName)
+                .build()
+            chain.proceed(request)
+        }
         val builder = OkHttpClient.Builder()
+            .addInterceptor(deviceHeader)
             .connectTimeout(5, TimeUnit.SECONDS)
             .readTimeout(10, TimeUnit.SECONDS)
             .writeTimeout(10, TimeUnit.SECONDS)

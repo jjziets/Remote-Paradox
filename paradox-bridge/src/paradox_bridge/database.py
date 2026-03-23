@@ -197,12 +197,22 @@ class Database:
 
     def insert_event(
         self, etype: str, label: str, prop: str, value: str, timestamp: str,
+        user: Optional[str] = None, device: Optional[str] = None,
     ) -> None:
+        self._ensure_events_user_columns()
         self.conn.execute(
-            "INSERT INTO events (type, label, property, value, timestamp) VALUES (?, ?, ?, ?, ?)",
-            (etype, label, prop, value, timestamp),
+            "INSERT INTO events (type, label, property, value, timestamp, user, device) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (etype, label, prop, value, timestamp, user, device),
         )
         self.conn.commit()
+
+    def _ensure_events_user_columns(self) -> None:
+        try:
+            self.conn.execute("SELECT user FROM events LIMIT 1")
+        except sqlite3.OperationalError:
+            self.conn.execute("ALTER TABLE events ADD COLUMN user TEXT")
+            self.conn.execute("ALTER TABLE events ADD COLUMN device TEXT")
+            self.conn.commit()
 
     def get_events(self, limit: int = 50) -> list[dict]:
         rows = self.conn.execute(

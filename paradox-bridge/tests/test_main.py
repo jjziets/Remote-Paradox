@@ -395,6 +395,21 @@ class TestAlarmDemo:
         assert events[0]["type"] == "zone"
         assert events[0]["label"] == "Main Bedroom"
 
+    def test_event_history_shows_user_device(self, client, demo_app, admin_token):
+        # Establish baseline partition state
+        client.get("/alarm/status", headers=auth_header(admin_token))
+        headers = {**auth_header(admin_token), "X-Device-Name": "Samsung Watch"}
+        client.post("/alarm/arm-away", json={"code": "1234", "partition_id": 1},
+                     headers=headers)
+        # Poll status to trigger partition change tracking (exit_delay)
+        client.get("/alarm/status", headers=auth_header(admin_token))
+        resp = client.get("/alarm/history", headers=auth_header(admin_token))
+        events = resp.json()["events"]
+        mode_events = [e for e in events if e["type"] == "partition" and e["property"] == "mode"]
+        assert len(mode_events) >= 1
+        assert mode_events[0]["user"] == "admin"
+        assert mode_events[0]["device"] == "Samsung Watch"
+
     def test_panic_route(self, client, demo_app, admin_token):
         resp = client.post(
             "/alarm/panic",

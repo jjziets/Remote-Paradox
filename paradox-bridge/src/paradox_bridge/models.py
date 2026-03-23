@@ -84,6 +84,8 @@ class EventResponse(BaseModel):
     property: str       # "open", "alarm", "entry_delay", "panic", etc.
     value: object       # bool or str
     timestamp: str
+    user: str | None = None
+    device: str | None = None
 
 
 class EventHistoryResponse(BaseModel):

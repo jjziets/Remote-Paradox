@@ -823,6 +823,7 @@ async def arm_away(
 ):
     if not alarm.is_connected:
         raise HTTPException(status_code=503, detail="Alarm not connected")
+    alarm.set_action_context(user["sub"], device)
     try:
         ok = await alarm.arm_away(code=req.code, partition_id=req.partition_id)
     except ConnectionError:
@@ -841,6 +842,7 @@ async def arm_stay(
 ):
     if not alarm.is_connected:
         raise HTTPException(status_code=503, detail="Alarm not connected")
+    alarm.set_action_context(user["sub"], device)
     try:
         ok = await alarm.arm_stay(code=req.code, partition_id=req.partition_id)
     except ConnectionError:
@@ -859,6 +861,7 @@ async def disarm(
 ):
     if not alarm.is_connected:
         raise HTTPException(status_code=503, detail="Alarm not connected")
+    alarm.set_action_context(user["sub"], device)
     try:
         ok = await alarm.disarm(code=req.code, partition_id=req.partition_id)
     except ConnectionError:
@@ -920,6 +923,7 @@ async def panic(
 ):
     if not alarm.is_connected:
         raise HTTPException(status_code=503, detail="Alarm not connected")
+    alarm.set_action_context(user["sub"], device)
     try:
         ok = await alarm.send_panic(partition_id=req.partition_id, panic_type=req.panic_type)
     except ConnectionError:
