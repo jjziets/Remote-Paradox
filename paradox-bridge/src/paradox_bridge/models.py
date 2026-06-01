@@ -104,6 +104,44 @@ class ActionResult(BaseModel):
     message: str = ""
 
 
+class MaintenanceFullUpgradeRequest(BaseModel):
+    confirmation: str = ""
+
+
+class MaintenanceJobResponse(BaseModel):
+    job_id: str
+    action: str
+    status: str
+    created_at: str
+    updated_at: str
+    started_at: str | None = None
+    finished_at: str | None = None
+    message: str = ""
+    exit_code: int | None = None
+    unit: str = ""
+    reboot_required: bool = False
+    updates_available: int | None = None
+    security_updates_available: int | None = None
+    security_upgrade_supported: bool | None = None
+
+
+class MaintenanceStatusResponse(BaseModel):
+    active: bool
+    current_job: MaintenanceJobResponse | None = None
+    last_job: MaintenanceJobResponse | None = None
+    reboot_required: bool = False
+    updates_available: int | None = None
+    security_updates_available: int | None = None
+    security_upgrade_supported: bool | None = None
+    message: str | None = None
+
+
+class MaintenanceLogResponse(BaseModel):
+    job_id: str
+    lines: list[str]
+    truncated: bool = False
+
+
 class AuditEntry(BaseModel):
     timestamp: str
     username: str

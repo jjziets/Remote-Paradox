@@ -6,6 +6,7 @@ STAGING_DIR="$INSTALL_DIR/staging"
 STATUS_FILE="$INSTALL_DIR/update_status.json"
 VERSION_FILE="$INSTALL_DIR/CURRENT_VERSION"
 VENV="$INSTALL_DIR/venv"
+MAINTENANCE_STATE_DIR="/var/lib/paradox-bridge/maintenance"
 
 if [ ! -d "$STAGING_DIR" ]; then
     echo "[apply_update] No staging directory found"
@@ -45,6 +46,24 @@ if [ -f "$BRIDGE_SRC/scripts/apply_update.sh" ]; then
     cp "$BRIDGE_SRC/scripts/apply_update.sh" "$INSTALL_DIR/scripts/apply_update.sh"
     chmod +x "$INSTALL_DIR/scripts/apply_update.sh"
 fi
+if [ -f "$BRIDGE_SRC/scripts/maintenance_job.sh" ]; then
+    cp "$BRIDGE_SRC/scripts/maintenance_job.sh" "$INSTALL_DIR/scripts/maintenance_job.sh"
+    chmod +x "$INSTALL_DIR/scripts/maintenance_job.sh"
+fi
+
+SERVICE_USER=$(systemctl show -p User --value paradox-bridge 2>/dev/null || true)
+SERVICE_GROUP=$(systemctl show -p Group --value paradox-bridge 2>/dev/null || true)
+if [ -z "$SERVICE_USER" ]; then
+    SERVICE_USER=$(stat -c '%U' "$INSTALL_DIR" 2>/dev/null || echo "")
+fi
+if [ -z "$SERVICE_GROUP" ]; then
+    SERVICE_GROUP="$SERVICE_USER"
+fi
+mkdir -p "$MAINTENANCE_STATE_DIR/jobs" "$MAINTENANCE_STATE_DIR/logs"
+if [ -n "$SERVICE_USER" ]; then
+    chown -R "$SERVICE_USER:$SERVICE_GROUP" /var/lib/paradox-bridge
+fi
+chmod 0750 /var/lib/paradox-bridge "$MAINTENANCE_STATE_DIR"
 if [ -f "$BRIDGE_SRC/deploy/setup-boot-fsck.sh" ]; then
     mkdir -p "$INSTALL_DIR/deploy"
     cp "$BRIDGE_SRC/deploy/setup-boot-fsck.sh" "$INSTALL_DIR/deploy/setup-boot-fsck.sh"

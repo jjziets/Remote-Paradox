@@ -52,7 +52,7 @@ object UpdateChecker {
         return UpdateInfo(
             latestVersion = latestVersion,
             currentVersion = currentVersion,
-            hasUpdate = isNewer(latestVersion, currentVersion),
+            hasUpdate = apkAsset != null && isNewer(latestVersion, currentVersion),
             releaseNotes = release.body,
             downloadUrl = apkAsset?.browser_download_url,
             releaseUrl = release.html_url,

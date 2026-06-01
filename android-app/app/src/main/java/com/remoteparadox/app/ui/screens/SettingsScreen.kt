@@ -7,6 +7,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.Logout
+import androidx.compose.material.icons.automirrored.filled.VolumeUp
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -14,6 +15,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -32,6 +34,7 @@ fun SettingsScreen(
     updateState: UpdateState,
     isAdmin: Boolean = false,
     piUpdate: com.remoteparadox.app.PiUpdateState = com.remoteparadox.app.PiUpdateState(),
+    piMaintenance: com.remoteparadox.app.PiMaintenanceState = com.remoteparadox.app.PiMaintenanceState(),
     piSystem: com.remoteparadox.app.PiSystemState = com.remoteparadox.app.PiSystemState(),
     onSoundToggle: (Boolean) -> Unit,
     onNotificationsToggle: (Boolean) -> Unit,
@@ -40,6 +43,12 @@ fun SettingsScreen(
     onManageUsers: () -> Unit = {},
     onCheckPiUpdate: () -> Unit = {},
     onApplyPiUpdate: () -> Unit = {},
+    onRefreshPiMaintenance: () -> Unit = {},
+    onCheckOsUpdates: () -> Unit = {},
+    onRepairPiPackages: () -> Unit = {},
+    onApplySecurityUpdates: () -> Unit = {},
+    onFullSystemUpgrade: (String) -> Unit = {},
+    onRefreshPiMaintenanceLog: () -> Unit = {},
     onRefreshPiSystem: () -> Unit = {},
     onRebootPi: () -> Unit = {},
     onPaiStop: () -> Unit = {},
@@ -95,6 +104,15 @@ fun SettingsScreen(
                         if (isAdmin) {
                             SettingsAdminCard(onManageUsers)
                             SettingsPiSystemCard(piSystem, onRefreshPiSystem)
+                            SettingsPiMaintenanceCard(
+                                piMaintenance = piMaintenance,
+                                onRefresh = onRefreshPiMaintenance,
+                                onCheckUpdates = onCheckOsUpdates,
+                                onRepairPackages = onRepairPiPackages,
+                                onSecurityUpgrade = onApplySecurityUpdates,
+                                onFullUpgrade = onFullSystemUpgrade,
+                                onRefreshLog = onRefreshPiMaintenanceLog,
+                            )
                             SettingsMaintenanceCard(piSystem, onRebootPi)
                             SettingsPanelConnectionCard(piSystem, onPaiStop, onPaiStart, onPaiUpdatePassword)
                         }
@@ -262,6 +280,16 @@ fun SettingsScreen(
                         }
                     }
                 }
+
+                SettingsPiMaintenanceCard(
+                    piMaintenance = piMaintenance,
+                    onRefresh = onRefreshPiMaintenance,
+                    onCheckUpdates = onCheckOsUpdates,
+                    onRepairPackages = onRepairPiPackages,
+                    onSecurityUpgrade = onApplySecurityUpdates,
+                    onFullUpgrade = onFullSystemUpgrade,
+                    onRefreshLog = onRefreshPiMaintenanceLog,
+                )
 
                 // Reboot Pi (admin only)
                 Card(
@@ -477,7 +505,7 @@ fun SettingsScreen(
                         modifier = Modifier.padding(start = 16.dp, top = 12.dp, bottom = 4.dp))
 
                     SettingsToggle(
-                        icon = Icons.Default.VolumeUp,
+                        icon = Icons.AutoMirrored.Filled.VolumeUp,
                         label = "Alarm sounds",
                         description = "Play sound on alarm trigger, arm, and disarm",
                         checked = soundEnabled,
@@ -925,6 +953,279 @@ private fun SettingsPiSystemCard(
 }
 
 @Composable
+private fun SettingsPiMaintenanceCard(
+    piMaintenance: com.remoteparadox.app.PiMaintenanceState,
+    onRefresh: () -> Unit,
+    onCheckUpdates: () -> Unit,
+    onRepairPackages: () -> Unit,
+    onSecurityUpgrade: () -> Unit,
+    onFullUpgrade: (String) -> Unit,
+    onRefreshLog: () -> Unit,
+) {
+    var showRepairConfirm by remember { mutableStateOf(false) }
+    var showSecurityConfirm by remember { mutableStateOf(false) }
+    var showFullUpgradeConfirm by remember { mutableStateOf(false) }
+    var fullUpgradeText by remember { mutableStateOf("") }
+    val busy = piMaintenance.busy
+    val activeJob = piMaintenance.activeJob
+    val lastJob = piMaintenance.lastJob
+    val status = piMaintenance.status
+
+    Card(
+        shape = RoundedCornerShape(12.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+    ) {
+        Column(modifier = Modifier.padding(16.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text("Pi OS Maintenance", fontWeight = FontWeight.Bold, color = Color.White, fontSize = 14.sp, modifier = Modifier.weight(1f))
+                IconButton(onClick = onRefresh, modifier = Modifier.size(32.dp), enabled = !piMaintenance.loading) {
+                    Icon(Icons.Default.Refresh, "Refresh", tint = Color.White.copy(alpha = 0.7f), modifier = Modifier.size(18.dp))
+                }
+            }
+
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(Icons.Default.Build, null, tint = Color.White.copy(alpha = 0.7f), modifier = Modifier.size(20.dp))
+                Spacer(Modifier.width(12.dp))
+                Column(Modifier.weight(1f)) {
+                    Text(
+                        when {
+                            activeJob != null -> "Job running: ${maintenanceActionLabel(activeJob.action)}"
+                            lastJob != null -> "Last job: ${maintenanceActionLabel(lastJob.action)}"
+                            else -> "Package maintenance"
+                        },
+                        color = Color.White,
+                        fontSize = 14.sp,
+                    )
+                    Text(
+                        when {
+                            activeJob != null -> activeJob.status.ifBlank { "running" }
+                            lastJob != null -> lastJob.status.ifBlank { "finished" }
+                            else -> "Check status before applying changes"
+                        },
+                        color = maintenanceStatusColor(activeJob?.status ?: lastJob?.status),
+                        fontSize = 12.sp,
+                    )
+                }
+            }
+
+            if (status != null) {
+                Spacer(Modifier.height(8.dp))
+                MaintenanceStatusLine("Updates", status.updatesAvailable?.toString() ?: "Unknown")
+                MaintenanceStatusLine("Security", status.securityUpdatesAvailable?.toString() ?: "Unknown")
+                if (status.rebootRequired) {
+                    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(top = 4.dp)) {
+                        Icon(Icons.Default.Warning, null, tint = Color(0xFFFF9800), modifier = Modifier.size(16.dp))
+                        Spacer(Modifier.width(6.dp))
+                        Text("Reboot required after updates", color = Color(0xFFFF9800), fontSize = 12.sp)
+                    }
+                }
+            }
+
+            if (piMaintenance.loading || piMaintenance.startingAction != null || piMaintenance.pollingJobId != null) {
+                Spacer(Modifier.height(8.dp))
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp, color = Color.White)
+                    Spacer(Modifier.width(12.dp))
+                    Text(
+                        piMaintenance.startingAction ?: "Monitoring maintenance job...",
+                        color = Color.White.copy(alpha = 0.7f),
+                        fontSize = 13.sp,
+                    )
+                }
+            }
+
+            piMaintenance.message?.takeIf { it.isNotBlank() }?.let {
+                Spacer(Modifier.height(8.dp))
+                Text(it, color = Color(0xFF4CAF50), fontSize = 12.sp)
+            }
+
+            piMaintenance.error?.takeIf { it.isNotBlank() }?.let {
+                Spacer(Modifier.height(8.dp))
+                Text(it, color = Color(0xFFFF9800), fontSize = 12.sp)
+            }
+
+            Spacer(Modifier.height(10.dp))
+            OutlinedButton(
+                onClick = onCheckUpdates,
+                modifier = Modifier.fillMaxWidth().height(40.dp),
+                shape = RoundedCornerShape(8.dp),
+                enabled = !busy,
+                colors = ButtonDefaults.outlinedButtonColors(contentColor = Color.White),
+                border = androidx.compose.foundation.BorderStroke(1.dp, Color.White.copy(alpha = 0.2f)),
+            ) {
+                Icon(Icons.Default.Refresh, null, Modifier.size(16.dp))
+                Spacer(Modifier.width(6.dp))
+                Text("Check OS Updates", fontSize = 13.sp)
+            }
+
+            Spacer(Modifier.height(8.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+                OutlinedButton(
+                    onClick = { showRepairConfirm = true },
+                    modifier = Modifier.weight(1f).height(40.dp),
+                    shape = RoundedCornerShape(8.dp),
+                    enabled = !busy,
+                    colors = ButtonDefaults.outlinedButtonColors(contentColor = Color(0xFFFF9800)),
+                    border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFFFF9800).copy(alpha = 0.4f)),
+                    contentPadding = PaddingValues(horizontal = 8.dp),
+                ) {
+                    Icon(Icons.Default.Build, null, Modifier.size(16.dp))
+                    Spacer(Modifier.width(6.dp))
+                    Text("Repair", fontSize = 13.sp)
+                }
+                OutlinedButton(
+                    onClick = { showSecurityConfirm = true },
+                    modifier = Modifier.weight(1f).height(40.dp),
+                    shape = RoundedCornerShape(8.dp),
+                    enabled = !busy && status?.securityUpgradeSupported != false,
+                    colors = ButtonDefaults.outlinedButtonColors(contentColor = Color(0xFF4CAF50)),
+                    border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFF4CAF50).copy(alpha = 0.4f)),
+                    contentPadding = PaddingValues(horizontal = 8.dp),
+                ) {
+                    Icon(Icons.Default.Security, null, Modifier.size(16.dp))
+                    Spacer(Modifier.width(6.dp))
+                    Text("Security", fontSize = 13.sp)
+                }
+            }
+
+            Spacer(Modifier.height(8.dp))
+            OutlinedButton(
+                onClick = { showFullUpgradeConfirm = true },
+                modifier = Modifier.fillMaxWidth().height(40.dp),
+                shape = RoundedCornerShape(8.dp),
+                enabled = !busy,
+                colors = ButtonDefaults.outlinedButtonColors(contentColor = Color(0xFFE94560)),
+                border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFFE94560).copy(alpha = 0.4f)),
+            ) {
+                Icon(Icons.Default.SystemUpdate, null, Modifier.size(16.dp))
+                Spacer(Modifier.width(6.dp))
+                Text("Full System Upgrade", fontSize = 13.sp)
+            }
+
+            if (piMaintenance.log.isNotBlank()) {
+                Spacer(Modifier.height(12.dp))
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text("Maintenance Log", color = Color.White.copy(alpha = 0.7f), fontSize = 12.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
+                    IconButton(onClick = onRefreshLog, modifier = Modifier.size(28.dp)) {
+                        Icon(Icons.Default.Refresh, "Refresh log", tint = Color.White.copy(alpha = 0.6f), modifier = Modifier.size(16.dp))
+                    }
+                }
+                Card(
+                    shape = RoundedCornerShape(8.dp),
+                    colors = CardDefaults.cardColors(containerColor = Color.Black.copy(alpha = 0.22f)),
+                ) {
+                    Text(
+                        (if (piMaintenance.logTruncated) "...older log lines omitted\n" else "") + piMaintenance.log,
+                        color = Color.White.copy(alpha = 0.72f),
+                        fontSize = 11.sp,
+                        fontFamily = FontFamily.Monospace,
+                        modifier = Modifier.fillMaxWidth().padding(10.dp),
+                        maxLines = 28,
+                    )
+                }
+            }
+        }
+    }
+
+    if (showRepairConfirm) {
+        AlertDialog(
+            onDismissRequest = { showRepairConfirm = false },
+            title = { Text("Repair package state?") },
+            text = { Text("This runs package repair commands on the Pi. It is intended for interrupted or broken package installs.") },
+            confirmButton = {
+                TextButton(onClick = { showRepairConfirm = false; onRepairPackages() }) {
+                    Text("Repair", color = Color(0xFFFF9800))
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showRepairConfirm = false }) { Text("Cancel") }
+            },
+        )
+    }
+
+    if (showSecurityConfirm) {
+        AlertDialog(
+            onDismissRequest = { showSecurityConfirm = false },
+            title = { Text("Apply security updates?") },
+            text = { Text("This applies security-focused package updates if the Pi image supports them. The Pi may need a reboot afterwards.") },
+            confirmButton = {
+                TextButton(onClick = { showSecurityConfirm = false; onSecurityUpgrade() }) {
+                    Text("Apply", color = Color(0xFF4CAF50))
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showSecurityConfirm = false }) { Text("Cancel") }
+            },
+        )
+    }
+
+    if (showFullUpgradeConfirm) {
+        AlertDialog(
+            onDismissRequest = { showFullUpgradeConfirm = false },
+            title = { Text("Full system upgrade?") },
+            text = {
+                Column {
+                    Text("This runs a full apt upgrade. It can update kernel, firmware, networking, Python, or systemd packages and may require physical recovery if the Pi fails to come back online.")
+                    Spacer(Modifier.height(10.dp))
+                    Text("Type FULL UPGRADE to continue.", fontWeight = FontWeight.SemiBold)
+                    Spacer(Modifier.height(6.dp))
+                    OutlinedTextField(
+                        value = fullUpgradeText,
+                        onValueChange = { fullUpgradeText = it },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth(),
+                        colors = OutlinedTextFieldDefaults.colors(
+                            focusedBorderColor = Color(0xFFE94560),
+                            unfocusedBorderColor = Color.White.copy(alpha = 0.2f),
+                            focusedTextColor = Color.White,
+                            unfocusedTextColor = Color.White,
+                        ),
+                    )
+                }
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        val confirmation = fullUpgradeText.trim()
+                        showFullUpgradeConfirm = false
+                        fullUpgradeText = ""
+                        onFullUpgrade(confirmation)
+                    },
+                    enabled = fullUpgradeText.trim() == "FULL UPGRADE",
+                ) {
+                    Text("Upgrade", color = Color(0xFFE94560))
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showFullUpgradeConfirm = false; fullUpgradeText = "" }) { Text("Cancel") }
+            },
+        )
+    }
+}
+
+@Composable
+private fun MaintenanceStatusLine(label: String, value: String) {
+    Row(
+        modifier = Modifier.fillMaxWidth().padding(vertical = 1.dp),
+        horizontalArrangement = Arrangement.SpaceBetween,
+    ) {
+        Text(label, color = Color.White.copy(alpha = 0.5f), fontSize = 12.sp)
+        Text(value, color = Color.White, fontSize = 12.sp)
+    }
+}
+
+private fun maintenanceActionLabel(action: String): String =
+    action.replace('_', ' ').replace('-', ' ').ifBlank { "maintenance" }
+
+private fun maintenanceStatusColor(status: String?): Color =
+    when (status?.lowercase()) {
+        "succeeded", "success" -> Color(0xFF4CAF50)
+        "failed", "error", "unsupported" -> Color(0xFFE94560)
+        "running", "queued" -> Color(0xFFFF9800)
+        else -> Color.White.copy(alpha = 0.5f)
+    }
+
+@Composable
 private fun SettingsMaintenanceCard(piSystem: com.remoteparadox.app.PiSystemState, onRebootPi: () -> Unit) {
     var showRebootConfirm by remember { mutableStateOf(false) }
     Card(
@@ -1204,7 +1505,7 @@ private fun SettingsAlertsCard(
         Column(modifier = Modifier.padding(vertical = 4.dp)) {
             Text("Alerts", fontWeight = FontWeight.Bold, color = Color.White, fontSize = 14.sp,
                 modifier = Modifier.padding(start = 16.dp, top = 12.dp, bottom = 4.dp))
-            SettingsToggle(Icons.Default.VolumeUp, "Alarm sounds", "Play sound on alarm trigger, arm, and disarm", soundEnabled, onSoundToggle)
+            SettingsToggle(Icons.AutoMirrored.Filled.VolumeUp, "Alarm sounds", "Play sound on alarm trigger, arm, and disarm", soundEnabled, onSoundToggle)
             HorizontalDivider(color = Color.White.copy(alpha = 0.1f), modifier = Modifier.padding(horizontal = 16.dp))
             SettingsToggle(Icons.Default.Notifications, "Push notifications", "Show notification on alarm events", notificationsEnabled, onNotificationsToggle)
         }

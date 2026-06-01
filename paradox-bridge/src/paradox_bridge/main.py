@@ -1,11 +1,17 @@
 """FastAPI application — routes, dependency injection, lifespan."""
 
 import asyncio
+import json
 import logging
 import os
 import random
+import re
+import shutil
 import socket
+import subprocess
+import uuid
 from contextlib import asynccontextmanager
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Annotated
 
@@ -34,6 +40,10 @@ from paradox_bridge.models import (
     InviteResponse,
     LoginRequest,
     LoginResponse,
+    MaintenanceFullUpgradeRequest,
+    MaintenanceJobResponse,
+    MaintenanceLogResponse,
+    MaintenanceStatusResponse,
     PanicRequest,
     PartitionResponse,
     PasswordResetRequest,
@@ -515,12 +525,237 @@ def reset_user_password(
 
 # ── System update routes ──
 
-import json
-import subprocess
-
 UPDATE_STATUS_FILE = Path("/opt/paradox-bridge/update_status.json")
 VERSION_FILE = Path("/opt/paradox-bridge/CURRENT_VERSION")
 APPLY_SCRIPT = Path("/opt/paradox-bridge/scripts/apply_update.sh")
+MAINTENANCE_DIR = Path(os.environ.get("PARADOX_MAINTENANCE_DIR", "/var/lib/paradox-bridge/maintenance"))
+MAINTENANCE_SCRIPT = Path(os.environ.get("PARADOX_MAINTENANCE_SCRIPT", "/opt/paradox-bridge/scripts/maintenance_job.sh"))
+MAINTENANCE_LOG_TAIL_BYTES = int(os.environ.get("PARADOX_MAINTENANCE_LOG_TAIL_BYTES", "65536"))
+MAINTENANCE_REBOOT_REQUIRED_FILE = Path(os.environ.get("PARADOX_REBOOT_REQUIRED_FILE", "/var/run/reboot-required"))
+MAINTENANCE_FULL_UPGRADE_CONFIRMATION = "FULL UPGRADE"
+_MAINTENANCE_TERMINAL_STATUSES = {"succeeded", "failed", "unsupported", "cancelled"}
+_MAINTENANCE_JOB_ID_RE = re.compile(r"^[A-Za-z0-9_.-]{1,128}$")
+
+
+def _utc_now() -> str:
+    return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+
+
+def _maintenance_jobs_dir() -> Path:
+    return MAINTENANCE_DIR / "jobs"
+
+
+def _maintenance_logs_dir() -> Path:
+    return MAINTENANCE_DIR / "logs"
+
+
+def _maintenance_current_file() -> Path:
+    return MAINTENANCE_DIR / "current.json"
+
+
+def _ensure_maintenance_dirs() -> None:
+    _maintenance_jobs_dir().mkdir(parents=True, exist_ok=True)
+    _maintenance_logs_dir().mkdir(parents=True, exist_ok=True)
+
+
+def _safe_job_id(job_id: str) -> str:
+    if not _MAINTENANCE_JOB_ID_RE.fullmatch(job_id):
+        raise HTTPException(status_code=404, detail="Maintenance job not found")
+    return job_id
+
+
+def _maintenance_job_file(job_id: str) -> Path:
+    return _maintenance_jobs_dir() / f"{_safe_job_id(job_id)}.json"
+
+
+def _maintenance_log_file(job_id: str) -> Path:
+    return _maintenance_logs_dir() / f"{_safe_job_id(job_id)}.log"
+
+
+def _read_json_file(path: Path) -> dict:
+    try:
+        return json.loads(path.read_text())
+    except FileNotFoundError:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Cannot read maintenance state: {exc}")
+
+
+def _write_json_file(path: Path, data: dict) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
+    tmp.write_text(json.dumps(data, indent=2, sort_keys=True) + "\n")
+    tmp.replace(path)
+
+
+def _job_response(data: dict) -> MaintenanceJobResponse:
+    return MaintenanceJobResponse(
+        job_id=str(data.get("job_id", "")),
+        action=str(data.get("action", "")),
+        status=str(data.get("status", "unknown")),
+        created_at=str(data.get("created_at", "")),
+        updated_at=str(data.get("updated_at", data.get("created_at", ""))),
+        started_at=data.get("started_at"),
+        finished_at=data.get("finished_at"),
+        message=str(data.get("message", "")),
+        exit_code=data.get("exit_code"),
+        unit=str(data.get("unit", "")),
+        reboot_required=bool(data.get("reboot_required", False)),
+        updates_available=data.get("updates_available"),
+        security_updates_available=data.get("security_updates_available"),
+        security_upgrade_supported=data.get("security_upgrade_supported"),
+    )
+
+
+def _read_maintenance_job(job_id: str) -> MaintenanceJobResponse:
+    path = _maintenance_job_file(job_id)
+    if not path.exists():
+        raise HTTPException(status_code=404, detail="Maintenance job not found")
+    return _job_response(_read_json_file(path))
+
+
+def _set_maintenance_job_fields(job_id: str, **fields: object) -> MaintenanceJobResponse:
+    path = _maintenance_job_file(job_id)
+    data = _read_json_file(path)
+    data.update(fields)
+    data["updated_at"] = _utc_now()
+    _write_json_file(path, data)
+    return _job_response(data)
+
+
+def _clear_current_maintenance_job(job_id: str | None = None) -> None:
+    path = _maintenance_current_file()
+    if not path.exists():
+        return
+    if job_id is not None:
+        try:
+            current = _read_json_file(path)
+        except HTTPException:
+            path.unlink(missing_ok=True)
+            return
+        if current.get("job_id") != job_id:
+            return
+    path.unlink(missing_ok=True)
+
+
+def _current_maintenance_job() -> MaintenanceJobResponse | None:
+    path = _maintenance_current_file()
+    if not path.exists():
+        return None
+    try:
+        current = _read_json_file(path)
+        job_id = str(current.get("job_id", ""))
+        job = _read_maintenance_job(job_id)
+    except (FileNotFoundError, HTTPException):
+        path.unlink(missing_ok=True)
+        return None
+    if job.status in _MAINTENANCE_TERMINAL_STATUSES:
+        _clear_current_maintenance_job(job.job_id)
+        return None
+    return job
+
+
+def _latest_maintenance_job() -> MaintenanceJobResponse | None:
+    jobs_dir = _maintenance_jobs_dir()
+    if not jobs_dir.exists():
+        return None
+    latest: MaintenanceJobResponse | None = None
+    for path in jobs_dir.glob("*.json"):
+        try:
+            job = _job_response(_read_json_file(path))
+        except Exception:
+            continue
+        if latest is None or job.updated_at > latest.updated_at:
+            latest = job
+    return latest
+
+
+def _tail_maintenance_log(job_id: str, max_lines: int) -> tuple[list[str], bool]:
+    path = _maintenance_log_file(job_id)
+    if not path.exists():
+        return [], False
+    size = path.stat().st_size
+    with path.open("rb") as handle:
+        if size > MAINTENANCE_LOG_TAIL_BYTES:
+            handle.seek(-MAINTENANCE_LOG_TAIL_BYTES, os.SEEK_END)
+            handle.readline()
+            truncated = True
+        else:
+            truncated = False
+        all_lines = handle.read().decode(errors="replace").splitlines()
+    if len(all_lines) > max_lines:
+        truncated = True
+    return all_lines[-max_lines:], truncated
+
+
+def _maintenance_reboot_required() -> bool:
+    return MAINTENANCE_REBOOT_REQUIRED_FILE.exists()
+
+
+def _maintenance_security_supported() -> bool:
+    return shutil.which("unattended-upgrade") is not None
+
+
+def _maintenance_summary_from_job(job: MaintenanceJobResponse | None) -> dict[str, object]:
+    return {
+        "updates_available": job.updates_available if job else None,
+        "security_updates_available": job.security_updates_available if job else None,
+        "reboot_required": _maintenance_reboot_required() or bool(job.reboot_required if job else False),
+        "security_upgrade_supported": _maintenance_security_supported(),
+        "message": job.message if job and job.message else None,
+    }
+
+
+def _maintenance_systemd_run_command(action: str, job_id: str, unit: str) -> list[str]:
+    return [
+        "sudo",
+        "-n",
+        "systemd-run",
+        "--no-block",
+        "--collect",
+        "--property=Type=oneshot",
+        f"--unit={unit}",
+        f"--setenv=PARADOX_MAINTENANCE_DIR={MAINTENANCE_DIR}",
+        str(MAINTENANCE_SCRIPT),
+        action,
+        job_id,
+    ]
+
+
+def _start_maintenance_job(action: str) -> MaintenanceJobResponse:
+    _ensure_maintenance_dirs()
+    active_job = _current_maintenance_job()
+    if active_job is not None:
+        raise HTTPException(status_code=409, detail=f"Maintenance job already active: {active_job.job_id}")
+
+    job_id = uuid.uuid4().hex
+    unit = f"paradox-maintenance-{job_id[:12]}"
+    now = _utc_now()
+    job_data = {
+        "job_id": job_id,
+        "action": action,
+        "status": "queued",
+        "created_at": now,
+        "updated_at": now,
+        "message": "Queued",
+        "unit": unit,
+    }
+    _write_json_file(_maintenance_job_file(job_id), job_data)
+    _write_json_file(_maintenance_current_file(), {"job_id": job_id, "created_at": now})
+
+    command = _maintenance_systemd_run_command(action, job_id, unit)
+    try:
+        result = subprocess.run(command, capture_output=True, text=True, timeout=15)
+    except Exception as exc:
+        _set_maintenance_job_fields(job_id, status="failed", finished_at=_utc_now(), message=f"Failed to start: {exc}")
+        _clear_current_maintenance_job(job_id)
+        raise HTTPException(status_code=500, detail=f"Failed to start maintenance job: {exc}")
+    if result.returncode != 0:
+        detail = (result.stderr or result.stdout or "systemd-run failed").strip()
+        _set_maintenance_job_fields(job_id, status="failed", finished_at=_utc_now(), exit_code=result.returncode, message=detail)
+        _clear_current_maintenance_job(job_id)
+        raise HTTPException(status_code=500, detail=detail)
+    return _read_maintenance_job(job_id)
 
 
 @app.get("/system/version")
@@ -576,8 +811,80 @@ def apply_update(
         raise HTTPException(status_code=500, detail=str(e))
 
 
-import shutil
+@app.get("/system/maintenance/status", response_model=MaintenanceStatusResponse)
+def maintenance_status(_admin: Annotated[dict, Depends(require_admin)]):
+    current = _current_maintenance_job()
+    last = _latest_maintenance_job()
+    summary_job = current or last
+    summary = _maintenance_summary_from_job(summary_job)
+    return MaintenanceStatusResponse(
+        active=current is not None,
+        current_job=current,
+        last_job=last,
+        **summary,
+    )
 
+
+@app.post("/system/maintenance/check-updates", response_model=MaintenanceJobResponse)
+def maintenance_check_updates(
+    admin: Annotated[dict, Depends(require_admin)],
+    audit: Annotated[AuditService, Depends(get_audit)],
+):
+    job = _start_maintenance_job("check-updates")
+    audit.record(admin["sub"], "maintenance_check_updates", job.job_id)
+    return job
+
+
+@app.post("/system/maintenance/repair-packages", response_model=MaintenanceJobResponse)
+def maintenance_repair_packages(
+    admin: Annotated[dict, Depends(require_admin)],
+    audit: Annotated[AuditService, Depends(get_audit)],
+):
+    job = _start_maintenance_job("repair-packages")
+    audit.record(admin["sub"], "maintenance_repair_packages", job.job_id)
+    return job
+
+
+@app.post("/system/maintenance/security-upgrade", response_model=MaintenanceJobResponse)
+def maintenance_security_upgrade(
+    admin: Annotated[dict, Depends(require_admin)],
+    audit: Annotated[AuditService, Depends(get_audit)],
+):
+    job = _start_maintenance_job("security-upgrade")
+    audit.record(admin["sub"], "maintenance_security_upgrade", job.job_id)
+    return job
+
+
+@app.post("/system/maintenance/full-upgrade", response_model=MaintenanceJobResponse)
+def maintenance_full_upgrade(
+    req: MaintenanceFullUpgradeRequest,
+    admin: Annotated[dict, Depends(require_admin)],
+    audit: Annotated[AuditService, Depends(get_audit)],
+):
+    if req.confirmation != MAINTENANCE_FULL_UPGRADE_CONFIRMATION:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Full upgrade requires confirmation: {MAINTENANCE_FULL_UPGRADE_CONFIRMATION}",
+        )
+    job = _start_maintenance_job("full-upgrade")
+    audit.record(admin["sub"], "maintenance_full_upgrade", job.job_id)
+    return job
+
+
+@app.get("/system/maintenance/jobs/{job_id}", response_model=MaintenanceJobResponse)
+def maintenance_job(job_id: str, _admin: Annotated[dict, Depends(require_admin)]):
+    return _read_maintenance_job(job_id)
+
+
+@app.get("/system/maintenance/jobs/{job_id}/log", response_model=MaintenanceLogResponse)
+def maintenance_job_log(
+    job_id: str,
+    _admin: Annotated[dict, Depends(require_admin)],
+    lines: int = Query(default=200, ge=1, le=500),
+):
+    _read_maintenance_job(job_id)
+    tail, truncated = _tail_maintenance_log(job_id, lines)
+    return MaintenanceLogResponse(job_id=job_id, lines=tail, truncated=truncated)
 
 def _read_cpu_percent() -> float:
     """Read aggregate CPU usage from /proc/stat (two samples 0.5s apart)."""

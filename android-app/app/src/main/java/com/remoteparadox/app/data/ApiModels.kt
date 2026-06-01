@@ -164,6 +164,51 @@ data class PiUpdateStatus(
 )
 
 @Serializable
+data class MaintenanceConfirmationRequest(
+    val confirmation: String,
+)
+
+@Serializable
+data class MaintenanceJobResponse(
+    @SerialName("job_id") val jobId: String,
+    val action: String = "",
+    val status: String = "",
+    val message: String? = null,
+    @SerialName("created_at") val createdAt: String? = null,
+    @SerialName("updated_at") val updatedAt: String? = null,
+    @SerialName("started_at") val startedAt: String? = null,
+    @SerialName("finished_at") val finishedAt: String? = null,
+    @SerialName("exit_code") val exitCode: Int? = null,
+    val unit: String = "",
+    @SerialName("reboot_required") val rebootRequired: Boolean = false,
+    @SerialName("updates_available") val updatesAvailable: Int? = null,
+    @SerialName("security_updates_available") val securityUpdatesAvailable: Int? = null,
+    @SerialName("security_upgrade_supported") val securityUpgradeSupported: Boolean? = null,
+)
+
+@Serializable
+data class MaintenanceStatusResponse(
+    val active: Boolean = false,
+    @SerialName("current_job") val currentJob: MaintenanceJobResponse? = null,
+    @SerialName("active_job") val activeJob: MaintenanceJobResponse? = null,
+    @SerialName("last_job") val lastJob: MaintenanceJobResponse? = null,
+    @SerialName("updates_available") val updatesAvailable: Int? = null,
+    @SerialName("security_updates_available") val securityUpdatesAvailable: Int? = null,
+    @SerialName("reboot_required") val rebootRequired: Boolean = false,
+    @SerialName("security_upgrade_supported") val securityUpgradeSupported: Boolean? = null,
+    @SerialName("last_checked_at") val lastCheckedAt: String? = null,
+    val message: String? = null,
+)
+
+@Serializable
+data class MaintenanceLogResponse(
+    @SerialName("job_id") val jobId: String,
+    val log: String = "",
+    val lines: List<String> = emptyList(),
+    val truncated: Boolean = false,
+)
+
+@Serializable
 data class SystemResources(
     @SerialName("cpu_percent") val cpuPercent: Double = 0.0,
     @SerialName("memory_used_mb") val memoryUsedMb: Int = 0,

@@ -35,6 +35,24 @@ private const val TAG = "MainViewModel"
 private const val WS_RECONNECT_DELAY_MS = 3_000L
 private const val FALLBACK_POLL_INTERVAL_MS = 5_000L
 private const val TOKEN_REFRESH_AGE_MS = 36 * 60 * 60 * 1000L // 36 hours
+private const val MAINTENANCE_POLL_INTERVAL_MS = 2_500L
+private const val MAINTENANCE_MAX_POLLS = 120
+private const val MAINTENANCE_FULL_CONFIRMATION = "FULL UPGRADE"
+private const val MAINTENANCE_LOG_MAX_LINES = 80
+private const val MAINTENANCE_LOG_MAX_CHARS = 12_000
+
+internal fun isTerminalMaintenanceStatus(status: String): Boolean =
+    status.lowercase() in setOf("succeeded", "success", "failed", "error", "cancelled", "unsupported")
+
+internal fun boundMaintenanceLog(
+    raw: String,
+    maxLines: Int = MAINTENANCE_LOG_MAX_LINES,
+    maxChars: Int = MAINTENANCE_LOG_MAX_CHARS,
+): String {
+    val charBounded = if (raw.length > maxChars) raw.takeLast(maxChars) else raw
+    val lines = charBounded.lines()
+    return if (lines.size > maxLines) lines.takeLast(maxLines).joinToString("\n") else charBounded
+}
 
 data class UpdateState(
     val checking: Boolean = false,
@@ -63,6 +81,22 @@ data class PiUpdateState(
     val applying: Boolean = false,
     val message: String? = null,
 )
+
+data class PiMaintenanceState(
+    val loading: Boolean = false,
+    val startingAction: String? = null,
+    val status: MaintenanceStatusResponse? = null,
+    val activeJob: MaintenanceJobResponse? = null,
+    val lastJob: MaintenanceJobResponse? = null,
+    val pollingJobId: String? = null,
+    val logJobId: String? = null,
+    val log: String = "",
+    val logTruncated: Boolean = false,
+    val message: String? = null,
+    val error: String? = null,
+) {
+    val busy: Boolean get() = loading || startingAction != null || pollingJobId != null
+}
 
 data class PiSystemState(
     val resources: com.remoteparadox.app.data.SystemResources? = null,
@@ -110,6 +144,7 @@ data class AppState(
     val requestHistoryTab: Boolean = false,
     val userMgmt: UserMgmtState = UserMgmtState(),
     val piUpdate: PiUpdateState = PiUpdateState(),
+    val piMaintenance: PiMaintenanceState = PiMaintenanceState(),
     val piSystem: PiSystemState = PiSystemState(),
     val bleConnected: Boolean = false,
     val watchSync: WatchSyncState = WatchSyncState(),
@@ -126,6 +161,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     private var api: ParadoxApi? = null
     private var pollJob: Job? = null
     private var wsJob: Job? = null
+    private var maintenancePollJob: Job? = null
     private var webSocket: WebSocket? = null
     private val json = Json { ignoreUnknownKeys = true; isLenient = true }
     private var httpReachable = true
@@ -728,6 +764,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         _state.update { it.copy(screen = Screen.Settings) }
         if (isAdmin) {
             refreshPiSystem()
+            refreshPiMaintenanceStatus()
             // Auto-fetch Pi version if not yet loaded
             if (_state.value.piUpdate.currentVersion == "?") {
                 checkPiUpdate()
@@ -1020,7 +1057,6 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             }
             return
         }
-        if (a == null) return
         _state.update { it.copy(piUpdate = it.piUpdate.copy(applying = true, message = "Applying update...")) }
         viewModelScope.launch(Dispatchers.IO) {
             try {
@@ -1041,6 +1077,284 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             }
         }
     }
+
+    // ── Pi OS Package Maintenance ──
+
+    fun refreshPiMaintenanceStatus() {
+        val a = api ?: run {
+            _state.update {
+                it.copy(piMaintenance = it.piMaintenance.copy(error = "No HTTP connection for OS maintenance"))
+            }
+            return
+        }
+        if (!isNetworkAvailable()) {
+            httpReachable = false
+            _state.update {
+                it.copy(piMaintenance = it.piMaintenance.copy(error = "No connection — connect to Wi-Fi for OS maintenance"))
+            }
+            return
+        }
+        _state.update { it.copy(piMaintenance = it.piMaintenance.copy(loading = true, error = null)) }
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val resp = a.maintenanceStatus(tokenStore.bearerHeader)
+                if (resp.isSuccessful && resp.body() != null) {
+                    val body = resp.body()!!
+                    val currentJob = body.currentJob ?: body.activeJob
+                    val visibleJob = currentJob ?: body.lastJob
+                    _state.update {
+                        it.copy(
+                            piMaintenance = it.piMaintenance.copy(
+                                loading = false,
+                                status = body,
+                                activeJob = currentJob,
+                                lastJob = body.lastJob,
+                                message = body.message,
+                                error = null,
+                            ),
+                        )
+                    }
+                    if (currentJob != null) {
+                        pollPiMaintenanceJob(currentJob.jobId)
+                    } else if (visibleJob != null) {
+                        refreshPiMaintenanceLog(visibleJob.jobId)
+                    }
+                } else {
+                    _state.update {
+                        it.copy(
+                            piMaintenance = it.piMaintenance.copy(
+                                loading = false,
+                                error = maintenanceError(resp.errorBody()?.string(), "Failed to load OS maintenance status"),
+                            ),
+                        )
+                    }
+                }
+            } catch (e: Exception) {
+                _state.update {
+                    it.copy(piMaintenance = it.piMaintenance.copy(loading = false, error = maintenanceExceptionMessage(e)))
+                }
+            }
+        }
+    }
+
+    fun checkOsUpdates() {
+        startPiMaintenanceJob("Checking OS updates") { api ->
+            api.maintenanceCheckUpdates(tokenStore.bearerHeader)
+        }
+    }
+
+    fun repairPiPackages() {
+        startPiMaintenanceJob("Repairing package state") { api ->
+            api.maintenanceRepairPackages(tokenStore.bearerHeader)
+        }
+    }
+
+    fun applySecurityUpdates() {
+        startPiMaintenanceJob("Applying security updates") { api ->
+            api.maintenanceSecurityUpgrade(tokenStore.bearerHeader)
+        }
+    }
+
+    fun fullSystemUpgrade(confirmation: String) {
+        if (confirmation != MAINTENANCE_FULL_CONFIRMATION) {
+            _state.update {
+                it.copy(piMaintenance = it.piMaintenance.copy(error = "Type $MAINTENANCE_FULL_CONFIRMATION to confirm full upgrade"))
+            }
+            return
+        }
+        startPiMaintenanceJob("Applying full system upgrade") { api ->
+            api.maintenanceFullUpgrade(
+                tokenStore.bearerHeader,
+                MaintenanceConfirmationRequest(confirmation),
+            )
+        }
+    }
+
+    private fun startPiMaintenanceJob(
+        actionLabel: String,
+        call: suspend (ParadoxApi) -> retrofit2.Response<MaintenanceJobResponse>,
+    ) {
+        val a = api ?: run {
+            _state.update {
+                it.copy(piMaintenance = it.piMaintenance.copy(error = "No HTTP connection for OS maintenance"))
+            }
+            return
+        }
+        if (!isNetworkAvailable()) {
+            httpReachable = false
+            _state.update {
+                it.copy(piMaintenance = it.piMaintenance.copy(error = "No connection — connect to Wi-Fi for OS maintenance"))
+            }
+            return
+        }
+        _state.update {
+            it.copy(
+                piMaintenance = it.piMaintenance.copy(
+                    startingAction = actionLabel,
+                    error = null,
+                    message = null,
+                ),
+            )
+        }
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val resp = call(a)
+                if (resp.isSuccessful && resp.body() != null) {
+                    val job = resp.body()!!
+                    _state.update {
+                        it.copy(
+                            piMaintenance = it.piMaintenance.copy(
+                                startingAction = null,
+                                activeJob = job,
+                                lastJob = job,
+                                logJobId = job.jobId,
+                                log = "",
+                                logTruncated = false,
+                                message = job.message ?: "$actionLabel started",
+                                error = null,
+                            ),
+                        )
+                    }
+                    pollPiMaintenanceJob(job.jobId)
+                } else {
+                    _state.update {
+                        it.copy(
+                            piMaintenance = it.piMaintenance.copy(
+                                startingAction = null,
+                                error = maintenanceError(resp.errorBody()?.string(), "$actionLabel failed"),
+                            ),
+                        )
+                    }
+                }
+            } catch (e: Exception) {
+                _state.update {
+                    it.copy(
+                        piMaintenance = it.piMaintenance.copy(
+                            startingAction = null,
+                            error = maintenanceExceptionMessage(e),
+                        ),
+                    )
+                }
+            }
+        }
+    }
+
+    private fun pollPiMaintenanceJob(jobId: String) {
+        if (maintenancePollJob?.isActive == true && _state.value.piMaintenance.pollingJobId == jobId) return
+        maintenancePollJob?.cancel()
+        maintenancePollJob = viewModelScope.launch(Dispatchers.IO) {
+            var polls = 0
+            _state.update { it.copy(piMaintenance = it.piMaintenance.copy(pollingJobId = jobId)) }
+            while (isActive && polls < MAINTENANCE_MAX_POLLS) {
+                polls++
+                val a = api ?: break
+                try {
+                    val jobResp = a.maintenanceJob(tokenStore.bearerHeader, jobId)
+                    if (jobResp.isSuccessful && jobResp.body() != null) {
+                        val job = jobResp.body()!!
+                        val terminal = isTerminalMaintenanceStatus(job.status)
+                        _state.update {
+                            it.copy(
+                                piMaintenance = it.piMaintenance.copy(
+                                    activeJob = if (terminal) null else job,
+                                    lastJob = job,
+                                    pollingJobId = if (terminal) null else jobId,
+                                    message = job.message ?: it.piMaintenance.message,
+                                    error = if (job.status.equals("failed", ignoreCase = true) ||
+                                        job.status.equals("error", ignoreCase = true) ||
+                                        job.status.equals("unsupported", ignoreCase = true)
+                                    ) job.message else it.piMaintenance.error,
+                                ),
+                            )
+                        }
+                        refreshPiMaintenanceLog(jobId)
+                        if (terminal) {
+                            refreshPiMaintenanceStatus()
+                            return@launch
+                        }
+                    } else {
+                        _state.update {
+                            it.copy(
+                                piMaintenance = it.piMaintenance.copy(
+                                    pollingJobId = null,
+                                    error = maintenanceError(jobResp.errorBody()?.string(), "Failed to poll maintenance job"),
+                                ),
+                            )
+                        }
+                        return@launch
+                    }
+                } catch (e: Exception) {
+                    _state.update {
+                        it.copy(
+                            piMaintenance = it.piMaintenance.copy(
+                                pollingJobId = null,
+                                error = maintenanceExceptionMessage(e),
+                            ),
+                        )
+                    }
+                    return@launch
+                }
+                delay(MAINTENANCE_POLL_INTERVAL_MS)
+            }
+            if (polls >= MAINTENANCE_MAX_POLLS) {
+                _state.update {
+                    it.copy(
+                        piMaintenance = it.piMaintenance.copy(
+                            pollingJobId = null,
+                            error = "Maintenance polling timed out. Refresh status to check the Pi.",
+                        ),
+                    )
+                }
+            }
+        }
+    }
+
+    fun refreshPiMaintenanceLog(jobId: String? = null) {
+        val targetJobId = jobId
+            ?: _state.value.piMaintenance.activeJob?.jobId
+            ?: _state.value.piMaintenance.lastJob?.jobId
+            ?: return
+        val a = api ?: return
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val resp = a.maintenanceJobLog(tokenStore.bearerHeader, targetJobId)
+                if (resp.isSuccessful && resp.body() != null) {
+                    val body = resp.body()!!
+                    val rawLog = body.log.ifBlank { body.lines.joinToString("\n") }
+                    val boundedLog = boundMaintenanceLog(rawLog)
+                    _state.update {
+                        it.copy(
+                            piMaintenance = it.piMaintenance.copy(
+                                logJobId = targetJobId,
+                                log = boundedLog,
+                                logTruncated = body.truncated || rawLog != boundedLog,
+                            ),
+                        )
+                    }
+                }
+            } catch (e: Exception) {
+                Log.w(TAG, "Maintenance log refresh failed: ${e.message}")
+            }
+        }
+    }
+
+    private fun maintenanceError(raw: String?, fallback: String): String {
+        if (raw.isNullOrBlank()) return fallback
+        return try {
+            json.decodeFromString<ErrorResponse>(raw).detail
+        } catch (_: Exception) {
+            raw
+        }.ifBlank { fallback }
+    }
+
+    private fun maintenanceExceptionMessage(e: Exception): String =
+        when (e) {
+            is java.net.UnknownHostException,
+            is java.net.ConnectException,
+            is java.net.SocketTimeoutException -> "Can't reach Pi — check your Wi-Fi connection"
+            is java.io.IOException -> "Connection error — Pi may be offline"
+            else -> "Maintenance error: ${e.message}"
+        }
 
     // ── Pi System Info ──
 
@@ -1627,24 +1941,33 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     private fun handleTokenExpired() {
         stopRealtimeUpdates()
+        stopMaintenancePolling()
         _state.update { it.copy(screen = Screen.Login, isLoading = false, error = null) }
     }
 
     fun logout() {
         stopRealtimeUpdates()
+        stopMaintenancePolling()
         tokenStore.clearAuth()
         _state.update { AppState(screen = Screen.Login) }
     }
 
     fun switchServer() {
         stopRealtimeUpdates()
+        stopMaintenancePolling()
         tokenStore.clear()
         api = null
         _state.update { AppState(screen = Screen.Welcome) }
     }
 
+    private fun stopMaintenancePolling() {
+        maintenancePollJob?.cancel()
+        maintenancePollJob = null
+    }
+
     override fun onCleared() {
         super.onCleared()
+        stopMaintenancePolling()
         mediaPlayer?.release()
         mediaPlayer = null
     }

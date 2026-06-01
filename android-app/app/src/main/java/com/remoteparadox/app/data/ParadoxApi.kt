@@ -110,6 +110,45 @@ interface ParadoxApi {
         @Header("Authorization") auth: String,
     ): Response<ActionResult>
 
+    @GET("system/maintenance/status")
+    suspend fun maintenanceStatus(
+        @Header("Authorization") auth: String,
+    ): Response<MaintenanceStatusResponse>
+
+    @POST("system/maintenance/check-updates")
+    suspend fun maintenanceCheckUpdates(
+        @Header("Authorization") auth: String,
+    ): Response<MaintenanceJobResponse>
+
+    @POST("system/maintenance/repair-packages")
+    suspend fun maintenanceRepairPackages(
+        @Header("Authorization") auth: String,
+    ): Response<MaintenanceJobResponse>
+
+    @POST("system/maintenance/security-upgrade")
+    suspend fun maintenanceSecurityUpgrade(
+        @Header("Authorization") auth: String,
+    ): Response<MaintenanceJobResponse>
+
+    @POST("system/maintenance/full-upgrade")
+    suspend fun maintenanceFullUpgrade(
+        @Header("Authorization") auth: String,
+        @Body body: MaintenanceConfirmationRequest,
+    ): Response<MaintenanceJobResponse>
+
+    @GET("system/maintenance/jobs/{job_id}")
+    suspend fun maintenanceJob(
+        @Header("Authorization") auth: String,
+        @Path("job_id") jobId: String,
+    ): Response<MaintenanceJobResponse>
+
+    @GET("system/maintenance/jobs/{job_id}/log")
+    suspend fun maintenanceJobLog(
+        @Header("Authorization") auth: String,
+        @Path("job_id") jobId: String,
+        @Query("lines") lines: Int = 80,
+    ): Response<MaintenanceLogResponse>
+
     @GET("system/resources")
     suspend fun systemResources(
         @Header("Authorization") auth: String,
