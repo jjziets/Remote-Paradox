@@ -67,7 +67,7 @@ object UpdateChecker {
         return UpdateInfo(
             latestVersion = latestVersion,
             currentVersion = currentWatchVersion,
-            hasUpdate = isNewer(latestVersion, currentWatchVersion),
+            hasUpdate = watchAsset != null && isNewer(latestVersion, currentWatchVersion),
             releaseNotes = release.body,
             downloadUrl = watchAsset?.browser_download_url,
             releaseUrl = release.html_url,

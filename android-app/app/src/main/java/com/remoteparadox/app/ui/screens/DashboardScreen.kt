@@ -477,64 +477,61 @@ private fun ControlButtons(
     val isArming = mode == "arming"
     val isTriggered = mode == "triggered"
     val isEntryDelay = partition?.entryDelay == true
+    val shouldDisarm = isArmed || isArming || isTriggered || isEntryDelay
     val canArm = !isArmed && !isArming && !isTriggered && !isEntryDelay
             && ready && connected && actionInProgress == null
+    val canDisarm = shouldDisarm && connected && actionInProgress == null
 
-    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-            Button(
-                onClick = onArmAway,
-                modifier = Modifier.weight(1f).height(52.dp),
-                enabled = canArm,
-                colors = ButtonDefaults.buttonColors(containerColor = AlarmArmed),
-                shape = RoundedCornerShape(12.dp),
-            ) {
-                if (actionInProgress == "arm_away") {
-                    CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp, color = Color.White)
-                } else {
-                    Icon(Icons.Default.Shield, null, Modifier.size(18.dp))
-                    Spacer(Modifier.width(6.dp))
-                    Text("ARM AWAY", fontWeight = FontWeight.Bold, fontSize = 13.sp)
-                }
-            }
-            Button(
-                onClick = onArmStay,
-                modifier = Modifier.weight(1f).height(52.dp),
-                enabled = canArm,
-                colors = ButtonDefaults.buttonColors(containerColor = AlarmStay),
-                shape = RoundedCornerShape(12.dp),
-            ) {
-                if (actionInProgress == "arm_stay") {
-                    CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp, color = Color.White)
-                } else {
-                    Icon(Icons.Default.Home, null, Modifier.size(18.dp))
-                    Spacer(Modifier.width(6.dp))
-                    Text("ARM HOME", fontWeight = FontWeight.Bold, fontSize = 13.sp)
-                }
-            }
-        }
+    val disarmLabel = when {
+        isTriggered || isEntryDelay -> "DISARM NOW"
+        isArming -> "CANCEL ARMING"
+        else -> "DISARM"
+    }
+    val disarmIcon = if (isArming) Icons.Default.Close else Icons.Default.LockOpen
 
-        val disarmLabel = when {
-            isTriggered || isEntryDelay -> "DISARM NOW"
-            isArming -> "CANCEL ARMING"
-            else -> "DISARM"
-        }
+    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
         Button(
-            onClick = onDisarm,
-            modifier = Modifier.fillMaxWidth().height(52.dp),
-            enabled = connected && actionInProgress == null,
-            colors = ButtonDefaults.buttonColors(containerColor = AlarmDisarmed),
+            onClick = if (shouldDisarm) onDisarm else onArmAway,
+            modifier = Modifier.weight(1f).height(52.dp),
+            enabled = if (shouldDisarm) canDisarm else canArm,
+            colors = ButtonDefaults.buttonColors(
+                containerColor = if (shouldDisarm) AlarmDisarmed else AlarmArmed,
+            ),
             shape = RoundedCornerShape(12.dp),
         ) {
-            if (actionInProgress == "disarm") {
+            if (actionInProgress == "disarm" && shouldDisarm || actionInProgress == "arm_away" && !shouldDisarm) {
                 CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp, color = Color.White)
             } else {
-                Icon(
-                    if (isArming) Icons.Default.Close else Icons.Default.LockOpen,
-                    null, Modifier.size(18.dp),
-                )
+                Icon(if (shouldDisarm) disarmIcon else Icons.Default.Shield, null, Modifier.size(18.dp))
                 Spacer(Modifier.width(6.dp))
-                Text(disarmLabel, fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                Text(
+                    if (shouldDisarm) disarmLabel else "ARM AWAY",
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 13.sp,
+                    maxLines = 1,
+                )
+            }
+        }
+        Button(
+            onClick = if (shouldDisarm) onDisarm else onArmStay,
+            modifier = Modifier.weight(1f).height(52.dp),
+            enabled = if (shouldDisarm) canDisarm else canArm,
+            colors = ButtonDefaults.buttonColors(
+                containerColor = if (shouldDisarm) AlarmDisarmed else AlarmStay,
+            ),
+            shape = RoundedCornerShape(12.dp),
+        ) {
+            if (actionInProgress == "disarm" && shouldDisarm || actionInProgress == "arm_stay" && !shouldDisarm) {
+                CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp, color = Color.White)
+            } else {
+                Icon(if (shouldDisarm) disarmIcon else Icons.Default.Home, null, Modifier.size(18.dp))
+                Spacer(Modifier.width(6.dp))
+                Text(
+                    if (shouldDisarm) disarmLabel else "ARM HOME",
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 13.sp,
+                    maxLines = 1,
+                )
             }
         }
     }

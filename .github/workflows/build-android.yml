@@ -20,6 +20,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Set up JDK 17
         uses: actions/setup-java@v4
@@ -42,16 +44,40 @@ jobs:
           keyPassword=${{ secrets.KEYSTORE_KEY_PASSWORD }}
           EOF
 
+      - name: Detect watch app changes
+        id: changes
+        working-directory: .
+        run: |
+          if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
+            base_ref="$(git tag --sort=-v:refname | grep -v "^${GITHUB_REF_NAME}$" | head -n1 || true)"
+          else
+            base_ref="${{ github.event.before }}"
+            if [[ -z "$base_ref" || "$base_ref" =~ ^0+$ ]]; then
+              base_ref="HEAD^"
+            fi
+          fi
+
+          if [[ -z "$base_ref" ]]; then
+            echo "watch_changed=true" >> "$GITHUB_OUTPUT"
+          elif git diff --name-only "$base_ref" "$GITHUB_SHA" | grep -qE '^android-app/watch-app/|^android-app/(build.gradle.kts|settings.gradle.kts|gradle.properties)|^android-app/gradle/'; then
+            echo "watch_changed=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "watch_changed=false" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Build phone app (release)
         run: ./gradlew :app:assembleRelease
 
       - name: Build watch app (release)
+        if: steps.changes.outputs.watch_changed == 'true'
         run: ./gradlew :watch-app:assembleRelease
 
       - name: Rename APKs
         run: |
           cp app/build/outputs/apk/release/*.apk remote-paradox-phone.apk
-          cp watch-app/build/outputs/apk/release/*.apk remote-paradox-watch.apk
+          if [[ "${{ steps.changes.outputs.watch_changed }}" == "true" ]]; then
+            cp watch-app/build/outputs/apk/release/*.apk remote-paradox-watch.apk
+          fi
 
       - name: Upload phone APK
         uses: actions/upload-artifact@v4
@@ -61,6 +87,7 @@ jobs:
           if-no-files-found: error
 
       - name: Upload watch APK
+        if: steps.changes.outputs.watch_changed == 'true'
         uses: actions/upload-artifact@v4
         with:
           name: watch-app-release
@@ -72,11 +99,14 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
+          assets=(remote-paradox-phone.apk)
+          if [[ -f remote-paradox-watch.apk ]]; then
+            assets+=(remote-paradox-watch.apk)
+          fi
           gh release create "${{ github.ref_name }}" \
             --title "${{ github.ref_name }}" \
             --generate-notes \
-            remote-paradox-phone.apk \
-            remote-paradox-watch.apk
+            "${assets[@]}"
         working-directory: android-app
 
       - name: Clean up keystore
