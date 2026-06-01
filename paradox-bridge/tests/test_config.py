@@ -42,7 +42,7 @@ class TestGenerateDefaultConfig:
         assert data["serial_baud"] == 9600
         assert data["api_port"] == 8080
         assert data["api_host"] == "127.0.0.1"
-        assert data["jwt_expiry_hours"] == 72
+        assert data["jwt_expiry_hours"] == 720
         assert data["refresh_expiry_days"] == 90
         assert data["panel_pc_password"] == "0000"
         assert data["invite_expiry_seconds"] == 900
@@ -83,6 +83,27 @@ class TestLoadConfig:
         assert cfg.jwt_secret == "mysecret"
         assert cfg.jwt_expiry_hours == 48
         assert cfg.panel_pc_password == "1234"
+
+    def test_old_default_jwt_expiry_migrates_to_30_days(self, tmp_config_dir):
+        path = Path(tmp_config_dir) / "config.json"
+        with open(path, "w") as f:
+            json.dump({
+                "serial_port": "/dev/serial0",
+                "serial_baud": 9600,
+                "api_port": 8080,
+                "api_host": "127.0.0.1",
+                "jwt_secret": "mysecret",
+                "jwt_expiry_hours": 72,
+                "panel_pc_password": "1234",
+                "invite_expiry_seconds": 600,
+            }, f)
+
+        cfg = load_config(str(path))
+
+        assert cfg.jwt_expiry_hours == 720
+        with open(path) as f:
+            data = json.load(f)
+        assert data["jwt_expiry_hours"] == 720
 
 
 class TestAppConfig:

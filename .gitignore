@@ -31,6 +31,8 @@ android-app/release-keystore.jks
 .idea/
 *.iml
 .vscode/
+AGENTS.md
+Agent.md
 
 # OS images, installers & saved webpages
 *.img

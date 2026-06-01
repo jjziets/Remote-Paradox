@@ -11,7 +11,7 @@ _DEFAULTS = {
     "serial_baud": 9600,
     "api_port": 8080,
     "api_host": "127.0.0.1",
-    "jwt_expiry_hours": 72,  # 3 days
+    "jwt_expiry_hours": 720,  # 30 days
     "refresh_expiry_days": 90,
     "panel_pc_password": "0000",
     "invite_expiry_seconds": 900,  # 15 min
@@ -78,6 +78,10 @@ def load_config(path: str) -> AppConfig:
         generate_default_config(path)
     with open(p) as f:
         data = json.load(f)
+    if data.get("jwt_expiry_hours") == 72:
+        data["jwt_expiry_hours"] = _DEFAULTS["jwt_expiry_hours"]
+        with open(p, "w") as f:
+            json.dump(data, f, indent=2)
     merged = {**_DEFAULTS, **data}
     if "jwt_secret" not in merged:
         merged["jwt_secret"] = secrets.token_hex(32)

@@ -237,7 +237,7 @@ paradox-demo panic emergency       # Trigger emergency panic
 | **TLS** | Self-signed ECDSA P-256 cert (10-year validity) |
 | **Certificate pinning** | SHA-256 fingerprint in QR invite; Android app trusts only that cert |
 | **nginx** | TLS termination, rate limiting (10 req/s auth, 30 req/s API), security headers (CSP, HSTS, X-Frame-Options) |
-| **Authentication** | JWT access tokens (72-hour default), durable hashed refresh tokens (90-day default), bcrypt password hashing |
+| **Authentication** | JWT access tokens (30-day default), durable hashed refresh tokens (90-day default), bcrypt password hashing |
 | **Invite system** | One-time codes, 15-minute expiry, admin-only generation |
 | **Audit logging** | Every arm/disarm/panic/invite action logged with username |
 | **SSH** | Key-only access (password auth disabled by deploy script) |

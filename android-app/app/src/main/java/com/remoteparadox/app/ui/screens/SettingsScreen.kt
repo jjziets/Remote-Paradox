@@ -970,6 +970,8 @@ private fun SettingsPiMaintenanceCard(
     val activeJob = piMaintenance.activeJob
     val lastJob = piMaintenance.lastJob
     val status = piMaintenance.status
+    val visibleLogJobId = piMaintenance.logJobId ?: activeJob?.jobId ?: lastJob?.jobId
+    var logExpanded by remember(visibleLogJobId) { mutableStateOf(false) }
 
     Card(
         shape = RoundedCornerShape(12.dp),
@@ -1105,23 +1107,38 @@ private fun SettingsPiMaintenanceCard(
             if (piMaintenance.log.isNotBlank()) {
                 Spacer(Modifier.height(12.dp))
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text("Maintenance Log", color = Color.White.copy(alpha = 0.7f), fontSize = 12.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
+                    TextButton(
+                        onClick = { logExpanded = !logExpanded },
+                        modifier = Modifier.weight(1f),
+                        contentPadding = PaddingValues(horizontal = 0.dp, vertical = 4.dp),
+                    ) {
+                        Icon(
+                            if (logExpanded) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
+                            if (logExpanded) "Collapse log" else "Expand log",
+                            tint = Color.White.copy(alpha = 0.7f),
+                            modifier = Modifier.size(18.dp),
+                        )
+                        Spacer(Modifier.width(4.dp))
+                        Text("Maintenance Log", color = Color.White.copy(alpha = 0.7f), fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+                    }
                     IconButton(onClick = onRefreshLog, modifier = Modifier.size(28.dp)) {
                         Icon(Icons.Default.Refresh, "Refresh log", tint = Color.White.copy(alpha = 0.6f), modifier = Modifier.size(16.dp))
                     }
                 }
-                Card(
-                    shape = RoundedCornerShape(8.dp),
-                    colors = CardDefaults.cardColors(containerColor = Color.Black.copy(alpha = 0.22f)),
-                ) {
-                    Text(
-                        (if (piMaintenance.logTruncated) "...older log lines omitted\n" else "") + piMaintenance.log,
-                        color = Color.White.copy(alpha = 0.72f),
-                        fontSize = 11.sp,
-                        fontFamily = FontFamily.Monospace,
-                        modifier = Modifier.fillMaxWidth().padding(10.dp),
-                        maxLines = 28,
-                    )
+                if (logExpanded) {
+                    Card(
+                        shape = RoundedCornerShape(8.dp),
+                        colors = CardDefaults.cardColors(containerColor = Color.Black.copy(alpha = 0.22f)),
+                    ) {
+                        Text(
+                            (if (piMaintenance.logTruncated) "...older log lines omitted\n" else "") + piMaintenance.log,
+                            color = Color.White.copy(alpha = 0.72f),
+                            fontSize = 11.sp,
+                            fontFamily = FontFamily.Monospace,
+                            modifier = Modifier.fillMaxWidth().padding(10.dp),
+                            maxLines = 28,
+                        )
+                    }
                 }
             }
         }
