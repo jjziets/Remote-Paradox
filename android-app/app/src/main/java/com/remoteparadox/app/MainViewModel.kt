@@ -57,11 +57,13 @@ internal fun boundMaintenanceLog(
 data class UpdateState(
     val checking: Boolean = false,
     val downloading: Boolean = false,
+    val installing: Boolean = false,
     val downloadProgress: Float = 0f,
     val updateAvailable: Boolean = false,
     val latestVersion: String? = null,
     val releaseNotes: String? = null,
     val downloadUrl: String? = null,
+    val downloadedApkPath: String? = null,
     val error: String? = null,
 )
 
@@ -1583,14 +1585,25 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun downloadAndInstallUpdate() {
-        val url = _state.value.update.downloadUrl ?: return
-        _state.update { it.copy(update = it.update.copy(downloading = true, downloadProgress = 0f, error = null)) }
+        val current = _state.value.update
+        val existingApk = current.downloadedApkPath?.let { java.io.File(it) }
+        if (existingApk?.exists() == true && existingApk.length() > 0) {
+            installDownloadedUpdate(existingApk)
+            return
+        }
+        val url = current.downloadUrl ?: return
+        _state.update {
+            it.copy(update = it.update.copy(downloading = true, installing = false, downloadProgress = 0f, error = null))
+        }
         viewModelScope.launch(Dispatchers.IO) {
             try {
                 val ctx = getApplication<Application>()
                 val updatesDir = java.io.File(ctx.getExternalFilesDir(null), "updates")
                 updatesDir.mkdirs()
-                val apkFile = java.io.File(updatesDir, "update.apk")
+                val safeVersion = _state.value.update.latestVersion
+                    ?.replace(Regex("[^A-Za-z0-9._-]"), "_")
+                    ?: "update"
+                val apkFile = java.io.File(updatesDir, "remote-paradox-$safeVersion.apk")
 
                 val request = okhttp3.Request.Builder().url(url).build()
                 val client = okhttp3.OkHttpClient.Builder()
@@ -1619,23 +1632,67 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                     }
                 }
 
-                _state.update { it.copy(update = it.update.copy(downloading = false, downloadProgress = 1f)) }
-
-                val contentUri = FileProvider.getUriForFile(
-                    ctx, "${ctx.packageName}.fileprovider", apkFile
-                )
-                val installIntent = Intent(Intent.ACTION_VIEW).apply {
-                    setDataAndType(contentUri, "application/vnd.android.package-archive")
-                    addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                _state.update {
+                    it.copy(
+                        update = it.update.copy(
+                            downloading = false,
+                            installing = true,
+                            downloadProgress = 1f,
+                            downloadedApkPath = apkFile.absolutePath,
+                            error = null,
+                        ),
+                    )
                 }
-                ctx.startActivity(installIntent)
+                withContext(Dispatchers.Main) {
+                    installDownloadedUpdate(apkFile)
+                }
 
             } catch (e: Exception) {
                 Log.e(TAG, "Update download failed", e)
                 _state.update {
-                    it.copy(update = it.update.copy(downloading = false, error = "Download failed: ${e.message}"))
+                    it.copy(update = it.update.copy(downloading = false, installing = false, error = "Download failed: ${e.message}"))
                 }
+            }
+        }
+    }
+
+    private fun installDownloadedUpdate(apkFile: java.io.File) {
+        val ctx = getApplication<Application>()
+        _state.update { it.copy(update = it.update.copy(installing = true, downloadedApkPath = apkFile.absolutePath, error = null)) }
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && !ctx.packageManager.canRequestPackageInstalls()) {
+                val settingsIntent = Intent(
+                    android.provider.Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,
+                    Uri.parse("package:${ctx.packageName}"),
+                ).apply {
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                }
+                ctx.startActivity(settingsIntent)
+                _state.update {
+                    it.copy(
+                        update = it.update.copy(
+                            installing = false,
+                            error = "Allow installs from Remote Paradox, then tap Install downloaded update.",
+                        ),
+                    )
+                }
+                return
+            }
+
+            val contentUri = FileProvider.getUriForFile(ctx, "${ctx.packageName}.fileprovider", apkFile)
+            val installIntent = Intent(Intent.ACTION_INSTALL_PACKAGE).apply {
+                data = contentUri
+                putExtra(Intent.EXTRA_NOT_UNKNOWN_SOURCE, true)
+                putExtra(Intent.EXTRA_RETURN_RESULT, true)
+                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
+            ctx.startActivity(installIntent)
+            _state.update { it.copy(update = it.update.copy(installing = false, error = null)) }
+        } catch (e: Exception) {
+            Log.e(TAG, "Update install failed", e)
+            _state.update {
+                it.copy(update = it.update.copy(installing = false, error = "Install failed: ${e.message}"))
             }
         }
     }

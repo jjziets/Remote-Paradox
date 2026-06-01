@@ -1673,6 +1673,13 @@ private fun SettingsAboutCard(updateState: UpdateState, onCheckUpdate: () -> Uni
                         }
                     }
                 }
+                updateState.installing -> {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp, color = Color.White)
+                        Spacer(Modifier.width(12.dp))
+                        Text("Opening installer...", color = Color.White.copy(alpha = 0.7f), fontSize = 14.sp)
+                    }
+                }
                 updateState.checking -> {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp, color = Color.White)
@@ -1691,9 +1698,13 @@ private fun SettingsAboutCard(updateState: UpdateState, onCheckUpdate: () -> Uni
                             Spacer(Modifier.height(8.dp))
                             Button(onClick = onDownloadUpdate, modifier = Modifier.fillMaxWidth().height(40.dp),
                                 colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF4CAF50)), shape = RoundedCornerShape(8.dp),
-                                enabled = updateState.downloadUrl != null) {
+                                enabled = updateState.downloadUrl != null || updateState.downloadedApkPath != null) {
                                 Icon(Icons.Default.Download, null, Modifier.size(16.dp)); Spacer(Modifier.width(6.dp))
-                                Text("Download & Install", fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                                Text(
+                                    if (updateState.downloadedApkPath != null) "Install downloaded update" else "Download & Install",
+                                    fontWeight = FontWeight.Bold,
+                                    fontSize = 13.sp,
+                                )
                             }
                         }
                     }
@@ -1710,7 +1721,7 @@ private fun SettingsAboutCard(updateState: UpdateState, onCheckUpdate: () -> Uni
                 Spacer(Modifier.height(4.dp))
                 Text(updateState.error, color = MaterialTheme.colorScheme.error, fontSize = 12.sp)
             }
-            if (!updateState.downloading) {
+            if (!updateState.downloading && !updateState.installing) {
                 Spacer(Modifier.height(8.dp))
                 OutlinedButton(onClick = onCheckUpdate, modifier = Modifier.fillMaxWidth().height(40.dp), shape = RoundedCornerShape(8.dp),
                     enabled = !updateState.checking, colors = ButtonDefaults.outlinedButtonColors(contentColor = Color.White),
