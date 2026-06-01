@@ -1012,8 +1012,15 @@ private fun SettingsPiMaintenanceCard(
 
             if (status != null) {
                 Spacer(Modifier.height(8.dp))
-                MaintenanceStatusLine("Updates", status.updatesAvailable?.toString() ?: "Unknown")
-                MaintenanceStatusLine("Security", status.securityUpdatesAvailable?.toString() ?: "Unknown")
+                MaintenanceStatusLine("Updates", maintenanceUpdatesText(status.updatesAvailable, activeJob != null))
+                MaintenanceStatusLine(
+                    "Security",
+                    maintenanceSecurityUpdatesText(
+                        status.securityUpdatesAvailable,
+                        status.securityUpgradeSupported,
+                        activeJob != null,
+                    ),
+                )
                 if (status.rebootRequired) {
                     Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(top = 4.dp)) {
                         Icon(Icons.Default.Warning, null, tint = Color(0xFFFF9800), modifier = Modifier.size(16.dp))
@@ -1023,13 +1030,13 @@ private fun SettingsPiMaintenanceCard(
                 }
             }
 
-            if (piMaintenance.loading || piMaintenance.startingAction != null || piMaintenance.pollingJobId != null) {
+            if (piMaintenance.loading || piMaintenance.startingAction != null || activeJob != null || piMaintenance.pollingJobId != null) {
                 Spacer(Modifier.height(8.dp))
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp, color = Color.White)
                     Spacer(Modifier.width(12.dp))
                     Text(
-                        piMaintenance.startingAction ?: "Monitoring maintenance job...",
+                        piMaintenance.startingAction ?: "Maintenance job is running. This can take several minutes.",
                         color = Color.White.copy(alpha = 0.7f),
                         fontSize = 13.sp,
                     )
@@ -1041,7 +1048,7 @@ private fun SettingsPiMaintenanceCard(
                 Text(it, color = Color(0xFF4CAF50), fontSize = 12.sp)
             }
 
-            piMaintenance.error?.takeIf { it.isNotBlank() }?.let {
+            piMaintenance.error?.takeIf { it.isNotBlank() && activeJob == null }?.let {
                 Spacer(Modifier.height(8.dp))
                 Text(it, color = Color(0xFFFF9800), fontSize = 12.sp)
             }
@@ -1237,11 +1244,22 @@ private fun maintenanceActionLabel(action: String): String =
         else -> action.replace('_', ' ').replace('-', ' ').ifBlank { "maintenance" }
     }
 
+private fun maintenanceUpdatesText(count: Int?, active: Boolean): String =
+    count?.toString() ?: if (active) "Checking..." else "Not checked"
+
+private fun maintenanceSecurityUpdatesText(count: Int?, supported: Boolean?, active: Boolean): String =
+    when {
+        count != null -> count.toString()
+        supported == false -> "Not available"
+        active -> "Checking..."
+        else -> "Not checked"
+    }
+
 private fun maintenanceStatusColor(status: String?): Color =
     when (status?.lowercase()) {
         "succeeded", "success" -> Color(0xFF4CAF50)
         "failed", "error", "unsupported" -> Color(0xFFE94560)
-        "running", "queued" -> Color(0xFFFF9800)
+        "running", "queued" -> Color.White.copy(alpha = 0.7f)
         else -> Color.White.copy(alpha = 0.5f)
     }
 

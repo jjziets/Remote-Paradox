@@ -95,7 +95,7 @@ data class PiMaintenanceState(
     val message: String? = null,
     val error: String? = null,
 ) {
-    val busy: Boolean get() = loading || startingAction != null || pollingJobId != null
+    val busy: Boolean get() = loading || startingAction != null || activeJob != null || pollingJobId != null
 }
 
 data class PiSystemState(
