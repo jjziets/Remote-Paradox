@@ -164,7 +164,7 @@ class MainActivity : ComponentActivity() {
                         onCheckOsUpdates = { vm.checkOsUpdates() },
                         onRepairPiPackages = { vm.repairPiPackages() },
                         onApplySecurityUpdates = { vm.applySecurityUpdates() },
-                        onFullSystemUpgrade = { vm.fullSystemUpgrade(it) },
+                        onUpgradePackages = { vm.upgradePackages(it) },
                         onRefreshPiMaintenanceLog = { vm.refreshPiMaintenanceLog() },
                         onRefreshPiSystem = { vm.refreshPiSystem() },
                         onRebootPi = { vm.rebootPi() },

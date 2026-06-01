@@ -103,7 +103,7 @@ def test_full_upgrade_requires_exact_confirmation(
     accepted = client.post(
         "/system/maintenance/full-upgrade",
         headers=auth_header(admin_token),
-        json={"confirmation": "FULL UPGRADE"},
+        json={"confirmation": "UPGRADE PACKAGES"},
     )
     assert accepted.status_code == 200
     assert accepted.json()["action"] == "full-upgrade"

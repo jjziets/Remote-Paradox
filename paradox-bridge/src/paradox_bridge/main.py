@@ -532,7 +532,7 @@ MAINTENANCE_DIR = Path(os.environ.get("PARADOX_MAINTENANCE_DIR", "/var/lib/parad
 MAINTENANCE_SCRIPT = Path(os.environ.get("PARADOX_MAINTENANCE_SCRIPT", "/opt/paradox-bridge/scripts/maintenance_job.sh"))
 MAINTENANCE_LOG_TAIL_BYTES = int(os.environ.get("PARADOX_MAINTENANCE_LOG_TAIL_BYTES", "65536"))
 MAINTENANCE_REBOOT_REQUIRED_FILE = Path(os.environ.get("PARADOX_REBOOT_REQUIRED_FILE", "/var/run/reboot-required"))
-MAINTENANCE_FULL_UPGRADE_CONFIRMATION = "FULL UPGRADE"
+MAINTENANCE_FULL_UPGRADE_CONFIRMATION = "UPGRADE PACKAGES"
 _MAINTENANCE_TERMINAL_STATUSES = {"succeeded", "failed", "unsupported", "cancelled"}
 _MAINTENANCE_JOB_ID_RE = re.compile(r"^[A-Za-z0-9_.-]{1,128}$")
 
@@ -864,7 +864,7 @@ def maintenance_full_upgrade(
     if req.confirmation != MAINTENANCE_FULL_UPGRADE_CONFIRMATION:
         raise HTTPException(
             status_code=400,
-            detail=f"Full upgrade requires confirmation: {MAINTENANCE_FULL_UPGRADE_CONFIRMATION}",
+            detail=f"Package upgrade requires confirmation: {MAINTENANCE_FULL_UPGRADE_CONFIRMATION}",
         )
     job = _start_maintenance_job("full-upgrade")
     audit.record(admin["sub"], "maintenance_full_upgrade", job.job_id)

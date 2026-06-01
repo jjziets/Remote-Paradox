@@ -47,7 +47,7 @@ fun SettingsScreen(
     onCheckOsUpdates: () -> Unit = {},
     onRepairPiPackages: () -> Unit = {},
     onApplySecurityUpdates: () -> Unit = {},
-    onFullSystemUpgrade: (String) -> Unit = {},
+    onUpgradePackages: (String) -> Unit = {},
     onRefreshPiMaintenanceLog: () -> Unit = {},
     onRefreshPiSystem: () -> Unit = {},
     onRebootPi: () -> Unit = {},
@@ -110,7 +110,7 @@ fun SettingsScreen(
                                 onCheckUpdates = onCheckOsUpdates,
                                 onRepairPackages = onRepairPiPackages,
                                 onSecurityUpgrade = onApplySecurityUpdates,
-                                onFullUpgrade = onFullSystemUpgrade,
+                                onFullUpgrade = onUpgradePackages,
                                 onRefreshLog = onRefreshPiMaintenanceLog,
                             )
                             SettingsMaintenanceCard(piSystem, onRebootPi)
@@ -287,7 +287,7 @@ fun SettingsScreen(
                     onCheckUpdates = onCheckOsUpdates,
                     onRepairPackages = onRepairPiPackages,
                     onSecurityUpgrade = onApplySecurityUpdates,
-                    onFullUpgrade = onFullSystemUpgrade,
+                    onFullUpgrade = onUpgradePackages,
                     onRefreshLog = onRefreshPiMaintenanceLog,
                 )
 
@@ -1101,7 +1101,7 @@ private fun SettingsPiMaintenanceCard(
             ) {
                 Icon(Icons.Default.SystemUpdate, null, Modifier.size(16.dp))
                 Spacer(Modifier.width(6.dp))
-                Text("Full System Upgrade", fontSize = 13.sp)
+                Text("Upgrade Packages", fontSize = 13.sp)
             }
 
             if (piMaintenance.log.isNotBlank()) {
@@ -1179,12 +1179,12 @@ private fun SettingsPiMaintenanceCard(
     if (showFullUpgradeConfirm) {
         AlertDialog(
             onDismissRequest = { showFullUpgradeConfirm = false },
-            title = { Text("Full system upgrade?") },
+            title = { Text("Upgrade installed packages?") },
             text = {
                 Column {
-                    Text("This runs a full apt upgrade. It can update kernel, firmware, networking, Python, or systemd packages and may require physical recovery if the Pi fails to come back online.")
+                    Text("This runs apt-get update and apt-get -y upgrade on the Pi. It upgrades installed packages on the current OS release; it does not upgrade Raspberry Pi OS to a newer release.")
                     Spacer(Modifier.height(10.dp))
-                    Text("Type FULL UPGRADE to continue.", fontWeight = FontWeight.SemiBold)
+                    Text("Type UPGRADE PACKAGES to continue.", fontWeight = FontWeight.SemiBold)
                     Spacer(Modifier.height(6.dp))
                     OutlinedTextField(
                         value = fullUpgradeText,
@@ -1208,9 +1208,9 @@ private fun SettingsPiMaintenanceCard(
                         fullUpgradeText = ""
                         onFullUpgrade(confirmation)
                     },
-                    enabled = fullUpgradeText.trim() == "FULL UPGRADE",
+                    enabled = fullUpgradeText.trim() == "UPGRADE PACKAGES",
                 ) {
-                    Text("Upgrade", color = Color(0xFFE94560))
+                    Text("Upgrade Packages", color = Color(0xFFE94560))
                 }
             },
             dismissButton = {
@@ -1232,7 +1232,10 @@ private fun MaintenanceStatusLine(label: String, value: String) {
 }
 
 private fun maintenanceActionLabel(action: String): String =
-    action.replace('_', ' ').replace('-', ' ').ifBlank { "maintenance" }
+    when (action) {
+        "full-upgrade" -> "package upgrade"
+        else -> action.replace('_', ' ').replace('-', ' ').ifBlank { "maintenance" }
+    }
 
 private fun maintenanceStatusColor(status: String?): Color =
     when (status?.lowercase()) {

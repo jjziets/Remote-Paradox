@@ -37,7 +37,7 @@ private const val FALLBACK_POLL_INTERVAL_MS = 5_000L
 private const val TOKEN_REFRESH_AGE_MS = 36 * 60 * 60 * 1000L // 36 hours
 private const val MAINTENANCE_POLL_INTERVAL_MS = 2_500L
 private const val MAINTENANCE_MAX_POLLS = 120
-private const val MAINTENANCE_FULL_CONFIRMATION = "FULL UPGRADE"
+private const val MAINTENANCE_PACKAGE_UPGRADE_CONFIRMATION = "UPGRADE PACKAGES"
 private const val MAINTENANCE_LOG_MAX_LINES = 80
 private const val MAINTENANCE_LOG_MAX_CHARS = 12_000
 
@@ -1155,14 +1155,14 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    fun fullSystemUpgrade(confirmation: String) {
-        if (confirmation != MAINTENANCE_FULL_CONFIRMATION) {
+    fun upgradePackages(confirmation: String) {
+        if (confirmation != MAINTENANCE_PACKAGE_UPGRADE_CONFIRMATION) {
             _state.update {
-                it.copy(piMaintenance = it.piMaintenance.copy(error = "Type $MAINTENANCE_FULL_CONFIRMATION to confirm full upgrade"))
+                it.copy(piMaintenance = it.piMaintenance.copy(error = "Type $MAINTENANCE_PACKAGE_UPGRADE_CONFIRMATION to confirm package upgrade"))
             }
             return
         }
-        startPiMaintenanceJob("Applying full system upgrade") { api ->
+        startPiMaintenanceJob("Upgrading packages") { api ->
             api.maintenanceFullUpgrade(
                 tokenStore.bearerHeader,
                 MaintenanceConfirmationRequest(confirmation),

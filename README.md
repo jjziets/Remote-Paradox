@@ -422,7 +422,8 @@ Bridge app update controls are separate from OS/package maintenance:
 - Bridge updates stage and apply `bridge-v*` GitHub source releases.
 - OS maintenance should be explicit and admin-only: check updates, repair
   interrupted package state, apply security updates if supported by the image,
-  run a full package upgrade only after a strong confirmation, and reboot when
+  run `apt-get update` and `apt-get -y upgrade` only after a strong
+  confirmation, and reboot when
   needed.
 
 The maintenance API/UI is available from bridge `1.0.2` and Android `1.2.12`.
@@ -435,7 +436,8 @@ Phone Settings now has a **Pi OS Maintenance** card with:
 - Check OS Updates
 - Repair Package State
 - Apply Security Updates, disabled when unsupported by the Pi image
-- Full System Upgrade, requiring exact confirmation
+- Upgrade Packages, requiring exact confirmation; this upgrades installed
+  packages on the current OS release and does not perform an OS release upgrade
 
 The bridge endpoints are admin-only:
 
@@ -443,7 +445,8 @@ The bridge endpoints are admin-only:
 - `POST /system/maintenance/check-updates`
 - `POST /system/maintenance/repair-packages`
 - `POST /system/maintenance/security-upgrade`
-- `POST /system/maintenance/full-upgrade`
+- `POST /system/maintenance/full-upgrade` for package upgrades within the
+  current OS release
 - `GET /system/maintenance/jobs/{job_id}`
 - `GET /system/maintenance/jobs/{job_id}/log`
 

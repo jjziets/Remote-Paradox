@@ -147,7 +147,7 @@ Admin API:
 - `POST /system/maintenance/check-updates`
 - `POST /system/maintenance/repair-packages`
 - `POST /system/maintenance/security-upgrade`
-- `POST /system/maintenance/full-upgrade`
+- `POST /system/maintenance/full-upgrade` for package upgrades within the current OS release
 - `GET /system/maintenance/jobs/{job_id}`
 - `GET /system/maintenance/jobs/{job_id}/log`
 
@@ -163,7 +163,8 @@ Live verification on 2026-06-01:
 - The Pi did not have `unattended-upgrade` installed, so security-only upgrades
   report unsupported until that package/config exists.
 
-Do not document or automate an unattended full-upgrade path as safe.
+Do not document or automate an unattended package-upgrade path as safe, and do
+not present this as an OS release upgrade.
 
 ---
 
