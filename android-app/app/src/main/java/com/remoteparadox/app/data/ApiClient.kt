@@ -43,7 +43,7 @@ object ApiClient {
         val builder = OkHttpClient.Builder()
             .addInterceptor(deviceHeader)
             .connectTimeout(5, TimeUnit.SECONDS)
-            .readTimeout(10, TimeUnit.SECONDS)
+            .readTimeout(30, TimeUnit.SECONDS)
             .writeTimeout(10, TimeUnit.SECONDS)
             .pingInterval(15, TimeUnit.SECONDS)
 

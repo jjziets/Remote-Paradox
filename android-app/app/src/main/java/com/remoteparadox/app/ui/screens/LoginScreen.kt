@@ -103,7 +103,7 @@ fun LoginScreen(
         Spacer(Modifier.height(8.dp))
         Button(
             onClick = {
-                val p = port.trim().toIntOrNull() ?: 443
+                val p = port.trim().toIntOrNull() ?: 9433
                 onLogin(host.trim(), p, username.trim(), password.trim())
             },
             modifier = Modifier.fillMaxWidth().height(50.dp),

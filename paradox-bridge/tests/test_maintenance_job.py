@@ -111,7 +111,7 @@ def test_reboot_required_flag_is_recorded(tmp_path: Path) -> None:
     assert state["reboot_required"] is True
 
 
-def test_full_upgrade_uses_plain_upgrade_not_dist_upgrade(tmp_path: Path) -> None:
+def test_full_upgrade_allows_new_packages_without_dist_upgrade(tmp_path: Path) -> None:
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
     calls = tmp_path / "calls"
@@ -124,5 +124,5 @@ def test_full_upgrade_uses_plain_upgrade_not_dist_upgrade(tmp_path: Path) -> Non
     assert state["status"] == "succeeded"
     call_text = calls.read_text()
     assert "apt-get update" in call_text
-    assert "apt-get -y upgrade" in call_text
+    assert "apt-get -y --with-new-pkgs upgrade" in call_text
     assert "dist-upgrade" not in call_text

@@ -176,7 +176,7 @@ case "$ACTION" in
         ;;
     full-upgrade)
         "$APT_GET_BIN" update
-        DEBIAN_FRONTEND=noninteractive "$APT_GET_BIN" -y upgrade
+        DEBIAN_FRONTEND=noninteractive "$APT_GET_BIN" -y --with-new-pkgs upgrade
         ;;
 esac
 

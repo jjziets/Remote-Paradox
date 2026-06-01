@@ -32,7 +32,7 @@ fun SetupScreen(
     onLoginInstead: () -> Unit,
 ) {
     var host by remember(serverConfig) { mutableStateOf(serverConfig?.host ?: "") }
-    var port by remember(serverConfig) { mutableStateOf(serverConfig?.port?.toString() ?: "8080") }
+    var port by remember(serverConfig) { mutableStateOf(serverConfig?.port?.toString() ?: "9433") }
     var inviteCode by remember(serverConfig) { mutableStateOf(serverConfig?.inviteCode ?: "") }
     var username by remember { mutableStateOf("") }
     var password by remember { mutableStateOf("") }
@@ -114,7 +114,7 @@ fun SetupScreen(
         Spacer(Modifier.height(8.dp))
         Button(
             onClick = {
-                val p = port.toIntOrNull() ?: 8080
+                val p = port.toIntOrNull() ?: 9433
                 onRegister(host, p, serverConfig?.fingerprint.orEmpty(), inviteCode, username, password)
             },
             modifier = Modifier.fillMaxWidth().height(50.dp),

@@ -1182,7 +1182,7 @@ private fun SettingsPiMaintenanceCard(
             title = { Text("Upgrade installed packages?") },
             text = {
                 Column {
-                    Text("This runs apt-get update and apt-get -y upgrade on the Pi. It upgrades installed packages on the current OS release; it does not upgrade Raspberry Pi OS to a newer release.")
+                    Text("This runs apt-get update and apt-get -y --with-new-pkgs upgrade on the Pi. It upgrades packages on the current OS release and may install required kernel package dependencies; it does not upgrade Raspberry Pi OS to a newer release.")
                     Spacer(Modifier.height(10.dp))
                     Text("Type UPGRADE PACKAGES to continue.", fontWeight = FontWeight.SemiBold)
                     Spacer(Modifier.height(6.dp))

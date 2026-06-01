@@ -1007,7 +1007,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                     val friendly = when (e) {
                         is java.net.UnknownHostException,
                         is java.net.ConnectException,
-                        is java.net.SocketTimeoutException -> "Can't reach Pi — check your Wi-Fi connection"
+                        is java.net.SocketTimeoutException -> "Can't reach Pi at ${configuredPiEndpoint()} — check Wi-Fi and port 9433"
                         is java.io.IOException -> "Connection error — Pi may be offline"
                         else -> "Can't check for updates: ${e.message}"
                     }
@@ -1351,10 +1351,13 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         when (e) {
             is java.net.UnknownHostException,
             is java.net.ConnectException,
-            is java.net.SocketTimeoutException -> "Can't reach Pi — check your Wi-Fi connection"
+            is java.net.SocketTimeoutException -> "Can't reach Pi at ${configuredPiEndpoint()} — check Wi-Fi and port 9433"
             is java.io.IOException -> "Connection error — Pi may be offline"
             else -> "Maintenance error: ${e.message}"
         }
+
+    private fun configuredPiEndpoint(): String =
+        "${tokenStore.serverHost ?: "configured host"}:${tokenStore.serverPort}"
 
     // ── Pi System Info ──
 
