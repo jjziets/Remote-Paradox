@@ -12,6 +12,7 @@ _DEFAULTS = {
     "api_port": 8080,
     "api_host": "127.0.0.1",
     "jwt_expiry_hours": 72,  # 3 days
+    "refresh_expiry_days": 90,
     "panel_pc_password": "0000",
     "invite_expiry_seconds": 900,  # 15 min
     "tls_cert_path": "",
@@ -28,6 +29,7 @@ class AppConfig:
     api_host: str
     jwt_secret: str
     jwt_expiry_hours: int
+    refresh_expiry_days: int
     panel_pc_password: str
     invite_expiry_seconds: int
     config_path: str
@@ -86,6 +88,7 @@ def load_config(path: str) -> AppConfig:
         api_host=merged["api_host"],
         jwt_secret=merged["jwt_secret"],
         jwt_expiry_hours=merged["jwt_expiry_hours"],
+        refresh_expiry_days=merged.get("refresh_expiry_days", _DEFAULTS["refresh_expiry_days"]),
         panel_pc_password=merged["panel_pc_password"],
         invite_expiry_seconds=merged["invite_expiry_seconds"],
         config_path=path,

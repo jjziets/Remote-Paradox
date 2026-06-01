@@ -7,7 +7,15 @@ import kotlinx.serialization.Serializable
 data class LoginRequest(val username: String, val password: String)
 
 @Serializable
-data class LoginResponse(val token: String, val username: String, val role: String)
+data class LoginResponse(
+    val token: String,
+    val username: String,
+    val role: String,
+    @SerialName("refresh_token") val refreshToken: String = "",
+)
+
+@Serializable
+data class RefreshRequest(@SerialName("refresh_token") val refreshToken: String)
 
 @Serializable
 data class ArmRequest(

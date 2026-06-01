@@ -17,6 +17,10 @@ class WatchTokenStore(context: Context) {
                 .apply()
         }
 
+    var refreshToken: String?
+        get() = prefs.getString(KEY_REFRESH_TOKEN, null)
+        set(value) = prefs.edit().putString(KEY_REFRESH_TOKEN, value).apply()
+
     val tokenAgeMs: Long
         get() {
             val savedAt = prefs.getLong(KEY_TOKEN_SAVED_AT, 0L)
@@ -92,6 +96,7 @@ class WatchTokenStore(context: Context) {
     companion object {
         private const val KEY_TOKEN_SAVED_AT = "token_saved_at"
         private const val KEY_TOKEN = "jwt_token"
+        private const val KEY_REFRESH_TOKEN = "refresh_token"
         private const val KEY_USERNAME = "username"
         private const val KEY_HOST = "server_host"
         private const val KEY_PORT = "server_port"

@@ -39,6 +39,7 @@ from paradox_bridge.models import (
     PasswordResetRequest,
     RegisterRequest,
     RegisterResponse,
+    RefreshRequest,
     SystemResourcesResponse,
     UserInfo,
     UserListResponse,
@@ -105,6 +106,7 @@ def get_config() -> AppConfig:
 
 
 _bearer = HTTPBearer()
+_optional_bearer = HTTPBearer(auto_error=False)
 
 
 def get_current_user(
@@ -360,15 +362,27 @@ def login(req: LoginRequest, auth: Annotated[AuthService, Depends(get_auth)]):
     except ValueError:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid credentials")
     user = auth._db.get_user(req.username)
-    return LoginResponse(token=token, username=req.username, role=user["role"])
+    refresh_token = auth.issue_refresh_token(req.username)
+    return LoginResponse(
+        token=token,
+        username=req.username,
+        role=user["role"],
+        refresh_token=refresh_token,
+    )
 
 
 @app.post("/auth/refresh")
 def refresh(
-    creds: Annotated[HTTPAuthorizationCredentials, Depends(_bearer)],
     auth: Annotated[AuthService, Depends(get_auth)],
+    req: RefreshRequest | None = None,
+    creds: Annotated[HTTPAuthorizationCredentials | None, Depends(_optional_bearer)] = None,
 ):
     try:
+        if req is not None and req.refresh_token:
+            new_token, username, role = auth.refresh_with_refresh_token(req.refresh_token)
+            return {"token": new_token, "username": username, "role": role}
+        if creds is None:
+            raise ValueError("Missing refresh token")
         new_token = auth.refresh_token(creds.credentials)
         payload = auth.decode_token(new_token)
         return {"token": new_token, "username": payload["sub"], "role": payload["role"]}
@@ -388,8 +402,9 @@ def register(
         )
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
+    refresh_token = auth.issue_refresh_token(req.username)
     audit.record(req.username, "register", "Registered via invite code")
-    return RegisterResponse(token=token, username=req.username)
+    return RegisterResponse(token=token, username=req.username, refresh_token=refresh_token)
 
 
 @app.post("/auth/invite", response_model=InviteResponse)

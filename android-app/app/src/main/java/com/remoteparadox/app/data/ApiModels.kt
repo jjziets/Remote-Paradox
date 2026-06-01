@@ -14,7 +14,15 @@ import kotlinx.serialization.json.JsonPrimitive
 data class LoginRequest(val username: String, val password: String)
 
 @Serializable
-data class LoginResponse(val token: String, val username: String, val role: String)
+data class LoginResponse(
+    val token: String,
+    val username: String,
+    val role: String,
+    @SerialName("refresh_token") val refreshToken: String = "",
+)
+
+@Serializable
+data class RefreshRequest(@SerialName("refresh_token") val refreshToken: String)
 
 @Serializable
 data class RegisterRequest(
@@ -24,7 +32,11 @@ data class RegisterRequest(
 )
 
 @Serializable
-data class RegisterResponse(val token: String, val username: String)
+data class RegisterResponse(
+    val token: String,
+    val username: String,
+    @SerialName("refresh_token") val refreshToken: String = "",
+)
 
 @Serializable
 data class ArmRequest(

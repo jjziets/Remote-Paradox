@@ -16,11 +16,13 @@ import com.google.common.util.concurrent.Futures
 import com.google.common.util.concurrent.ListenableFuture
 import com.remoteparadox.watch.data.AlarmStatus
 import com.remoteparadox.watch.data.ApiClient
+import com.remoteparadox.watch.data.RefreshRequest
 import com.remoteparadox.watch.data.WatchTokenStore
 import kotlinx.coroutines.runBlocking
 
 private const val TAG = "StatusTile"
 private const val RESOURCES_VERSION = "1"
+private const val TOKEN_REFRESH_AGE_MS = 36 * 60 * 60 * 1000L
 
 private const val COLOR_GREEN = 0xCC2E7D32.toInt()
 private const val COLOR_RED = 0xCCC62828.toInt()
@@ -82,12 +84,38 @@ class StatusTileService : TileService() {
         return try {
             runBlocking {
                 val api = ApiClient.create(tokenStore.baseUrl!!, tokenStore.certFingerprint.orEmpty())
+                refreshTokenIfNeeded(api, tokenStore)
                 val resp = api.alarmStatus(tokenStore.bearerHeader)
                 if (resp.isSuccessful) resp.body() else null
             }
         } catch (e: Exception) {
             Log.w(TAG, "Tile fetch failed: ${e.message}")
             null
+        }
+    }
+
+    private suspend fun refreshTokenIfNeeded(
+        api: com.remoteparadox.watch.data.ParadoxApi,
+        tokenStore: WatchTokenStore,
+    ) {
+        if (tokenStore.tokenAgeMs < TOKEN_REFRESH_AGE_MS) return
+        val refreshToken = tokenStore.refreshToken
+        val resp = if (!refreshToken.isNullOrBlank()) {
+            api.refreshToken(RefreshRequest(refreshToken))
+        } else {
+            api.refreshToken(tokenStore.bearerHeader)
+        }
+        if (resp.isSuccessful && resp.body() != null) {
+            val body = resp.body()!!
+            tokenStore.token = body.token
+            tokenStore.refreshToken = body.refreshToken.ifBlank { tokenStore.refreshToken }
+        } else if (!refreshToken.isNullOrBlank()) {
+            val fallback = api.refreshToken(tokenStore.bearerHeader)
+            if (fallback.isSuccessful && fallback.body() != null) {
+                val body = fallback.body()!!
+                tokenStore.token = body.token
+                tokenStore.refreshToken = body.refreshToken.ifBlank { tokenStore.refreshToken }
+            }
         }
     }
 

@@ -20,6 +20,7 @@ def auth_env(tmp_path):
         api_host="0.0.0.0",
         jwt_secret="test-secret-key-for-unit-tests-only",
         jwt_expiry_hours=24,
+        refresh_expiry_days=90,
         panel_pc_password="0000",
         invite_expiry_seconds=900,
         config_path=str(tmp_path / "config.json"),
@@ -129,6 +130,22 @@ class TestRefreshToken:
         tampered = token[:-4] + "XXXX"
         with pytest.raises(ValueError, match="Invalid token"):
             auth.refresh_token(tampered)
+
+    def test_refresh_with_refresh_token_survives_expired_access_token(self, auth_env):
+        auth, _ = auth_env
+        auth.setup_admin("admin", "secret123")
+        refresh_token = auth.issue_refresh_token("admin")
+        access_token, username, role = auth.refresh_with_refresh_token(refresh_token)
+        payload = auth.decode_token(access_token)
+        assert username == "admin"
+        assert role == "admin"
+        assert payload["sub"] == "admin"
+
+    def test_refresh_with_bad_refresh_token_fails(self, auth_env):
+        auth, _ = auth_env
+        auth.setup_admin("admin", "secret123")
+        with pytest.raises(ValueError, match="Invalid or expired refresh token"):
+            auth.refresh_with_refresh_token("not-valid")
 
 
 class TestResetPassword:

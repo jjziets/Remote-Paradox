@@ -12,6 +12,11 @@ class LoginResponse(BaseModel):
     token: str
     username: str
     role: str
+    refresh_token: str = ""
+
+
+class RefreshRequest(BaseModel):
+    refresh_token: str = ""
 
 
 class RegisterRequest(BaseModel):
@@ -23,6 +28,7 @@ class RegisterRequest(BaseModel):
 class RegisterResponse(BaseModel):
     token: str
     username: str
+    refresh_token: str = ""
 
 
 class InviteResponse(BaseModel):

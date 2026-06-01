@@ -118,6 +118,7 @@ class WatchViewModel(app: Application) : AndroidViewModel(app) {
             tokenStore.serverPort = payload.port
             tokenStore.certFingerprint = payload.fingerprint
             tokenStore.token = payload.token
+            tokenStore.refreshToken = payload.refreshToken
             tokenStore.username = payload.username
             tokenStore.alarmCode = payload.alarmCode
 
@@ -160,6 +161,7 @@ class WatchViewModel(app: Application) : AndroidViewModel(app) {
                 if (resp.isSuccessful && resp.body() != null) {
                     val body = resp.body()!!
                     tokenStore.token = body.token
+                    tokenStore.refreshToken = body.refreshToken.ifBlank { tokenStore.refreshToken }
                     tokenStore.username = body.username
                     api = tempApi
                     _state.update { it.copy(screen = WatchScreen.Dashboard, isLoading = false) }
@@ -393,6 +395,7 @@ class WatchViewModel(app: Application) : AndroidViewModel(app) {
         _state.update { it.copy(actionInProgress = name, error = null) }
         viewModelScope.launch(Dispatchers.IO) {
             try {
+                maybeRefreshToken()
                 val resp = call(a)
                 if (resp.isSuccessful) {
                     _state.update { it.copy(actionInProgress = null) }
@@ -523,10 +526,27 @@ class WatchViewModel(app: Application) : AndroidViewModel(app) {
         if (tokenStore.tokenAgeMs < TOKEN_REFRESH_AGE_MS) return
         try {
             Log.i(TAG, "Token is ${tokenStore.tokenAgeMs / 3600000}h old, refreshing...")
-            val resp = a.refreshToken(tokenStore.bearerHeader)
+            val storedRefreshToken = tokenStore.refreshToken
+            val resp = if (!storedRefreshToken.isNullOrBlank()) {
+                a.refreshToken(RefreshRequest(storedRefreshToken))
+            } else {
+                a.refreshToken(tokenStore.bearerHeader)
+            }
             if (resp.isSuccessful && resp.body() != null) {
-                tokenStore.token = resp.body()!!.token
+                val body = resp.body()!!
+                tokenStore.token = body.token
+                tokenStore.refreshToken = body.refreshToken.ifBlank { tokenStore.refreshToken }
                 Log.i(TAG, "Token refreshed successfully")
+            } else if (!storedRefreshToken.isNullOrBlank()) {
+                val fallback = a.refreshToken(tokenStore.bearerHeader)
+                if (fallback.isSuccessful && fallback.body() != null) {
+                    val body = fallback.body()!!
+                    tokenStore.token = body.token
+                    tokenStore.refreshToken = body.refreshToken.ifBlank { tokenStore.refreshToken }
+                    Log.i(TAG, "Token refreshed successfully with bearer fallback")
+                } else {
+                    Log.w(TAG, "Token refresh failed: ${resp.code()}, bearer fallback: ${fallback.code()}")
+                }
             } else if (resp.code() == 401) {
                 Log.w(TAG, "Token refresh failed with 401, token has expired")
             } else {

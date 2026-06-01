@@ -49,6 +49,16 @@ class Database:
                 detail      TEXT
             );
 
+            CREATE TABLE IF NOT EXISTS refresh_tokens (
+                token_hash  TEXT PRIMARY KEY,
+                username    TEXT NOT NULL,
+                created_at  REAL NOT NULL,
+                expires_at  REAL NOT NULL,
+                last_used_at REAL,
+                revoked_at  REAL,
+                FOREIGN KEY (username) REFERENCES users(username) ON DELETE CASCADE
+            );
+
             CREATE TABLE IF NOT EXISTS events (
                 id        INTEGER PRIMARY KEY AUTOINCREMENT,
                 type      TEXT NOT NULL,
@@ -123,6 +133,7 @@ class Database:
             "UPDATE users SET password_hash = ? WHERE username = ?",
             (new_password_hash, username),
         )
+        self.revoke_refresh_tokens(username)
         self.conn.commit()
 
     def delete_user(self, username: str) -> None:
@@ -131,7 +142,45 @@ class Database:
             raise ValueError(f"User '{username}' not found")
         if existing["role"] == "admin" and self.admin_count() <= 1:
             raise ValueError("Cannot delete the last admin")
+        self.conn.execute("DELETE FROM refresh_tokens WHERE username = ?", (username,))
         self.conn.execute("DELETE FROM users WHERE username = ?", (username,))
+        self.conn.commit()
+
+    # ── Refresh Tokens ──
+
+    def create_refresh_token(self, username: str, token_hash: str, expires_in_seconds: int) -> None:
+        now = time.time()
+        self.conn.execute(
+            """
+            INSERT INTO refresh_tokens (token_hash, username, created_at, expires_at)
+            VALUES (?, ?, ?, ?)
+            """,
+            (token_hash, username, now, now + expires_in_seconds),
+        )
+        self.conn.commit()
+
+    def get_refresh_token(self, token_hash: str) -> Optional[dict]:
+        row = self.conn.execute(
+            """
+            SELECT * FROM refresh_tokens
+            WHERE token_hash = ? AND revoked_at IS NULL AND expires_at > ?
+            """,
+            (token_hash, time.time()),
+        ).fetchone()
+        if row is None:
+            return None
+        self.conn.execute(
+            "UPDATE refresh_tokens SET last_used_at = ? WHERE token_hash = ?",
+            (time.time(), token_hash),
+        )
+        self.conn.commit()
+        return dict(row)
+
+    def revoke_refresh_tokens(self, username: str) -> None:
+        self.conn.execute(
+            "UPDATE refresh_tokens SET revoked_at = ? WHERE username = ? AND revoked_at IS NULL",
+            (time.time(), username),
+        )
         self.conn.commit()
 
     # ── Invites ──

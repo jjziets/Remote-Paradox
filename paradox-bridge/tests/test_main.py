@@ -77,6 +77,7 @@ class TestLogin:
         assert resp.status_code == 200
         data = resp.json()
         assert "token" in data
+        assert "refresh_token" in data
         assert data["username"] == "admin"
         assert data["role"] == "admin"
 
@@ -92,6 +93,16 @@ class TestLogin:
 class TestRefreshEndpoint:
     def test_refresh_returns_new_token(self, client, admin_token):
         resp = client.post("/auth/refresh", headers=auth_header(admin_token))
+        assert resp.status_code == 200
+        data = resp.json()
+        assert "token" in data
+        assert data["username"] == "admin"
+        assert data["role"] == "admin"
+
+    def test_refresh_accepts_refresh_token_body(self, client):
+        login = client.post("/auth/login", json={"username": "admin", "password": "secret123"})
+        refresh_token = login.json()["refresh_token"]
+        resp = client.post("/auth/refresh", json={"refresh_token": refresh_token})
         assert resp.status_code == 200
         data = resp.json()
         assert "token" in data

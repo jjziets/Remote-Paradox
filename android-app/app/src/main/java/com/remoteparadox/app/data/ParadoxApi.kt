@@ -15,6 +15,11 @@ interface ParadoxApi {
         @Header("Authorization") auth: String,
     ): Response<LoginResponse>
 
+    @POST("auth/refresh")
+    suspend fun refreshToken(
+        @Body req: RefreshRequest,
+    ): Response<LoginResponse>
+
     @GET("alarm/status")
     suspend fun alarmStatus(@Header("Authorization") auth: String): Response<AlarmStatus>
 

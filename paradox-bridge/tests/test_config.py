@@ -43,6 +43,7 @@ class TestGenerateDefaultConfig:
         assert data["api_port"] == 8080
         assert data["api_host"] == "127.0.0.1"
         assert data["jwt_expiry_hours"] == 72
+        assert data["refresh_expiry_days"] == 90
         assert data["panel_pc_password"] == "0000"
         assert data["invite_expiry_seconds"] == 900
 

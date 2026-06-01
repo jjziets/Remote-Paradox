@@ -21,6 +21,7 @@ data class WatchSyncPayload(
     val port: Int,
     val fingerprint: String,
     val token: String,
+    val refreshToken: String = "",
     val username: String,
     val alarmCode: String,
 )
@@ -71,6 +72,7 @@ class WatchSyncReceiver : WearableListenerService() {
             store.serverPort = payload.port
             store.certFingerprint = payload.fingerprint
             store.token = payload.token
+            store.refreshToken = payload.refreshToken
             store.username = payload.username
             store.alarmCode = payload.alarmCode
 

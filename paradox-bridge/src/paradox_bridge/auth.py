@@ -1,5 +1,7 @@
 """Authentication: JWT tokens, login, registration via invite codes."""
 
+import hashlib
+import secrets
 from datetime import datetime, timedelta, timezone
 from urllib.parse import urlparse
 
@@ -42,6 +44,18 @@ class AuthService:
             raise ValueError("Invalid credentials")
         return self._create_token(username, user["role"])
 
+    def issue_refresh_token(self, username: str) -> str:
+        if self._db.get_user(username) is None:
+            raise ValueError("User not found")
+        refresh_token = secrets.token_urlsafe(48)
+        expires_in = self._config.refresh_expiry_days * 24 * 60 * 60
+        self._db.create_refresh_token(
+            username=username,
+            token_hash=self._hash_refresh_token(refresh_token),
+            expires_in_seconds=expires_in,
+        )
+        return refresh_token
+
     # ── JWT ──
 
     def _create_token(self, username: str, role: str) -> str:
@@ -65,6 +79,16 @@ class AuthService:
         payload = self.decode_token(token)
         return self._create_token(payload["sub"], payload["role"])
 
+    def refresh_with_refresh_token(self, refresh_token: str) -> tuple[str, str, str]:
+        session = self._db.get_refresh_token(self._hash_refresh_token(refresh_token))
+        if session is None:
+            raise ValueError("Invalid or expired refresh token")
+        user = self._db.get_user(session["username"])
+        if user is None:
+            raise ValueError("Invalid or expired refresh token")
+        access_token = self._create_token(user["username"], user["role"])
+        return access_token, user["username"], user["role"]
+
     def decode_token(self, token: str) -> dict:
         try:
             payload = jwt.decode(
@@ -79,6 +103,10 @@ class AuthService:
             if "expired" in msg:
                 raise ValueError("Token expired") from exc
             raise ValueError("Invalid token") from exc
+
+    @staticmethod
+    def _hash_refresh_token(refresh_token: str) -> str:
+        return hashlib.sha256(refresh_token.encode()).hexdigest()
 
     # ── Password Reset ──
 

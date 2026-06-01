@@ -364,6 +364,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 if (resp.isSuccessful && resp.body() != null) {
                     val body = resp.body()!!
                     tokenStore.token = body.token
+                    tokenStore.refreshToken = body.refreshToken.ifBlank { tokenStore.refreshToken }
                     tokenStore.username = body.username
                     tokenStore.role = body.role
                     _state.update { it.copy(screen = Screen.Dashboard, isLoading = false) }
@@ -1587,10 +1588,33 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         if (tokenStore.tokenAgeMs < TOKEN_REFRESH_AGE_MS) return
         try {
             Log.i(TAG, "Token is ${tokenStore.tokenAgeMs / 3600000}h old, refreshing...")
-            val resp = a.refreshToken(tokenStore.bearerHeader)
+            val storedRefreshToken = tokenStore.refreshToken
+            val resp = if (!storedRefreshToken.isNullOrBlank()) {
+                a.refreshToken(RefreshRequest(storedRefreshToken))
+            } else {
+                a.refreshToken(tokenStore.bearerHeader)
+            }
             if (resp.isSuccessful && resp.body() != null) {
-                tokenStore.token = resp.body()!!.token
+                val body = resp.body()!!
+                tokenStore.token = body.token
+                tokenStore.refreshToken = body.refreshToken.ifBlank { tokenStore.refreshToken }
+                if (!tokenStore.refreshToken.isNullOrBlank()) {
+                    watchSync.sendCredentialsToWatch(tokenStore)
+                }
                 Log.i(TAG, "Token refreshed successfully")
+            } else if (!storedRefreshToken.isNullOrBlank()) {
+                val fallback = a.refreshToken(tokenStore.bearerHeader)
+                if (fallback.isSuccessful && fallback.body() != null) {
+                    val body = fallback.body()!!
+                    tokenStore.token = body.token
+                    tokenStore.refreshToken = body.refreshToken.ifBlank { tokenStore.refreshToken }
+                    if (!tokenStore.refreshToken.isNullOrBlank()) {
+                        watchSync.sendCredentialsToWatch(tokenStore)
+                    }
+                    Log.i(TAG, "Token refreshed successfully with bearer fallback")
+                } else {
+                    Log.w(TAG, "Token refresh failed: ${resp.code()}, bearer fallback: ${fallback.code()}")
+                }
             } else if (resp.code() == 401) {
                 Log.w(TAG, "Token refresh failed with 401, token has expired")
             } else {

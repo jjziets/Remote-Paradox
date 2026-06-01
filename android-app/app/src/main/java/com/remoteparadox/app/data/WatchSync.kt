@@ -18,6 +18,7 @@ data class WatchSyncPayload(
     val port: Int,
     val fingerprint: String,
     val token: String,
+    val refreshToken: String = "",
     val username: String,
     val alarmCode: String,
 )
@@ -47,6 +48,7 @@ class WatchSync(private val context: Context) {
             port = tokenStore.serverPort,
             fingerprint = tokenStore.certFingerprint.orEmpty(),
             token = token,
+            refreshToken = tokenStore.refreshToken.orEmpty(),
             username = tokenStore.username.orEmpty(),
             alarmCode = tokenStore.alarmCode.orEmpty(),
         )
