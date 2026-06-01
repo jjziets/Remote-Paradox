@@ -43,6 +43,18 @@ class TestHandleCommand:
         assert "error" in result
         assert "admin" in result["error"]
 
+    @patch("paradox_bridge.ble_server._schedule_system_reboot")
+    @patch("paradox_bridge.ble_server._validate_token")
+    def test_system_reboot_as_admin_uses_direct_ble_reboot(self, mock_validate, mock_reboot):
+        mock_validate.return_value = {"sub": "admin", "role": "admin"}
+        mock_reboot.return_value = json.dumps({"success": True, "action": "reboot"})
+
+        result = json.loads(handle_command(json.dumps({"cmd": "system_reboot", "token": "fake"})))
+
+        assert result["success"] is True
+        assert result["action"] == "reboot"
+        mock_reboot.assert_called_once_with()
+
     @patch("paradox_bridge.ble_server._validate_token")
     def test_wifi_scan_as_authenticated_user(self, mock_validate):
         mock_validate.return_value = {"sub": "john", "role": "user"}

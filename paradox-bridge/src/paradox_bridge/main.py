@@ -1002,7 +1002,7 @@ def system_reboot(
     audit.record(admin["sub"], "reboot", "Admin initiated Pi reboot")
     try:
         subprocess.Popen(
-            ["sudo", "/sbin/reboot"],
+            ["sudo", "-n", "/sbin/reboot"],
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
         )
         return ActionResult(success=True, action="reboot", message="Pi is rebooting...")

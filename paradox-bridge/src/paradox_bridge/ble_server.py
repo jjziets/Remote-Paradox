@@ -267,6 +267,29 @@ def _validate_token(token: str) -> dict | None:
         return None
 
 
+def _schedule_system_reboot() -> str:
+    try:
+        proc = subprocess.Popen(
+            ["sudo", "-n", "/sbin/reboot"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        try:
+            stdout, stderr = proc.communicate(timeout=3)
+        except subprocess.TimeoutExpired:
+            logger.info("BLE reboot command still running after timeout; assuming reboot is in progress")
+            return json.dumps({"success": True, "action": "reboot", "message": "Pi is rebooting..."})
+        if proc.returncode != 0:
+            detail = (stderr or stdout or "reboot command failed").strip()
+            logger.warning("BLE reboot command failed: %s", detail)
+            return json.dumps({"error": detail})
+        return json.dumps({"success": True, "action": "reboot", "message": "Pi is rebooting..."})
+    except Exception as e:
+        logger.warning("BLE reboot command could not start: %s", e)
+        return json.dumps({"error": str(e)})
+
+
 # ── Command handler ──
 
 
@@ -344,7 +367,7 @@ def handle_command(data: str) -> str:
         if action == "system_wifi":
             return _proxy_get("/system/wifi", token)
         if action == "system_reboot":
-            return _proxy_post("/system/reboot", token)
+            return _schedule_system_reboot()
         if action == "bypass":
             zone_id = cmd.get("zone_id", 0)
             bypass = cmd.get("bypass", True)

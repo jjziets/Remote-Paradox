@@ -1421,30 +1421,71 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     fun rebootPi() {
         val a = api
-        if (a == null && isBleConnected) {
-            bleAlarmAction("system_reboot")
-            _state.update { it.copy(piSystem = it.piSystem.copy(error = "Pi is rebooting... please wait ~60s")) }
+        val token = tokenStore.token
+        if (token.isNullOrBlank()) {
+            _state.update { it.copy(piSystem = it.piSystem.copy(error = "Login token missing; sign in before rebooting the Pi")) }
             return
         }
-        if (a == null) return
         _state.update { it.copy(piSystem = it.piSystem.copy(rebooting = true, error = null)) }
         viewModelScope.launch(Dispatchers.IO) {
+            if (a == null) {
+                rebootPiViaBle(token, "No HTTP connection")
+                return@launch
+            }
             try {
                 val resp = a.systemReboot(tokenStore.bearerHeader)
                 if (resp.isSuccessful) {
-                    _state.update {
-                        it.copy(piSystem = it.piSystem.copy(
-                            rebooting = false,
-                            error = "Pi is rebooting... please wait ~60s",
-                        ))
-                    }
+                    markPiRebooting()
                 } else {
                     val err = resp.errorBody()?.string() ?: "Reboot failed"
-                    _state.update { it.copy(piSystem = it.piSystem.copy(rebooting = false, error = err)) }
+                    if (resp.code() == 401 || resp.code() == 403) {
+                        _state.update { it.copy(piSystem = it.piSystem.copy(rebooting = false, error = err)) }
+                    } else {
+                        rebootPiViaBle(token, err)
+                    }
                 }
             } catch (e: Exception) {
-                _state.update { it.copy(piSystem = it.piSystem.copy(rebooting = false, error = e.message)) }
+                rebootPiViaBle(token, e.message ?: "HTTP reboot failed")
             }
+        }
+    }
+
+    private suspend fun rebootPiViaBle(token: String, reason: String) {
+        val ble = bleClient
+        if (ble == null || !isBleConnected) {
+            _state.update {
+                it.copy(piSystem = it.piSystem.copy(
+                    rebooting = false,
+                    error = "Reboot failed: $reason. BLE fallback is not connected.",
+                ))
+            }
+            return
+        }
+        try {
+            Log.i(TAG, "HTTP reboot failed ($reason), falling back to BLE")
+            val cmdJson = org.json.JSONObject(mapOf("cmd" to "system_reboot", "token" to token)).toString()
+            val resp = ble.sendCommandAsync(cmdJson, timeoutMs = 6_000)
+            if (resp == null) {
+                _state.update { it.copy(piSystem = it.piSystem.copy(rebooting = false, error = "BLE reboot timeout")) }
+                return
+            }
+            val obj = org.json.JSONObject(resp)
+            if (obj.has("error")) {
+                _state.update { it.copy(piSystem = it.piSystem.copy(rebooting = false, error = obj.getString("error"))) }
+            } else {
+                markPiRebooting()
+            }
+        } catch (e: Exception) {
+            _state.update { it.copy(piSystem = it.piSystem.copy(rebooting = false, error = "BLE reboot failed: ${e.message}")) }
+        }
+    }
+
+    private fun markPiRebooting() {
+        _state.update {
+            it.copy(piSystem = it.piSystem.copy(
+                rebooting = false,
+                error = "Pi is rebooting... please wait ~60s",
+            ))
         }
     }
 
