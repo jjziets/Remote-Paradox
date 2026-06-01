@@ -50,6 +50,13 @@ if [ -f "$BRIDGE_SRC/deploy/setup-boot-fsck.sh" ]; then
     cp "$BRIDGE_SRC/deploy/setup-boot-fsck.sh" "$INSTALL_DIR/deploy/setup-boot-fsck.sh"
     chmod +x "$INSTALL_DIR/deploy/setup-boot-fsck.sh"
 fi
+for deploy_script in boot-repair.sh setup-boot-repair.sh wifi-watchdog.sh setup-wifi-watchdog.sh; do
+    if [ -f "$BRIDGE_SRC/deploy/$deploy_script" ]; then
+        mkdir -p "$INSTALL_DIR/deploy"
+        cp "$BRIDGE_SRC/deploy/$deploy_script" "$INSTALL_DIR/deploy/$deploy_script"
+        chmod +x "$INSTALL_DIR/deploy/$deploy_script"
+    fi
+done
 
 # Reinstall deps in case they changed
 "$VENV/bin/pip" install -q -e "$INSTALL_DIR" 2>/dev/null || true
@@ -76,6 +83,14 @@ rm -rf "$STAGING_DIR"
 if [ -x "$INSTALL_DIR/deploy/setup-boot-fsck.sh" ]; then
     echo "[apply_update] Ensuring boot-time filesystem repair is enabled..."
     "$INSTALL_DIR/deploy/setup-boot-fsck.sh" || echo "[apply_update] WARNING: boot fsck setup failed"
+fi
+if [ -x "$INSTALL_DIR/deploy/setup-wifi-watchdog.sh" ]; then
+    echo "[apply_update] Ensuring WiFi watchdog is installed..."
+    "$INSTALL_DIR/deploy/setup-wifi-watchdog.sh" || echo "[apply_update] WARNING: WiFi watchdog setup failed"
+fi
+if [ -x "$INSTALL_DIR/deploy/setup-boot-repair.sh" ]; then
+    echo "[apply_update] Ensuring boot repair timer is installed..."
+    "$INSTALL_DIR/deploy/setup-boot-repair.sh" || echo "[apply_update] WARNING: boot repair setup failed"
 fi
 
 echo "[apply_update] Configuring Bluetooth for LE-only (no audio profiles)..."

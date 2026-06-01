@@ -8,6 +8,7 @@ import shutil
 import tarfile
 import tempfile
 import urllib.request
+import argparse
 from pathlib import Path
 
 GITHUB_REPO = "jjziets/Remote-Paradox"
@@ -17,6 +18,8 @@ STATUS_FILE = INSTALL_DIR / "update_status.json"
 STAGING_DIR = INSTALL_DIR / "staging"
 
 API_URL = f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest"
+RELEASES_URL = f"https://api.github.com/repos/{GITHUB_REPO}/releases"
+BRIDGE_TAG_PREFIX = "bridge-v"
 
 
 def current_version() -> str:
@@ -41,8 +44,34 @@ def fetch_latest_release() -> dict | None:
         return None
 
 
+def fetch_bridge_releases() -> list[dict]:
+    req = urllib.request.Request(RELEASES_URL, headers={"Accept": "application/vnd.github+json"})
+    try:
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            data = json.loads(resp.read())
+            return data if isinstance(data, list) else []
+    except Exception as e:
+        print(f"[updater] Failed to fetch bridge releases: {e}")
+        return []
+
+
+def select_latest_bridge_release(releases: list[dict]) -> dict | None:
+    candidates = [
+        release for release in releases
+        if str(release.get("tag_name", "")).startswith(BRIDGE_TAG_PREFIX)
+        and not release.get("draft")
+        and not release.get("prerelease")
+    ]
+    if not candidates:
+        return None
+    return max(candidates, key=lambda release: version_tuple(str(release.get("tag_name", ""))))
+
+
 def version_tuple(v: str) -> tuple[int, ...]:
-    return tuple(int(x) for x in v.lstrip("v").split(".") if x.isdigit())
+    match = re.search(r"(\d+(?:\.\d+)*)", v)
+    if not match:
+        return ()
+    return tuple(int(x) for x in match.group(1).split("."))
 
 
 def extract_bridge_version_from_staging() -> str | None:
@@ -58,7 +87,7 @@ def extract_bridge_version_from_staging() -> str | None:
     return None
 
 
-def download_and_stage(tarball_url: str, tag: str) -> bool:
+def download_and_stage(tarball_url: str, tag: str, force: bool = False) -> bool:
     STAGING_DIR.mkdir(parents=True, exist_ok=True)
     try:
         with tempfile.NamedTemporaryFile(suffix=".tar.gz", delete=False) as tmp:
@@ -83,7 +112,10 @@ def download_and_stage(tarball_url: str, tag: str) -> bool:
         bridge_version = extract_bridge_version_from_staging() or tag.lstrip("v")
 
         cur = current_version()
-        if version_tuple(bridge_version) <= version_tuple(cur):
+        comparison = (version_tuple(bridge_version) > version_tuple(cur)) - (
+            version_tuple(bridge_version) < version_tuple(cur)
+        )
+        if comparison < 0 or (comparison == 0 and not force):
             print(f"[updater] Bridge already up to date ({cur})")
             shutil.rmtree(STAGING_DIR, ignore_errors=True)
             clear_status_if_not_pending()
@@ -94,6 +126,7 @@ def download_and_stage(tarball_url: str, tag: str) -> bool:
             "current_version": cur,
             "new_version": bridge_version,
             "tag": tag,
+            "forced": bool(force),
         }
         STATUS_FILE.write_text(json.dumps(status))
         print(f"[updater] Staged bridge {bridge_version} (from {tag}), awaiting approval")
@@ -103,9 +136,12 @@ def download_and_stage(tarball_url: str, tag: str) -> bool:
         return False
 
 
-def check_and_stage():
+def check_and_stage(force: bool = False):
     cur = current_version()
-    release = fetch_latest_release()
+    release = select_latest_bridge_release(fetch_bridge_releases())
+    if not release:
+        print("[updater] No bridge-v* release found, falling back to latest release")
+        release = fetch_latest_release()
     if not release:
         return
 
@@ -125,7 +161,7 @@ def check_and_stage():
             pass
 
     print(f"[updater] Checking release {tag} (installed bridge: {cur})")
-    download_and_stage(tarball_url, tag)
+    download_and_stage(tarball_url, tag, force=force)
 
 
 def clear_status_if_not_pending():
@@ -139,4 +175,11 @@ def clear_status_if_not_pending():
 
 
 if __name__ == "__main__":
-    check_and_stage()
+    parser = argparse.ArgumentParser(description="Stage Paradox Bridge updates from GitHub releases.")
+    parser.add_argument(
+        "--force",
+        action="store_true",
+        help="stage the latest bridge release even when it matches the installed version",
+    )
+    args = parser.parse_args()
+    check_and_stage(force=args.force)
