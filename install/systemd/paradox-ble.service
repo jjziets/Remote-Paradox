@@ -1,0 +1,18 @@
+[Unit]
+Description=Remote Paradox BLE Server
+After=bluetooth.target hciuart.service
+Wants=bluetooth.target
+
+[Service]
+Type=simple
+# Root is required for raw BLE/GATT access.
+User=root
+ExecStartPre=/bin/sleep 3
+ExecStart=/opt/paradox-bridge/venv/bin/python3 -m paradox_bridge.ble_server
+WorkingDirectory=/opt/paradox-bridge
+Restart=on-failure
+RestartSec=5
+Environment=PYTHONPATH=/opt/paradox-bridge/src
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,20 @@
+[Unit]
+Description=Remote Paradox one-second Pi state recorder
+After=multi-user.target
+
+[Service]
+Type=simple
+User=root
+# Lightweight 1 Hz recorder of Pi/network state for post-mortem debugging.
+Environment=STATE_RECORDER_LOG_DIR=/var/log/paradox-bridge/state-recorder
+Environment=STATE_RECORDER_INTERVAL_SEC=1
+Environment=STATE_RECORDER_RETENTION_MINUTES=1440
+Environment=STATE_RECORDER_PRUNE_INTERVAL_SEC=60
+# Wi-Fi interface to sample; override if your image differs.
+Environment=STATE_RECORDER_IFACE=wlan0
+ExecStart=/opt/paradox-bridge/scripts/state-recorder.sh
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

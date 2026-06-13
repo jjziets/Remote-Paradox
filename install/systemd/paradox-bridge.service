@@ -1,0 +1,24 @@
+[Unit]
+Description=Paradox Alarm Bridge
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# Replace 'home' with your Pi's service user on a fresh image.
+User=home
+Group=home
+WorkingDirectory=/opt/paradox-bridge
+Environment=PYTHONPATH=/opt/paradox-bridge/src
+Environment=PARADOX_CONFIG=/etc/paradox-bridge/config.json
+# Admin login for the bridge API / apps — CHANGE BOTH before enabling.
+Environment=PARADOX_ADMIN_USER=admin
+Environment=PARADOX_ADMIN_PASS=CHANGE_ME
+ExecStart=/opt/paradox-bridge/venv/bin/python3 /opt/paradox-bridge/start.py
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
