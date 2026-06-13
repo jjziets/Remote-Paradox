@@ -15,6 +15,7 @@ import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.wear.compose.material3.*
+import com.remoteparadox.watch.BuildConfig
 
 @Composable
 fun SetupScreen(
@@ -105,6 +106,15 @@ private fun WaitingForPhoneScreen(
         TextButton(onClick = onManualSetup) {
             Text("Manual setup")
         }
+
+        Spacer(modifier = Modifier.height(8.dp))
+
+        Text(
+            text = "v${BuildConfig.VERSION_NAME} (build ${BuildConfig.VERSION_CODE})",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.4f),
+            textAlign = TextAlign.Center,
+        )
     }
 }
 
