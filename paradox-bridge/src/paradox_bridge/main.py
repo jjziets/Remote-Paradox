@@ -19,6 +19,7 @@ from fastapi import Depends, FastAPI, HTTPException, Query, Request, WebSocket, 
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 from paradox_bridge import __version__ as BRIDGE_VERSION
+from paradox_bridge import push
 from paradox_bridge.alarm import AlarmService
 from paradox_bridge.audit import AuditService
 from paradox_bridge.auth import AuthService
@@ -28,6 +29,7 @@ from paradox_bridge.models import (
     ActionResult,
     AlarmStatusResponse,
     ArmRequest,
+    PushTokenRequest,
     AuditEntry,
     AuditLogResponse,
     BleClientInfo,
@@ -79,6 +81,7 @@ _demo_trigger_task: asyncio.Task | None = None
 _reconnect_task: asyncio.Task | None = None
 _ws_heartbeat_task: asyncio.Task | None = None
 _event_purge_task: asyncio.Task | None = None
+_alert_monitor_task: asyncio.Task | None = None
 
 _CONNECT_RETRY_DELAY = 30  # seconds between reconnection attempts
 _CONNECT_MAX_RETRIES = 3   # limit retries per cycle to avoid panel lockout
@@ -190,9 +193,40 @@ def shutdown_services() -> None:
     _alarm = None
 
 
+_last_partition_alarm: dict[int, bool] = {}
+
+
+def _check_alarm_push() -> None:
+    """Fire a high-priority push the instant a partition enters alarm.
+
+    Runs on the PAI status-change callback (synchronous), but push.send_alert is
+    fire-and-forget on a background thread, so this never blocks panel handling.
+    """
+    global _last_partition_alarm
+    if not _alarm:
+        return
+    try:
+        resp = _build_status_response(_alarm)
+    except Exception:
+        return
+    for p in resp.partitions:
+        in_alarm = p.mode == "triggered" or any(z.alarm for z in p.zones)
+        if in_alarm and not _last_partition_alarm.get(p.id, False):
+            zones = [z.name for z in p.zones if z.alarm]
+            detail = ", ".join(zones) if zones else p.name
+            push.send_alert(
+                "🚨 ALARM TRIGGERED",
+                f"{p.name}: {detail}",
+                critical=True,
+                data={"type": "alarm", "partition": str(p.id)},
+            )
+        _last_partition_alarm[p.id] = in_alarm
+
+
 def _on_alarm_status_changed() -> None:
     """Called (synchronously) by AlarmService when PAI status changes.
-    Schedules an async broadcast to all WebSocket clients."""
+    Fires the alarm push immediately, then broadcasts to WebSocket clients."""
+    _check_alarm_push()
     if not _ws_manager or _ws_manager.active_count == 0:
         return
     try:
@@ -229,6 +263,48 @@ async def _ws_heartbeat_loop() -> None:
         await asyncio.sleep(_WS_HEARTBEAT_INTERVAL)
         if _ws_manager and _ws_manager.active_count > 0:
             await _broadcast_status()
+
+
+_ALERT_MONITOR_INTERVAL = 30  # seconds between secondary-alert checks
+_DISK_ALERT_PCT = 90.0
+_alert_last_connected = True
+_alert_disk_active = False
+
+
+async def _alert_monitor_loop() -> None:
+    """Push secondary alerts (not the alarm itself): panel/serial offline and
+    disk-almost-full. The live alarm-trigger push is handled synchronously in
+    _check_alarm_push for speed."""
+    global _alert_last_connected, _alert_disk_active
+    await asyncio.sleep(20)  # let startup/connect settle
+    while True:
+        try:
+            if _alarm and not _alarm.demo_mode:
+                connected = _alarm.is_connected
+                if not connected and _alert_last_connected:
+                    push.send_alert(
+                        "⚠️ Alarm panel offline",
+                        "The bridge lost its serial connection to the Paradox panel.",
+                        data={"type": "panel_disconnected"},
+                    )
+                _alert_last_connected = connected
+            try:
+                usage = shutil.disk_usage("/")
+                pct = usage.used / usage.total * 100 if usage.total else 0.0
+            except Exception:
+                pct = 0.0
+            if pct >= _DISK_ALERT_PCT and not _alert_disk_active:
+                push.send_alert(
+                    "⚠️ Pi disk almost full",
+                    f"Storage is {pct:.0f}% full on the Paradox bridge.",
+                    data={"type": "disk_full", "pct": str(round(pct))},
+                )
+                _alert_disk_active = True
+            elif pct < _DISK_ALERT_PCT - 5:
+                _alert_disk_active = False
+        except Exception:
+            logger.debug("alert monitor iteration failed", exc_info=True)
+        await asyncio.sleep(_ALERT_MONITOR_INTERVAL)
 
 
 _EVENT_PURGE_INTERVAL = 86400  # 24 hours
@@ -301,7 +377,7 @@ async def _disconnect_alarm() -> None:
 
 @asynccontextmanager
 async def lifespan(application: FastAPI):
-    global _demo_trigger_task, _reconnect_task, _ws_heartbeat_task, _event_purge_task
+    global _demo_trigger_task, _reconnect_task, _ws_heartbeat_task, _event_purge_task, _alert_monitor_task
     init_services()
     admin_user = os.environ.get("PARADOX_ADMIN_USER", "admin")
     admin_pass = os.environ.get("PARADOX_ADMIN_PASS")
@@ -311,6 +387,7 @@ async def lifespan(application: FastAPI):
         _alarm.set_status_change_callback(_on_alarm_status_changed)
     _ws_heartbeat_task = asyncio.create_task(_ws_heartbeat_loop())
     _event_purge_task = asyncio.create_task(_event_purge_loop())
+    _alert_monitor_task = asyncio.create_task(_alert_monitor_loop())
     if _alarm and _alarm.demo_mode:
         _demo_trigger_task = asyncio.create_task(_demo_zone_trigger_loop())
     elif _alarm and not _alarm.demo_mode:
@@ -322,6 +399,9 @@ async def lifespan(application: FastAPI):
     if _event_purge_task:
         _event_purge_task.cancel()
         _event_purge_task = None
+    if _alert_monitor_task:
+        _alert_monitor_task.cancel()
+        _alert_monitor_task = None
     if _demo_trigger_task:
         _demo_trigger_task.cancel()
         _demo_trigger_task = None
@@ -761,6 +841,28 @@ def _start_maintenance_job(action: str) -> MaintenanceJobResponse:
 @app.get("/system/version")
 def system_version():
     return {"version": BRIDGE_VERSION}
+
+
+@app.post("/system/register-push-token", response_model=ActionResult)
+def register_push_token(
+    req: PushTokenRequest,
+    user: Annotated[dict, Depends(get_current_user)],
+):
+    """Any logged-in device registers its FCM token so it receives alerts."""
+    push.register_token(req.token, f"{user['sub']}:{req.platform or 'app'}")
+    return ActionResult(success=True, action="register_push_token", message="Push token registered")
+
+
+@app.post("/system/test-push", response_model=ActionResult)
+def test_push(_admin: Annotated[dict, Depends(require_admin)]):
+    """Admin: send a test notification to all registered devices."""
+    n = push.token_count()
+    push.send_alert(
+        "Remote Paradox",
+        "Test notification — push is working ✅",
+        data={"type": "test"},
+    )
+    return ActionResult(success=True, action="test_push", message=f"Test queued to {n} device(s)")
 
 
 @app.get("/system/update-status")

@@ -104,6 +104,11 @@ class ActionResult(BaseModel):
     message: str = ""
 
 
+class PushTokenRequest(BaseModel):
+    token: str
+    platform: str = ""  # "phone" | "watch"
+
+
 class MaintenanceFullUpgradeRequest(BaseModel):
     confirmation: str = ""
 
