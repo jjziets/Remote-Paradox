@@ -913,6 +913,16 @@ def run_ble_server():
     dbus.mainloop.glib.DBusGMainLoop(set_as_default=True)
     bus = dbus.SystemBus()
 
+    # Register a Just Works (NoInputNoOutput) pairing agent as the default agent.
+    # Without this, BlueZ negotiates a passkey the headless Pi cannot display or
+    # confirm, so phones/watches get a passcode prompt that never succeeds.
+    # Keep a reference for the lifetime of the main loop so it isn't GC'd.
+    try:
+        pairing_agent = register_pairing_agent(bus)  # noqa: F841 (held to keep agent alive)
+    except Exception as e:
+        pairing_agent = None  # noqa: F841
+        logger.warning("Could not register pairing agent: %s", e)
+
     adapter_path = _find_adapter(bus)
     if not adapter_path:
         logger.error("No BLE adapter found — cannot start GATT server")
