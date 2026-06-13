@@ -13,6 +13,13 @@ if (keystorePropertiesFile.exists()) {
     keystoreProperties.load(keystorePropertiesFile.inputStream())
 }
 
+// Firebase: apply the google-services plugin only when google-services.json is
+// present (it is git-ignored — placed locally and injected in CI). Builds without
+// it still succeed; FCM is simply inactive in that case.
+if (file("google-services.json").exists()) {
+    apply(plugin = "com.google.gms.google-services")
+}
+
 android {
     namespace = "com.remoteparadox.watch"
     compileSdk = 35
@@ -64,6 +71,10 @@ android {
 }
 
 dependencies {
+    // Firebase (FCM push for health alerts); BoM keeps versions aligned
+    implementation(platform("com.google.firebase:firebase-bom:34.14.1"))
+    implementation("com.google.firebase:firebase-messaging")
+
     // Wear OS Compose
     val composeBom = platform("androidx.compose:compose-bom:2024.12.01")
     implementation(composeBom)

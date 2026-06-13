@@ -24,6 +24,9 @@ android-app/watch-app/build/
 android-app/local.properties
 android-app/keystore.properties
 android-app/release-keystore.jks
+# Firebase config (contains project keys) — kept out of the public repo; provided
+# locally and injected in CI from the GOOGLE_SERVICES_JSON_BASE64 secret.
+google-services.json
 *.apk
 !releases/*.apk
 
