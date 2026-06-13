@@ -3,6 +3,8 @@ package com.remoteparadox.app.fcm
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.content.Context
+import android.media.AudioAttributes
+import android.net.Uri
 import android.os.Build
 import android.util.Log
 import com.google.firebase.messaging.FirebaseMessaging
@@ -24,12 +26,18 @@ object PushManager {
     fun ensureChannels(context: Context) {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
         val nm = context.getSystemService(NotificationManager::class.java) ?: return
+        val sirenUri = Uri.parse("android.resource://${context.packageName}/${com.remoteparadox.app.R.raw.siren}")
+        val alarmAudio = AudioAttributes.Builder()
+            .setUsage(AudioAttributes.USAGE_ALARM)
+            .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
+            .build()
         nm.createNotificationChannel(
             NotificationChannel(CHANNEL_CRITICAL, "Alarm triggered", NotificationManager.IMPORTANCE_HIGH).apply {
                 description = "House alarm went off"
                 enableVibration(true)
                 vibrationPattern = alarmVibration
                 enableLights(true)
+                setSound(sirenUri, alarmAudio)
             }
         )
         nm.createNotificationChannel(

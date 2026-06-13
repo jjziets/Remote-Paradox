@@ -1685,20 +1685,32 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         if (!_state.value.soundEnabled) return
         try {
             mediaPlayer?.release()
-            val uri = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_ALARM)
-                ?: RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION)
+            val ctx = getApplication<Application>()
+            val uri = Uri.parse("android.resource://${ctx.packageName}/${com.remoteparadox.app.R.raw.siren}")
             mediaPlayer = MediaPlayer().apply {
                 setAudioAttributes(AudioAttributes.Builder()
                     .setUsage(AudioAttributes.USAGE_ALARM)
                     .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
                     .build())
-                setDataSource(getApplication<Application>(), uri)
-                isLooping = false
+                setDataSource(ctx, uri)
+                isLooping = true   // continuous siren until the alarm is cleared/disarmed
                 prepare()
                 start()
             }
         } catch (e: Exception) {
             Log.w(TAG, "Failed to play alarm sound: ${e.message}")
+        }
+    }
+
+    private fun stopAlarmSound() {
+        try {
+            mediaPlayer?.let { mp ->
+                if (mp.isPlaying) mp.stop()
+                mp.release()
+            }
+            mediaPlayer = null
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to stop alarm sound: ${e.message}")
         }
     }
 
@@ -1754,6 +1766,11 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                     if (alarmZones.isNotBlank()) "Zones: $alarmZones" else "Alarm activated"
                 )
                 playAlarmSound()
+            }
+
+            // Alarm cleared — stop the siren
+            if (prevMode == "triggered" && p.mode != "triggered") {
+                stopAlarmSound()
             }
 
             // Armed (away or stay)

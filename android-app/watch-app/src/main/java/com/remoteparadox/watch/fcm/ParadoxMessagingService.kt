@@ -42,6 +42,10 @@ class ParadoxMessagingService : FirebaseMessagingService() {
             .setContentIntent(pendingIntent)
             .build()
 
+        if (critical) {
+            notification.flags = notification.flags or android.app.Notification.FLAG_INSISTENT
+        }
+
         val nm = getSystemService(NotificationManager::class.java)
         val id = if (critical) 1001 else (2000..2999).random()
         nm?.notify(id, notification)
