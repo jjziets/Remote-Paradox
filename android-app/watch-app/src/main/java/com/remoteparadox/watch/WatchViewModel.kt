@@ -10,6 +10,7 @@ import com.google.android.gms.wearable.MessageClient
 import com.google.android.gms.wearable.MessageEvent
 import com.google.android.gms.wearable.Wearable
 import com.remoteparadox.watch.data.*
+import com.remoteparadox.watch.fcm.PushManager
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -192,6 +193,7 @@ class WatchViewModel(app: Application) : AndroidViewModel(app) {
         Log.d(TAG, "connectApi: url=$url, fingerprint=${if (fp.isNotEmpty()) "SET" else "EMPTY"}")
         api = ApiClient.create(url, fp)
         Log.d(TAG, "connectApi: API client created")
+        PushManager.registerCurrentToken(getApplication())
     }
 
     // -- Status --

@@ -18,6 +18,7 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.remoteparadox.app.BuildConfig
 import com.remoteparadox.app.data.*
+import com.remoteparadox.app.fcm.PushManager
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -722,6 +723,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     fun startRealtimeUpdates() {
         stopRealtimeUpdates()
+        PushManager.registerCurrentToken(getApplication())
         refreshStatus()
         refreshHistory()
         connectWebSocket()

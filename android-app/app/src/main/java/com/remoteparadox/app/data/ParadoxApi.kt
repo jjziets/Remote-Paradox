@@ -23,6 +23,12 @@ interface ParadoxApi {
     @GET("alarm/status")
     suspend fun alarmStatus(@Header("Authorization") auth: String): Response<AlarmStatus>
 
+    @POST("system/register-push-token")
+    suspend fun registerPushToken(
+        @Header("Authorization") auth: String,
+        @Body req: PushTokenRequest,
+    ): Response<ActionResult>
+
     @POST("alarm/arm-away")
     suspend fun armAway(
         @Header("Authorization") auth: String,
