@@ -21,7 +21,7 @@ android {
         applicationId = "com.remoteparadox.app"
         minSdk = 30
         targetSdk = 34
-        versionCode = 15
+        versionCode = 16
         versionName = "1.2.10"
     }
 

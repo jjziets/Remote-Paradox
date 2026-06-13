@@ -22,6 +22,7 @@ import androidx.compose.ui.unit.sp
 import androidx.wear.compose.foundation.lazy.ScalingLazyColumn
 import androidx.wear.compose.foundation.lazy.rememberScalingLazyListState
 import androidx.wear.compose.material3.*
+import com.remoteparadox.watch.BuildConfig
 import com.remoteparadox.watch.PendingArm
 import com.remoteparadox.watch.PartitionColor
 import com.remoteparadox.watch.bypassedZones
@@ -207,6 +208,17 @@ fun DashboardScreen(
             ) {
                 Text("Logout", style = MaterialTheme.typography.bodySmall)
             }
+        }
+
+        item { Spacer(modifier = Modifier.height(8.dp)) }
+
+        item {
+            Text(
+                text = "Remote Paradox\nv${BuildConfig.VERSION_NAME} (build ${BuildConfig.VERSION_CODE})",
+                style = MaterialTheme.typography.bodySmall,
+                color = Color.White.copy(alpha = 0.4f),
+                textAlign = TextAlign.Center,
+            )
         }
 
         item { Spacer(modifier = Modifier.height(24.dp)) }
