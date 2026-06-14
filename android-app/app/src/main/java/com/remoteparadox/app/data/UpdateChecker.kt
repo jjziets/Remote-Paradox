@@ -46,8 +46,13 @@ object UpdateChecker {
     fun check(): UpdateInfo {
         val currentVersion = BuildConfig.VERSION_NAME
         val release = fetchLatestRelease()
-        val latestVersion = release.tag_name.removePrefix("v")
+        val tagVersion = release.tag_name.removePrefix("v")
         val apkAsset = findPhoneAsset(release.assets)
+        // Phone and watch are versioned independently: read each app's version
+        // from its own APK filename (e.g. remote-paradox-phone-1.2.25.apk), not
+        // the shared release tag — otherwise bumping one app offers a no-op
+        // "update" on the other. Fall back to the tag for old, unversioned assets.
+        val latestVersion = apkAsset?.let { versionFromAssetName(it.name, tagVersion) } ?: tagVersion
 
         return UpdateInfo(
             latestVersion = latestVersion,
@@ -61,8 +66,9 @@ object UpdateChecker {
 
     fun checkWatch(currentWatchVersion: String): UpdateInfo {
         val release = fetchLatestRelease()
-        val latestVersion = release.tag_name.removePrefix("v")
+        val tagVersion = release.tag_name.removePrefix("v")
         val watchAsset = findWatchAsset(release.assets)
+        val latestVersion = watchAsset?.let { versionFromAssetName(it.name, tagVersion) } ?: tagVersion
 
         return UpdateInfo(
             latestVersion = latestVersion,
@@ -73,6 +79,10 @@ object UpdateChecker {
             releaseUrl = release.html_url,
         )
     }
+
+    /** Extract an x.y.z version from an APK asset filename; fall back if absent. */
+    private fun versionFromAssetName(name: String, fallback: String): String =
+        Regex("""(\d+\.\d+\.\d+)""").find(name)?.groupValues?.get(1) ?: fallback
 
     fun fetchLatestRelease(): GitHubRelease {
         val url = "https://api.github.com/repos/${BuildConfig.GITHUB_REPO}/releases/latest"

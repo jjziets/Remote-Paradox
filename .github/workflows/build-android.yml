@@ -84,18 +84,20 @@ jobs:
         if: steps.changes.outputs.watch_changed == 'true'
         run: ./gradlew :watch-app:assembleRelease
 
-      - name: Rename APKs
+      - name: Rename APKs (version in filename so phone/watch update independently)
         run: |
-          cp app/build/outputs/apk/release/*.apk remote-paradox-phone.apk
+          PHONE_VER=$(grep -E 'versionName *= *"' app/build.gradle.kts | head -1 | sed -E 's/.*"([^"]+)".*/\1/')
+          cp app/build/outputs/apk/release/*.apk "remote-paradox-phone-${PHONE_VER}.apk"
           if [[ "${{ steps.changes.outputs.watch_changed }}" == "true" ]]; then
-            cp watch-app/build/outputs/apk/release/*.apk remote-paradox-watch.apk
+            WATCH_VER=$(grep -E 'versionName *= *"' watch-app/build.gradle.kts | head -1 | sed -E 's/.*"([^"]+)".*/\1/')
+            cp watch-app/build/outputs/apk/release/*.apk "remote-paradox-watch-${WATCH_VER}.apk"
           fi
 
       - name: Upload phone APK
         uses: actions/upload-artifact@v4
         with:
           name: phone-app-release
-          path: android-app/remote-paradox-phone.apk
+          path: android-app/remote-paradox-phone-*.apk
           if-no-files-found: error
 
       - name: Upload watch APK
@@ -103,7 +105,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: watch-app-release
-          path: android-app/remote-paradox-watch.apk
+          path: android-app/remote-paradox-watch-*.apk
           if-no-files-found: error
 
       - name: Create GitHub Release
@@ -111,10 +113,10 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          assets=(remote-paradox-phone.apk)
-          if [[ -f remote-paradox-watch.apk ]]; then
-            assets+=(remote-paradox-watch.apk)
-          fi
+          assets=()
+          for f in remote-paradox-phone-*.apk remote-paradox-watch-*.apk; do
+            [[ -f "$f" ]] && assets+=("$f")
+          done
           gh release create "${{ github.ref_name }}" \
             --title "${{ github.ref_name }}" \
             --generate-notes \
