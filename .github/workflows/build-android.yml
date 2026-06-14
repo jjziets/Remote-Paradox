@@ -81,17 +81,18 @@ jobs:
         run: ./gradlew :app:assembleRelease
 
       - name: Build watch app (release)
-        if: steps.changes.outputs.watch_changed == 'true'
         run: ./gradlew :watch-app:assembleRelease
 
       - name: Rename APKs (version in filename so phone/watch update independently)
         run: |
+          # Always attach BOTH APKs to every release so the latest release always
+          # carries the current phone AND watch builds — the in-app updater reads
+          # each app's version from its own filename, so a release missing one
+          # APK would make that app's updates unreachable.
           PHONE_VER=$(grep -E 'versionName *= *"' app/build.gradle.kts | head -1 | sed -E 's/.*"([^"]+)".*/\1/')
           cp app/build/outputs/apk/release/*.apk "remote-paradox-phone-${PHONE_VER}.apk"
-          if [[ "${{ steps.changes.outputs.watch_changed }}" == "true" ]]; then
-            WATCH_VER=$(grep -E 'versionName *= *"' watch-app/build.gradle.kts | head -1 | sed -E 's/.*"([^"]+)".*/\1/')
-            cp watch-app/build/outputs/apk/release/*.apk "remote-paradox-watch-${WATCH_VER}.apk"
-          fi
+          WATCH_VER=$(grep -E 'versionName *= *"' watch-app/build.gradle.kts | head -1 | sed -E 's/.*"([^"]+)".*/\1/')
+          cp watch-app/build/outputs/apk/release/*.apk "remote-paradox-watch-${WATCH_VER}.apk"
 
       - name: Upload phone APK
         uses: actions/upload-artifact@v4
@@ -101,7 +102,6 @@ jobs:
           if-no-files-found: error
 
       - name: Upload watch APK
-        if: steps.changes.outputs.watch_changed == 'true'
         uses: actions/upload-artifact@v4
         with:
           name: watch-app-release
