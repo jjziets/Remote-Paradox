@@ -91,11 +91,23 @@ class UpdateListenerService : WearableListenerService() {
                     addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
                     addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                 }
-                // A background service can't reliably startActivity() on Android 10+
-                // (the installer is silently blocked), so surface a tappable
-                // notification — the user's tap launches the installer reliably.
+                // Primary path: pop the installer up directly. On Wear OS the
+                // foreground installer appears immediately after the transfer —
+                // that's the expected UX and what worked before. (Officially a
+                // background activity launch is restricted on Android 10+, but
+                // the watch grants it here; we don't rely on that assumption.)
+                var popped = false
+                try {
+                    startActivity(installIntent)
+                    popped = true
+                    Log.i(TAG, "Install activity launched")
+                } catch (e: Exception) {
+                    Log.w(TAG, "Direct install launch failed: ${e.message}")
+                }
+                // Fallback: if the OS ever silently drops the launch, a tappable
+                // notification guarantees the install is never a dead end.
                 showInstallNotification(installIntent)
-                Log.i(TAG, "Install notification posted")
+                Log.i(TAG, "Install notification posted (popup launched=$popped)")
             } catch (e: Exception) {
                 Log.e(TAG, "Failed to receive/install APK", e)
             }
