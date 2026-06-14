@@ -1,7 +1,12 @@
 package com.remoteparadox.watch
 
+import android.app.NotificationChannel
+import android.app.NotificationManager
+import android.app.PendingIntent
 import android.content.Intent
+import android.os.Build
 import android.util.Log
+import androidx.core.app.NotificationCompat
 import androidx.core.content.FileProvider
 import com.google.android.gms.wearable.ChannelClient
 import com.google.android.gms.wearable.MessageEvent
@@ -86,11 +91,38 @@ class UpdateListenerService : WearableListenerService() {
                     addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
                     addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                 }
-                startActivity(installIntent)
-                Log.i(TAG, "PackageInstaller launched")
+                // A background service can't reliably startActivity() on Android 10+
+                // (the installer is silently blocked), so surface a tappable
+                // notification — the user's tap launches the installer reliably.
+                showInstallNotification(installIntent)
+                Log.i(TAG, "Install notification posted")
             } catch (e: Exception) {
                 Log.e(TAG, "Failed to receive/install APK", e)
             }
         }
+    }
+
+    private fun showInstallNotification(installIntent: Intent) {
+        val nm = getSystemService(NotificationManager::class.java) ?: return
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            nm.createNotificationChannel(
+                NotificationChannel(
+                    "watch_updates", "Watch updates", NotificationManager.IMPORTANCE_HIGH,
+                ).apply { description = "Watch app update ready to install" }
+            )
+        }
+        val pendingIntent = PendingIntent.getActivity(
+            this, 0, installIntent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+        )
+        val notification = NotificationCompat.Builder(this, "watch_updates")
+            .setSmallIcon(android.R.drawable.stat_sys_download_done)
+            .setContentTitle("Watch update ready")
+            .setContentText("Tap to install the new Remote Paradox watch app")
+            .setPriority(NotificationCompat.PRIORITY_HIGH)
+            .setAutoCancel(true)
+            .setContentIntent(pendingIntent)
+            .build()
+        nm.notify(9001, notification)
     }
 }
