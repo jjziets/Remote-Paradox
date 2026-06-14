@@ -1,0 +1,10 @@
+[Unit]
+Description=Paradox Bridge Update Checker
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=root
+# Polls GitHub for the latest bridge-v* release and stages it (see scripts/updater.py).
+ExecStart=/opt/paradox-bridge/venv/bin/python3 /opt/paradox-bridge/scripts/updater.py

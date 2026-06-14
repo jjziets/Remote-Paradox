@@ -69,7 +69,7 @@ if [ -f "$BRIDGE_SRC/deploy/setup-boot-fsck.sh" ]; then
     cp "$BRIDGE_SRC/deploy/setup-boot-fsck.sh" "$INSTALL_DIR/deploy/setup-boot-fsck.sh"
     chmod +x "$INSTALL_DIR/deploy/setup-boot-fsck.sh"
 fi
-for deploy_script in boot-repair.sh setup-boot-repair.sh wifi-watchdog.sh setup-wifi-watchdog.sh; do
+for deploy_script in boot-repair.sh setup-boot-repair.sh wifi-watchdog.sh setup-wifi-watchdog.sh setup-watchdog.sh setup-zram-swap.sh setup-panic-recovery.sh; do
     if [ -f "$BRIDGE_SRC/deploy/$deploy_script" ]; then
         mkdir -p "$INSTALL_DIR/deploy"
         cp "$BRIDGE_SRC/deploy/$deploy_script" "$INSTALL_DIR/deploy/$deploy_script"
@@ -110,6 +110,18 @@ fi
 if [ -x "$INSTALL_DIR/deploy/setup-boot-repair.sh" ]; then
     echo "[apply_update] Ensuring boot repair timer is installed..."
     "$INSTALL_DIR/deploy/setup-boot-repair.sh" || echo "[apply_update] WARNING: boot repair setup failed"
+fi
+if [ -x "$INSTALL_DIR/deploy/setup-watchdog.sh" ]; then
+    echo "[apply_update] Ensuring hardware watchdog is armed..."
+    "$INSTALL_DIR/deploy/setup-watchdog.sh" || echo "[apply_update] WARNING: watchdog setup failed"
+fi
+if [ -x "$INSTALL_DIR/deploy/setup-zram-swap.sh" ]; then
+    echo "[apply_update] Ensuring zram swap is configured..."
+    "$INSTALL_DIR/deploy/setup-zram-swap.sh" || echo "[apply_update] WARNING: zram swap setup failed"
+fi
+if [ -x "$INSTALL_DIR/deploy/setup-panic-recovery.sh" ]; then
+    echo "[apply_update] Ensuring panic auto-reboot + crash capture is configured..."
+    "$INSTALL_DIR/deploy/setup-panic-recovery.sh" || echo "[apply_update] WARNING: panic recovery setup failed"
 fi
 
 echo "[apply_update] Configuring Bluetooth for LE-only (no audio profiles)..."

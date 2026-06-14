@@ -108,6 +108,36 @@ curl -fsS http://127.0.0.1:8080/health
 
 The timer is intentionally conservative. It does not run full OS upgrades and cannot repair a Pi that cannot boot Linux or reach the network.
 
+### Crash hardening (watchdog, zram, panic recovery)
+
+The Pi Zero 2 W has a single green ACT LED (no power/undervoltage LED) and only ~512 MB RAM. These scripts reduce both the rate of crashes and the time spent unrecovered after one. They are installed automatically by `apply_update.sh` and can be run by hand on the live Pi.
+
+| Artifact | Role |
+|----------|------|
+| `paradox-bridge/deploy/setup-watchdog.sh` | Arms the systemd hardware watchdog (`RuntimeWatchdogSec=14`, just under the bcm2835 ~15s max) so a soft hang auto-resets instead of sitting frozen |
+| `paradox-bridge/deploy/setup-zram-swap.sh` | Replaces the on-SD `dphys-swapfile` with compressed RAM swap (`zram-swap.service`, zstd) so memory pressure never writes to / wears the SD card |
+| `paradox-bridge/deploy/setup-panic-recovery.sh` | Sets `kernel.panic=10`/`panic_on_oops=1`, adds `panic=10` to the kernel cmdline (boot-time panics auto-reboot and retry the forced fsck), and enables `dtoverlay=ramoops` so the next panic log survives the reboot in `/sys/fs/pstore` |
+
+Install on the Pi:
+
+```bash
+sudo bash /opt/paradox-bridge/deploy/setup-watchdog.sh
+sudo bash /opt/paradox-bridge/deploy/setup-zram-swap.sh
+sudo bash /opt/paradox-bridge/deploy/setup-panic-recovery.sh   # cmdline/ramoops changes need a reboot
+```
+
+Useful checks:
+
+```bash
+systemctl show -p RuntimeWatchdogUSec --value     # watchdog armed
+swapon --show                                     # should list only /dev/zram0
+grep -o 'panic=[0-9]*' /proc/cmdline              # panic=10 active
+cat /sys/module/pstore/parameters/backend         # ramoops
+ls /sys/fs/pstore/                                # captured crash logs, if any
+```
+
+**Limitations:** the watchdog cannot recover an instant power cut (the board is already off), and none of this repairs a corrupt or failing SD card — a steady ~1 Hz ACT-LED blink that never boots indicates the kernel is stuck (typically a corrupt rootfs), which needs a reflash onto a genuine endurance card.
+
 ### Bridge updater and apply path
 
 The Pi update path is bridge-source based:
@@ -178,7 +208,8 @@ Until a dedicated deploy workflow exists:
 4. When boot fsck policy changes: `sudo bash /opt/paradox-bridge/deploy/setup-boot-fsck.sh`
 5. When watchdog scripts change: `sudo bash /opt/paradox-bridge/deploy/setup-wifi-watchdog.sh`
 6. When boot-repair scripts change: `sudo bash /opt/paradox-bridge/deploy/setup-boot-repair.sh`
-7. Restart the **paradox-bridge** systemd unit after application changes (unit name as on your image).
+7. When crash-hardening scripts change: `sudo bash /opt/paradox-bridge/deploy/setup-watchdog.sh`, `setup-zram-swap.sh`, and `setup-panic-recovery.sh` (the last needs a reboot for cmdline/ramoops).
+8. Restart the **paradox-bridge** systemd unit after application changes (unit name as on your image).
 
 Use **SSH keys** and **sudo** appropriate to your environment; do not paste private key material into issues or PRs.
 
