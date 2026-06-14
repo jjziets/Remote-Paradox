@@ -904,8 +904,15 @@ def apply_update(
         raise HTTPException(status_code=400, detail="No pending update")
     audit.record(admin["sub"], "apply_update", f"Applying {data.get('new_version', '?')}")
     try:
+        # Run the apply in a detached transient systemd unit (not in the bridge's
+        # cgroup) so that apply_update.sh restarting paradox-bridge does not kill
+        # the apply mid-run. Mirrors how the OS-maintenance jobs are launched.
         subprocess.Popen(
-            ["sudo", str(APPLY_SCRIPT)],
+            [
+                "sudo", "-n", "systemd-run", "--no-block", "--collect",
+                "--property=Type=oneshot",
+                "/bin/bash", str(APPLY_SCRIPT),
+            ],
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
         )
         return {"success": True, "message": f"Applying update to {data.get('new_version')}. Service will restart."}
