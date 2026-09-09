@@ -267,10 +267,21 @@ deployment: check the Pi's root-owned receipt and live health as documented in
 the runbook. Existing TLS certificates, users and configuration are preserved;
 OS packages are not upgraded by bridge releases.
 
+**Live verified 2026-09-09:** GitHub CI published signed `bridge-v1.0.10` from
+`bc0efe3`; the Pi pulled it and recorded `state=verified` at 12:45:23 UTC.
+Authenticated HTTP status and nine WebSocket snapshots over 37 seconds were
+healthy, with panel poll age at most 6.56 seconds. Certificate, configuration and
+user-account fingerprints were unchanged. The bridge, BLE, nginx, state recorder
+and signed timer were active. No physical alarm command or OS upgrade was run.
+See the [tested deployment record](docs/signed-pi-deployment.md#tested-deployment).
+
 ### Deployment From Scratch (Pi)
 
 This is the repo-backed path from a blank SD card to a working Pi. Commands that
 depend on the current Pi image are explicitly marked for live verification.
+The signed bootstrap and live upgrade below were tested on the existing
+Bookworm/Python 3.11 Pi; a destructive fresh-card flash was not repeated during
+this release.
 
 #### 1. Prepare and flash the SD card
 
@@ -388,6 +399,17 @@ After the first successful admin login, change the bootstrap admin password from
 the app or web dashboard.
 
 #### 4. Install nginx and recovery hardening
+
+`setup-nginx.sh` disables SSH password authentication. Install your SSH public
+key first and verify a second key-only connection before running it, keeping
+the original session open:
+
+```bash
+ssh-copy-id <PI_USERNAME>@remote-paradox.local
+ssh -o BatchMode=yes <PI_USERNAME>@remote-paradox.local true
+```
+
+Do not proceed to nginx setup if that key-only check fails.
 
 After `/opt/paradox-bridge` is populated and the bridge service can start:
 

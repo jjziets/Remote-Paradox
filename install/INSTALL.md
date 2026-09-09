@@ -56,21 +56,34 @@ ssh-copy-id <user>@<hostname>.local
 
 ## 4. Put the bridge on the Pi
 
+From the workstation checkout (replace the SSH placeholders):
+
 ```bash
-# from your workstation, sync the repo onto the Pi:
-rsync -a paradox-bridge/ <user>@<hostname>:/tmp/pb/      # then move into place as root, or:
-sudo rsync -a /tmp/pb/ /opt/paradox-bridge/
-sudo rsync -a web-app/  /opt/paradox-bridge/web-app/
+ssh <user>@<hostname> 'mkdir -p /tmp/remote-paradox-bootstrap'
+rsync -a --exclude=venv --exclude=.venv --exclude=__pycache__ \
+  paradox-bridge/ <user>@<hostname>:/tmp/remote-paradox-bootstrap/paradox-bridge/
+rsync -a web-app/ <user>@<hostname>:/tmp/remote-paradox-bootstrap/web-app/
+rsync -a install/ <user>@<hostname>:/tmp/remote-paradox-bootstrap/install/
+ssh <user>@<hostname>
+```
+
+All remaining commands in this guide run **on the Pi**:
+
+```bash
+cd /tmp/remote-paradox-bootstrap
+sudo install -d /opt/paradox-bridge
+sudo rsync -a paradox-bridge/ /opt/paradox-bridge/
+sudo rsync -a web-app/ /opt/paradox-bridge/web-app/
 
 # build the Python venv (Python 3.11 on bookworm):
-sudo apt-get install -y python3-venv python3-cryptography python3-dbus python3-gi bluez
+sudo apt-get update
+sudo apt-get install -y python3-venv python3-cryptography python3-dbus python3-gi bluez nginx
 sudo python3 -m venv --system-site-packages /opt/paradox-bridge/venv
 sudo /opt/paradox-bridge/venv/bin/pip install -e '/opt/paradox-bridge[pi]'
 
 # runtime state dir (owned by the service user):
 sudo install -d -o <user> -g <user> \
   /var/lib/paradox-bridge/maintenance/jobs /var/lib/paradox-bridge/maintenance/logs
-sudo apt-get update && sudo apt-get install -y nginx
 ```
 
 ---
@@ -100,12 +113,13 @@ Fill in:
 
 ```bash
 sudo cp install/systemd/paradox-bridge.service install/systemd/paradox-ble.service /etc/systemd/system/
-sudo nano /etc/systemd/system/paradox-bridge.service   # set PARADOX_ADMIN_USER / PARADOX_ADMIN_PASS, and User= if not 'home'
+sudo nano /etc/systemd/system/paradox-bridge.service   # set admin credentials and BOTH User=/Group= if not 'home'
 sudo systemctl daemon-reload
 sudo usermod -aG dialout <user>
 sudo systemctl enable --now paradox-bridge paradox-ble
 sudo bash /opt/paradox-bridge/deploy/setup-state-recorder.sh
 sudo bash /opt/paradox-bridge/deploy/setup-command-diagnostics.sh
+sudo systemctl restart paradox-bridge
 ```
 - `paradox-bridge` — the API/app (binds `127.0.0.1:8080`).
 - `paradox-ble` — local Bluetooth LE control fallback (root).
@@ -136,8 +150,9 @@ sudo bash setup-power-hardening.sh # disable sleep and Wi-Fi power saving
 sudo reboot                         # required for the cmdline/ramoops changes
 ```
 
-For an always-on alarm node, also consider a **read-only / overlay root** so a power
-cut cannot corrupt the filesystem.
+An overlay/read-only root is not enabled by these scripts. It can reduce writes,
+but does not guarantee protection from power-loss corruption and needs a separate
+design for persistent credentials, database/log storage and writable update mode.
 
 ---
 

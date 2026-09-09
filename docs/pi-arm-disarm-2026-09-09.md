@@ -203,3 +203,19 @@ verification, installation, durable rollback and the live receipt required to
 claim deployment. This candidate evidence alone does not prove production
 deployment or physical arm/disarm behavior. Record live results below after
 CI and Pi verification, without publishing credentials or alarm state details.
+
+## Live Deployment Result
+
+The candidate was merged and released as signed bridge `1.0.10`; the earlier
+local-only limitation is superseded for the Pi. CI and the live signed pull
+deployment succeeded on 2026-09-09. The receipt records commit `bc0efe3` and
+`state=verified` at 12:45:23 UTC. Authenticated HTTP and nine WebSocket snapshots
+over 37 seconds remained connected with panel poll age at most 6.56 seconds.
+TLS, configuration and user identities were preserved. The service-user update
+check successfully delegated to the root verifier without needing a GitHub token.
+
+Full evidence and remaining limits are in the
+[tested deployment record](signed-pi-deployment.md#tested-deployment). This proves
+delivery of the Pi fixes and live status flow, not elimination of intermittent
+UART failures or successful physical alarm changes. Continue collecting precise
+incident times and command logs if the next supervised phone/watch test fails.
