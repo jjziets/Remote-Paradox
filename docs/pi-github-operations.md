@@ -10,13 +10,20 @@ This document records **Pi-related behaviour and repo-owned tooling** so the tea
 |--------|-------------|-------------------------|
 | Push to **`main`** | `.github/workflows/build-android.yml` | Does **not** deploy to the Pi |
 | Push **`v*`** tags | Same workflow + GitHub Release with Android APK assets | Same — **no** Pi deploy |
-| Publish **`bridge-v*`** releases | No workflow in this repo today | Does **not** build Android APKs |
+| Push **`bridge-v*`** tags | `.github/workflows/release-bridge.yml`: tests, signs and publishes the bridge | Does **not** build APKs or upgrade the OS |
 
-The Android workflow builds **signed Android release APKs** on GitHub-hosted runners, uploads **artifacts**, and on `v*` tags publishes APKs to a **release**. It always builds the phone APK. It builds and uploads the watch APK only when watch files or shared Gradle files changed.
+The Android workflow tests and builds **signed Android release APKs** on GitHub-hosted runners and publishes both versioned APKs on `v*` tags. A watch-only version is not increased for a phone-only change, but both assets remain discoverable by the apps.
 
-Bridge/Pi releases use the separate `bridge-v*` tag channel. The Pi-side updater selects non-draft, non-prerelease `bridge-v*` releases and stages the GitHub source tarball. This keeps bridge recovery separate from Android APK releases. **Paradox Bridge, nginx, the web app, and Pi-only scripts are not deployed by CI** unless you add a separate workflow and drive deploy credentials from **GitHub Encrypted Secrets** (never hard-code keys or hosts in YAML).
+Bridge/Pi releases use the separate `bridge-v*` channel. After the one-time
+[signed updater bootstrap](signed-pi-deployment.md), the Pi polls public GitHub
+every five minutes, verifies the pinned Ed25519 signature and file hashes, and
+installs the bridge source and recovery helpers. CI uses GitHub-hosted runners;
+the Pi needs neither a runner nor a GitHub token. Existing nginx/TLS identity,
+web assets, configuration and users are preserved. OS upgrades remain explicit.
 
-Current bridge release state from the recovery plan: production has reported bridge `/system/version` as `1.0.1` from `bridge-v1.0.1`. Re-check the live Pi before using that as release evidence.
+**A published release is not proof of deployment.** Confirm the root-owned
+`/var/lib/paradox-updater/deployment.json` receipt, running version, service
+health and fresh panel polling using the linked deployment runbook.
 
 ---
 
@@ -60,6 +67,127 @@ journalctl -t wifi-watchdog
 Optional environment variables (set via **systemd drop-in**, not committed secrets): `WIFI_WATCHDOG_IFACE`, `WIFI_WATCHDOG_NM_CONN`.
 
 **Limitations:** Does not fix total power loss, SD faults, or a wedged kernel—only recoverable WiFi / DHCP / NetworkManager states.
+
+### One-second Pi state recorder
+
+`paradox-bridge/deploy/setup-state-recorder.sh` installs
+`paradox-state-recorder.service`, a small "black box" logger for the recurring
+Pi offline/hang investigation. It writes one compact state line per second to
+minute-sized files under:
+
+```bash
+/var/log/paradox-bridge/state-recorder/state-YYYYMMDD-HHMM.log
+```
+
+Retention is intentionally capped: the recorder deletes `state-*.log` files
+older than 24 hours. This keeps the last day of evidence without growing an
+unbounded log on the SD card.
+
+Each sample records:
+
+- wall-clock time and epoch,
+- uptime and load,
+- available memory and root filesystem space,
+- CPU temperature and Raspberry Pi throttle flags where `vcgencmd` exists,
+- `wlan0` NetworkManager state, IPv4 address, and gateway,
+- systemd states for `paradox-bridge`, `paradox-ble`, `nginx`,
+  `NetworkManager`, `ssh`, and `avahi-daemon`,
+- local bridge health through `http://127.0.0.1:8080/health`.
+
+Install on the Pi:
+
+```bash
+sudo bash /opt/paradox-bridge/deploy/setup-state-recorder.sh
+```
+
+Useful checks during or after the next outage:
+
+```bash
+systemctl status paradox-state-recorder --no-pager
+sudo ls -lh /var/log/paradox-bridge/state-recorder/
+latest=$(sudo ls -1 /var/log/paradox-bridge/state-recorder/state-*.log | tail -1)
+sudo tail -120 "$latest"
+sudo grep -R "health=fail\\|bridge=inactive\\|network=inactive\\|nm_state=.*disconnected\\|throttled=0x[^0]" /var/log/paradox-bridge/state-recorder/ | tail -100
+journalctl --list-boots
+journalctl -b -1 -n 200 --no-pager
+```
+
+How to read the evidence:
+
+- If there is a time gap in `epoch=` values and the next line has low `uptime=`,
+  the Pi rebooted or lost power.
+- If `uptime=` keeps increasing but `health=fail`, inspect bridge/nginx service
+  state and `journalctl -u paradox-bridge -u nginx`.
+- If `network=active` but `nm_state` changes away from `100_(connected)`, inspect
+  NetworkManager and the WiFi watchdog logs.
+- If `throttled` changes from `0x0`, suspect power/undervoltage or thermal
+  throttling. The exact bit meaning is Raspberry Pi firmware-specific, so check
+  `vcgencmd get_throttled` documentation for the running image.
+- If the logs stop while the Pi LEDs are still blinking, suspect a kernel hang,
+  storage stall, or power instability rather than application-level failure.
+
+This recorder is diagnostic only. It does not repair failures; it gives us the
+last known second-by-second state before the next incident.
+
+### Arm/disarm command diagnostics
+
+Added during the 2026-09-09 investigation. The state recorder's `health=ok`
+only means `/health` returned HTTP success; it does not inspect the JSON
+`alarm_connected` field or prove that the panel acknowledged an alarm command.
+Use the additional command log to diagnose slow or unsuccessful operations.
+
+Install after deploying `src/paradox_bridge/diagnostics.py` and the matching
+`alarm.py` / `main.py` instrumentation:
+
+```bash
+sudo bash /opt/paradox-bridge/deploy/setup-command-diagnostics.sh
+sudo systemctl restart paradox-bridge
+sudo tail -40 /var/log/paradox-bridge/command-diagnostics/commands.jsonl
+```
+
+The installer enables `PARADOX_DIAGNOSTICS_DIR` in a bridge systemd drop-in.
+The log directory is readable only by root and the bridge service user/group.
+JSON lines record UTC timestamps and the following evidence:
+
+- `request_started` / `request_finished`: one generated request ID, command
+  route, HTTP response status, returned `success` boolean, and elapsed time.
+  A 200 response with `accepted=false` is an unsuccessful command.
+- `command_started` / `command_waiting` / `command_result` / `command_error`:
+  partition ID, command, generated command ID, elapsed time, and cached panel
+  state. Waiting is recorded after 2 seconds and every 10 seconds thereafter.
+- `pai_signal`: allowlisted panel timeout, connection-loss and parser signals.
+  This retains signals that PAI may catch internally and convert to `False`.
+- `panel_state`: cached flags for each partition, open non-bypassed zone IDs,
+  connection flag, age of the last status poll, poll-task state, and request-lock
+  state. Cached state is checked every 5 seconds; changes and a 30-second
+  heartbeat are logged. Poll age above 15 seconds is marked stale for diagnosis,
+  not treated as proof of a broken connection or used to trigger recovery.
+
+No PINs, passwords, bearer tokens, request bodies, response detail strings,
+zone labels, or raw serial packets are recorded. Diagnostics do not send new
+alarm commands, add retries, or change the alarm command result. Panel acceptance
+and the actual later partition state are separate evidence; a result marked
+accepted is not proof that the requested state was reached.
+
+Files rotate hourly in UTC, retaining the current file and 23 archives
+(approximately the last 24 hours). Rotation happens when a record is written.
+This is separate from the one-second state recorder and the system journal.
+Writes are buffered by the OS, so sudden power loss can lose the last entries;
+stopped logs alone cannot prove sleep, a kernel crash, or a recorder failure.
+
+For the next incident, record its local time, device, partition and action;
+collect evidence promptly before it rotates:
+
+```bash
+sudo grep -hE 'request_|command_|pai_signal|panel_(connect|poll|status)' \
+  /var/log/paradox-bridge/command-diagnostics/commands.jsonl* | tail -120
+sudo journalctl -u paradox-bridge --since '20 minutes ago' --no-pager \
+  | sed -E 's/([?&]token=)[^ &"]+/\1[REDACTED]/g'
+```
+
+Existing bridge/nginx access logs can contain WebSocket query tokens. Redact
+them before sharing and keep incident archives outside Git. Full findings and
+verification limits are in [the September investigation](pi-arm-disarm-2026-09-09.md).
 
 ### Boot-time filesystem repair
 
@@ -140,13 +268,16 @@ ls /sys/fs/pstore/                                # captured crash logs, if any
 
 ### Bridge updater and apply path
 
-The Pi update path is bridge-source based:
+Once `/etc/paradox-updater/release-public.pem` is pinned, both legacy entrypoints
+delegate to the root-owned signed verifier. There is no unsigned fallback.
+The signed timer automatically applies newer releases; app checks verify release
+availability and manual apply can explicitly retry a quarantined release.
 
-1. `paradox-bridge/scripts/updater.py` queries GitHub releases.
-2. It selects the latest non-draft, non-prerelease `bridge-v*` release.
-3. It stages the release tarball under `/opt/paradox-bridge/staging`.
-4. It writes `/opt/paradox-bridge/update_status.json` with pending version metadata.
-5. `paradox-bridge/scripts/apply_update.sh` copies staged bridge source, scripts, deploy helpers, and package metadata into `/opt/paradox-bridge`, creates `/var/lib/paradox-bridge/maintenance`, reinstalls Python dependencies best-effort, ensures recovery helpers are installed, and restarts bridge/Bluetooth services.
+Deployments hold the same maintenance lock as OS jobs, preserve a durable code
+backup, and require the exact version, matching installed hashes, active
+services and three fresh panel health checks. Failure restores previous code;
+an interrupted install is recovered before the next network request. See
+[signed deployment](signed-pi-deployment.md) for limits and recovery commands.
 
 Manual checks:
 
@@ -198,9 +329,11 @@ not present this as an OS release upgrade.
 
 ---
 
-## Manual deploy checklist (bridge + static assets)
+## Bootstrap and separately managed assets
 
-Until a dedicated deploy workflow exists:
+Use the [signed bootstrap and release procedure](signed-pi-deployment.md) for
+bridge deployments. The following manual path is only for first installation
+or separately reviewed static web/nginx changes, not routine bridge updates:
 
 1. Sync `paradox-bridge/` into `/opt/paradox-bridge/`.
 2. Sync `web-app/` into `/opt/paradox-bridge/web-app/`.
@@ -226,12 +359,11 @@ From-scratch service bootstrap is documented in `README.md` with the
 
 ---
 
-## Future: automated Pi deploy from GitHub
+## CI/CD trust boundary
 
-If you add CI deploy later:
-
-- Use **repository or organisation secrets** for SSH host, user, and **private key** (or a short-lived token pattern your org approves).
-- Prefer **`[self-hosted, linux]`** or a locked-down SSH path per your org’s runner policy.
-- Keep deploy scripts in-repo; keep **values** in secrets.
-
-This file should remain free of deploy **values** so it stays safe to share publicly.
+GitHub Actions holds the bridge signing key and Android keystore in encrypted
+secrets. The Pi only receives the public bridge key. It makes outbound HTTPS
+requests and never exposes SSH to a runner. Transport TLS, bridge release
+signatures and Android APK signatures are separate controls. Publishing does
+not mint or replace the Pi's TLS certificate. Keep deployment values and private
+keys outside this repository.

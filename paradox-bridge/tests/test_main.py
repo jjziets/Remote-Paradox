@@ -501,7 +501,14 @@ class TestRealModeLifespan:
             try:
                 async def _test():
                     from paradox_bridge.main import _connect_alarm
-                    await _connect_alarm()
+                    connected = asyncio.Event()
+                    mock_connect.side_effect = lambda: connected.set()
+                    task = asyncio.create_task(_connect_alarm())
+                    try:
+                        await asyncio.wait_for(connected.wait(), 1)
+                    finally:
+                        task.cancel()
+                        await asyncio.gather(task, return_exceptions=True)
                 loop.run_until_complete(_test())
             finally:
                 loop.close()
@@ -531,20 +538,31 @@ class TestRealModeLifespan:
         call_count = 0
 
         async def flaky_connect(self_alarm):
+            from types import SimpleNamespace
             nonlocal call_count
             call_count += 1
             if call_count < 3:
                 raise ConnectionError("Serial port busy")
+            self_alarm._pai = SimpleNamespace(connection=SimpleNamespace(connected=True))
             self_alarm._connected = True
 
-        with patch.object(AlarmService, "connect", flaky_connect):
+        with patch.object(AlarmService, "connect", flaky_connect), \
+             patch.object(app_module, "_CONNECT_RETRY_DELAY", 0):
             init_services(config_path=cfg_path)
             app_module._auth.setup_admin("admin", "secret123")
             loop = asyncio.new_event_loop()
             try:
                 async def _test():
                     from paradox_bridge.main import _connect_alarm
-                    await _connect_alarm()
+                    task = asyncio.create_task(_connect_alarm())
+                    try:
+                        async def connected():
+                            while not app_module._alarm.is_connected:
+                                await asyncio.sleep(0)
+                        await asyncio.wait_for(connected(), 1)
+                    finally:
+                        task.cancel()
+                        await asyncio.gather(task, return_exceptions=True)
                 loop.run_until_complete(_test())
             finally:
                 loop.close()

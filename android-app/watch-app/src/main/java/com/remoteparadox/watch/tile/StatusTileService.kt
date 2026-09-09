@@ -1,6 +1,6 @@
 package com.remoteparadox.watch.tile
 
-import android.util.Log
+import androidx.concurrent.futures.CallbackToFutureAdapter
 import androidx.wear.protolayout.*
 import androidx.wear.protolayout.ActionBuilders
 import androidx.wear.protolayout.ColorBuilders.argb
@@ -10,19 +10,25 @@ import androidx.wear.protolayout.ModifiersBuilders.*
 import androidx.wear.protolayout.ResourceBuilders.*
 import androidx.wear.protolayout.TimelineBuilders.*
 import androidx.wear.tiles.RequestBuilders
+import androidx.wear.tiles.EventBuilders
 import androidx.wear.tiles.TileBuilders.Tile
 import androidx.wear.tiles.TileService
 import com.google.common.util.concurrent.Futures
 import com.google.common.util.concurrent.ListenableFuture
+import com.google.common.util.concurrent.MoreExecutors
 import com.remoteparadox.watch.data.AlarmStatus
 import com.remoteparadox.watch.data.ApiClient
 import com.remoteparadox.watch.data.RefreshRequest
 import com.remoteparadox.watch.data.WatchTokenStore
-import kotlinx.coroutines.runBlocking
+import com.remoteparadox.watch.data.WatchStatusCache
+import com.remoteparadox.watch.data.TileStatus
+import com.remoteparadox.watch.data.STATUS_MAX_AGE_MS
+import com.remoteparadox.watch.data.loadTileStatus
+import com.remoteparadox.watch.data.needsLegacyTokenRefresh
+import com.remoteparadox.watch.data.StatusCacheTicket
+import kotlinx.coroutines.*
 
-private const val TAG = "StatusTile"
 private const val RESOURCES_VERSION = "1"
-private const val TOKEN_REFRESH_AGE_MS = 36 * 60 * 60 * 1000L
 
 private const val COLOR_GREEN = 0xCC2E7D32.toInt()
 private const val COLOR_RED = 0xCCC62828.toInt()
@@ -36,40 +42,89 @@ private const val COLOR_BEVEL_LIGHT = 0x33FFFFFF.toInt()
 private const val CORNER_RADIUS = 16f
 
 class StatusTileService : TileService() {
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
     override fun onTileRequest(requestParams: RequestBuilders.TileRequest): ListenableFuture<Tile> {
         val tokenStore = WatchTokenStore(this)
-
         if (!tokenStore.isLoggedIn) {
             return Futures.immediateFuture(buildNotLoggedInTile())
         }
-
-        val status = fetchStatusBlocking(tokenStore)
-        val hasPending = status?.partitions?.any { tokenStore.isPendingAction(it.id) } == true
-
-        val layout = if (status == null) {
-            buildErrorLayout("Offline")
-        } else {
-            buildStatusLayout(status, tokenStore)
-        }
-
-        val isTriggered = status?.partitions?.any { it.mode == "triggered" } == true
-
-        val tile = Tile.Builder()
-            .setResourcesVersion(RESOURCES_VERSION)
-            .setFreshnessIntervalMillis(if (isTriggered || hasPending) 1_000 else 10_000)
-            .setTileTimeline(
-                Timeline.Builder()
-                    .addTimelineEntry(
-                        TimelineEntry.Builder()
-                            .setLayout(Layout.Builder().setRoot(layout).build())
-                            .build()
+        return CallbackToFutureAdapter.getFuture { completer ->
+            val job = scope.launch {
+                try {
+                    val cache = WatchStatusCache(this@StatusTileService, tokenStore)
+                    val ticket = cache.capture()
+                    val api = cache.ifCurrent(ticket) {
+                        ApiClient.create(tokenStore.baseUrl!!, tokenStore.certFingerprint.orEmpty())
+                    }
+                    if (api == null) {
+                        completer.set(buildTile(TileStatus(error = "Status unavailable\nOpen app"), tokenStore))
+                        return@launch
+                    }
+                    val result = loadTileStatus(
+                        cached = { cache.read(ticket) },
+                        fetch = {
+                            val auth = cache.ifCurrent(ticket) { tokenStore.bearerHeader }
+                                ?: error("Status request superseded")
+                            api.alarmStatus(auth)
+                        },
+                        refreshAuth = { refreshTokenIfNeeded(api, tokenStore, cache, ticket) },
+                        proactiveRefresh = needsLegacyTokenRefresh(tokenStore.refreshToken, tokenStore.tokenAgeMs),
                     )
+                    cache.ifCurrent(ticket) {
+                        result.snapshot?.let { cache.save(it, ticket) }
+                        val snapshot = if (result.snapshot != null) cache.read(ticket) else null
+                        completer.set(buildTile(result.copy(snapshot = snapshot), tokenStore))
+                    } ?: completer.set(buildTile(TileStatus(error = "Status unavailable\nOpen app"), tokenStore))
+                } catch (e: CancellationException) {
+                    completer.setCancelled()
+                } catch (_: Exception) {
+                    completer.set(buildTile(TileStatus(error = "Status unavailable\nOpen app"), tokenStore))
+                }
+            }
+            completer.addCancellationListener({ job.cancel() }, MoreExecutors.directExecutor())
+            "Alarm status tile"
+        }
+    }
+
+    override fun onTileEnterEvent(requestParams: EventBuilders.TileEnterEvent) {
+        super.onTileEnterEvent(requestParams)
+        getUpdater(this).requestUpdate(StatusTileService::class.java)
+    }
+
+    override fun onDestroy() {
+        scope.cancel()
+        super.onDestroy()
+    }
+
+    private fun buildTile(result: TileStatus, tokenStore: WatchTokenStore): Tile {
+        val snapshot = result.snapshot?.takeIf { it.isFresh(System.currentTimeMillis()) }
+        val status = snapshot?.status
+        val layout = when {
+            status == null -> buildErrorLayout(result.error ?: "Status stale\nOpen app")
+            !status.connected -> buildErrorLayout("Panel disconnected\nOpen app")
+            else -> buildStatusLayout(status, tokenStore)
+        }
+        val timeline = Timeline.Builder()
+        val entry = TimelineEntry.Builder().setLayout(Layout.Builder().setRoot(layout).build())
+        if (snapshot != null) {
+            val expiresAt = snapshot.receivedAt + STATUS_MAX_AGE_MS
+            entry.setValidity(TimeInterval.Builder().setStartMillis(snapshot.receivedAt).setEndMillis(expiresAt).build())
+            timeline.addTimelineEntry(entry.build())
+            timeline.addTimelineEntry(
+                TimelineEntry.Builder()
+                    .setValidity(TimeInterval.Builder().setStartMillis(expiresAt).setEndMillis(Long.MAX_VALUE).build())
+                    .setLayout(Layout.Builder().setRoot(buildErrorLayout("Status stale\nOpen app")).build())
                     .build()
             )
+        } else {
+            timeline.addTimelineEntry(entry.build())
+        }
+        return Tile.Builder()
+            .setResourcesVersion(RESOURCES_VERSION)
+            .setFreshnessIntervalMillis(10_000)
+            .setTileTimeline(timeline.build())
             .build()
-
-        return Futures.immediateFuture(tile)
     }
 
     override fun onTileResourcesRequest(
@@ -80,41 +135,35 @@ class StatusTileService : TileService() {
         )
     }
 
-    private fun fetchStatusBlocking(tokenStore: WatchTokenStore): AlarmStatus? {
-        return try {
-            runBlocking {
-                val api = ApiClient.create(tokenStore.baseUrl!!, tokenStore.certFingerprint.orEmpty())
-                refreshTokenIfNeeded(api, tokenStore)
-                val resp = api.alarmStatus(tokenStore.bearerHeader)
-                if (resp.isSuccessful) resp.body() else null
-            }
-        } catch (e: Exception) {
-            Log.w(TAG, "Tile fetch failed: ${e.message}")
-            null
-        }
-    }
-
     private suspend fun refreshTokenIfNeeded(
         api: com.remoteparadox.watch.data.ParadoxApi,
         tokenStore: WatchTokenStore,
+        cache: WatchStatusCache,
+        ticket: StatusCacheTicket,
     ) {
-        if (tokenStore.tokenAgeMs < TOKEN_REFRESH_AGE_MS) return
-        val refreshToken = tokenStore.refreshToken
+        val credentials = cache.inSession(ticket) { tokenStore.refreshToken to tokenStore.bearerHeader }
+            ?: throw CancellationException("Session changed")
+        val (refreshToken, bearer) = credentials
         val resp = if (!refreshToken.isNullOrBlank()) {
             api.refreshToken(RefreshRequest(refreshToken))
         } else {
-            api.refreshToken(tokenStore.bearerHeader)
+            api.refreshToken(bearer)
         }
         if (resp.isSuccessful && resp.body() != null) {
             val body = resp.body()!!
-            tokenStore.token = body.token
-            tokenStore.refreshToken = body.refreshToken.ifBlank { tokenStore.refreshToken }
-        } else if (!refreshToken.isNullOrBlank()) {
-            val fallback = api.refreshToken(tokenStore.bearerHeader)
-            if (fallback.isSuccessful && fallback.body() != null) {
-                val body = fallback.body()!!
+            cache.inSession(ticket) {
                 tokenStore.token = body.token
                 tokenStore.refreshToken = body.refreshToken.ifBlank { tokenStore.refreshToken }
+            }
+        } else if (!refreshToken.isNullOrBlank()) {
+            if (!cache.isSameSession(ticket)) return
+            val fallback = api.refreshToken(bearer)
+            if (fallback.isSuccessful && fallback.body() != null) {
+                val body = fallback.body()!!
+                cache.inSession(ticket) {
+                    tokenStore.token = body.token
+                    tokenStore.refreshToken = body.refreshToken.ifBlank { tokenStore.refreshToken }
+                }
             }
         }
     }
@@ -503,6 +552,16 @@ class StatusTileService : TileService() {
             .setVerticalAlignment(VERTICAL_ALIGN_CENTER)
             .setModifiers(
                 Modifiers.Builder()
+                    .setClickable(
+                        Clickable.Builder().setOnClick(
+                            ActionBuilders.LaunchAction.Builder().setAndroidActivity(
+                                ActionBuilders.AndroidActivity.Builder()
+                                    .setPackageName(packageName)
+                                    .setClassName("com.remoteparadox.watch.MainActivity")
+                                    .build()
+                            ).build()
+                        ).build()
+                    )
                     .setBackground(
                         Background.Builder()
                             .setColor(argb(COLOR_DARK_BG))

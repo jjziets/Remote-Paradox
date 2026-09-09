@@ -11,6 +11,8 @@ import android.media.MediaPlayer
 import android.media.RingtoneManager
 import android.net.Uri
 import android.os.Build
+import android.os.SystemClock
+import java.util.concurrent.atomic.AtomicLong
 import android.util.Log
 import androidx.core.app.NotificationCompat
 import androidx.core.content.FileProvider
@@ -164,8 +166,10 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     private var wsJob: Job? = null
     private var maintenancePollJob: Job? = null
     private var webSocket: WebSocket? = null
+    private val wsGeneration = AtomicLong()
+    @Volatile private var lastWsStatusAt = 0L
     private val json = Json { ignoreUnknownKeys = true; isLenient = true }
-    private var httpReachable = true
+    @Volatile private var httpReachable = true
     private var notificationId = 100
     private var lastTriggeredPartition: Int? = null
     private var lastArmedState = mutableMapOf<Int, Boolean>()
@@ -262,6 +266,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     private val isBleConnected: Boolean
         get() = bleClient?.connectionState?.value == BleConnectionState.Connected
 
+    private val useBleForAlarmAction: Boolean
+        get() = isBleConnected && (api == null || !httpReachable || !isNetworkAvailable())
+
     // ── BLE Fallback for alarm operations ──
 
     private fun refreshStatusViaBle() {
@@ -293,10 +300,18 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
+    private fun beginAlarmAction(name: String): Boolean {
+        while (true) {
+            val current = _state.value
+            if (current.actionInProgress != null) return false
+            if (_state.compareAndSet(current, current.copy(actionInProgress = name, error = null))) return true
+        }
+    }
+
     private fun bleAlarmAction(cmdName: String, extras: Map<String, Any> = emptyMap()) {
         val ble = bleClient ?: return
         val token = tokenStore.token ?: return
-        _state.update { it.copy(actionInProgress = cmdName, error = null) }
+        if (!beginAlarmAction(cmdName)) return
         viewModelScope.launch(Dispatchers.IO) {
             try {
                 val cmdMap = mutableMapOf<String, Any>("cmd" to cmdName, "token" to token)
@@ -304,19 +319,24 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 val cmdJson = org.json.JSONObject(cmdMap).toString()
                 val resp = ble.sendCommandAsync(cmdJson)
                 if (resp == null) {
-                    _state.update { it.copy(actionInProgress = null, error = "BLE timeout") }
+                    _state.update { it.copy(error = UNCONFIRMED_COMMAND) }
                     return@launch
                 }
                 val obj = org.json.JSONObject(resp)
                 if (obj.has("error")) {
-                    _state.update { it.copy(actionInProgress = null, error = obj.getString("error")) }
+                    _state.update { it.copy(error = obj.getString("error")) }
+                } else if (!obj.optBoolean("success", false)) {
+                    _state.update { it.copy(error = UNCONFIRMED_COMMAND) }
                 } else {
-                    _state.update { it.copy(actionInProgress = null) }
                     delay(500)
                     refreshStatusViaBle()
                 }
+            } catch (e: CancellationException) {
+                throw e
             } catch (e: Exception) {
-                _state.update { it.copy(actionInProgress = null, error = "BLE: ${e.message}") }
+                _state.update { it.copy(error = UNCONFIRMED_COMMAND) }
+            } finally {
+                _state.update { it.copy(actionInProgress = null) }
             }
         }
     }
@@ -427,7 +447,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     fun armAway(code: String, partitionId: Int) {
         tokenStore.alarmCode = code
-        if (!httpReachable && isBleConnected) {
+        if (useBleForAlarmAction) {
             bleAlarmAction("arm_away", mapOf("code" to code, "partition" to partitionId))
         } else {
             alarmAction("arm_away") { it.armAway(tokenStore.bearerHeader, ArmRequest(code, partitionId)) }
@@ -436,7 +456,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     fun armStay(code: String, partitionId: Int) {
         tokenStore.alarmCode = code
-        if (!httpReachable && isBleConnected) {
+        if (useBleForAlarmAction) {
             bleAlarmAction("arm_stay", mapOf("code" to code, "partition" to partitionId))
         } else {
             alarmAction("arm_stay") { it.armStay(tokenStore.bearerHeader, ArmRequest(code, partitionId)) }
@@ -445,7 +465,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     fun disarm(code: String, partitionId: Int) {
         tokenStore.alarmCode = code
-        if (!httpReachable && isBleConnected) {
+        if (useBleForAlarmAction) {
             bleAlarmAction("disarm", mapOf("code" to code, "partition" to partitionId))
         } else {
             alarmAction("disarm") { it.disarm(tokenStore.bearerHeader, ArmRequest(code, partitionId)) }
@@ -453,7 +473,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun bypassZone(zoneId: Int, bypass: Boolean) {
-        if (!httpReachable && isBleConnected) {
+        if (useBleForAlarmAction) {
             bleAlarmAction("bypass", mapOf("zone_id" to zoneId, "bypass" to bypass))
         } else {
             alarmAction(if (bypass) "bypass" else "unbypass") {
@@ -463,7 +483,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun sendPanic(panicType: String, partitionId: Int) {
-        if (!httpReachable && isBleConnected) {
+        if (useBleForAlarmAction) {
             bleAlarmAction("panic", mapOf("partition" to partitionId, "type" to panicType))
         } else {
             alarmAction("panic") {
@@ -474,35 +494,31 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     private fun alarmAction(name: String, call: suspend (ParadoxApi) -> retrofit2.Response<ActionResult>) {
         val a = api ?: run {
-            // No HTTP API — try BLE if connected
-            if (isBleConnected) bleAlarmAction(name)
+            _state.update { it.copy(error = "Not connected. Refresh status before sending a command.") }
             return
         }
-        _state.update { it.copy(actionInProgress = name, error = null) }
+        if (!beginAlarmAction(name)) return
         viewModelScope.launch(Dispatchers.IO) {
             try {
                 val resp = call(a)
-                if (resp.isSuccessful) {
+                if (resp.panelAccepted()) {
                     httpReachable = true
-                    _state.update { it.copy(actionInProgress = null) }
                     delay(500)
                     refreshStatus()
                     refreshHistory()
                 } else if (resp.code() == 401) {
                     handleTokenExpired()
                 } else {
-                    _state.update { it.copy(actionInProgress = null, error = "Action failed") }
+                    _state.update { it.copy(error = UNCONFIRMED_COMMAND) }
                 }
+            } catch (e: CancellationException) {
+                throw e
             } catch (e: Exception) {
                 httpReachable = false
-                // Cascade to BLE on HTTP failure
-                if (isBleConnected) {
-                    Log.i(TAG, "HTTP failed for $name, falling back to BLE")
-                    _state.update { it.copy(actionInProgress = null) }
-                    bleAlarmAction(name)
-                } else {
-                    _state.update { it.copy(actionInProgress = null, error = e.message) }
-                }
+                // The panel may have acted before the HTTP response was lost. Never replay over BLE.
+                _state.update { it.copy(error = UNCONFIRMED_COMMAND) }
+            } finally {
+                _state.update { it.copy(actionInProgress = null) }
             }
         }
     }
@@ -659,15 +675,19 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     private fun connectWebSocket() {
         val url = buildWsUrl() ?: return
+        val generation = wsGeneration.incrementAndGet()
         webSocket?.cancel()
         val request = Request.Builder().url(url).build()
         webSocket = ApiClient.httpClient.newWebSocket(request, object : WebSocketListener() {
             override fun onOpen(ws: WebSocket, response: Response) {
+                if (generation != wsGeneration.get()) return
+                lastWsStatusAt = SystemClock.elapsedRealtime()
                 Log.i(TAG, "WebSocket connected")
                 _state.update { it.copy(wsConnected = true, error = null) }
             }
 
             override fun onMessage(ws: WebSocket, text: String) {
+                if (generation != wsGeneration.get()) return
                 handleWsMessage(text)
             }
 
@@ -677,11 +697,13 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             }
 
             override fun onClosed(ws: WebSocket, code: Int, reason: String) {
+                if (generation != wsGeneration.get()) return
                 Log.i(TAG, "WebSocket closed: $code")
                 _state.update { it.copy(wsConnected = false) }
             }
 
             override fun onFailure(ws: WebSocket, t: Throwable, response: Response?) {
+                if (generation != wsGeneration.get()) return
                 Log.w(TAG, "WebSocket failure: ${t.message}")
                 _state.update { it.copy(wsConnected = false) }
             }
@@ -701,6 +723,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                         json.decodeFromString<PanelEvent>(it.toString())
                     } ?: emptyList()
                     checkStatusChanges(status)
+                    lastWsStatusAt = SystemClock.elapsedRealtime()
+                    httpReachable = true
                     _state.update {
                         it.copy(alarmStatus = status, eventHistory = events, isLoading = false, error = null)
                     }
@@ -714,6 +738,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     private fun disconnectWebSocket() {
+        wsGeneration.incrementAndGet()
         webSocket?.close(1000, "bye")
         webSocket = null
         _state.update { it.copy(wsConnected = false) }
@@ -732,6 +757,10 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             while (isActive) {
                 delay(FALLBACK_POLL_INTERVAL_MS)
                 cycleCount++
+
+                if (_state.value.wsConnected && statusStreamStale(SystemClock.elapsedRealtime(), lastWsStatusAt)) {
+                    disconnectWebSocket()
+                }
 
                 if (!httpReachable && cycleCount % 6 == 0) {
                     // Probe HTTP recovery every ~30s

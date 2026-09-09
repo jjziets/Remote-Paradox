@@ -33,9 +33,13 @@ import androidx.wear.compose.material3.Text
 import androidx.wear.compose.material3.TextButton
 import androidx.wear.tiles.TileService
 import com.remoteparadox.watch.data.ApiClient
+import com.remoteparadox.watch.data.AlarmCommandGate
+import com.remoteparadox.watch.data.StatusSnapshot
+import com.remoteparadox.watch.data.WatchStatusCache
 import com.remoteparadox.watch.data.ArmRequest
 import com.remoteparadox.watch.data.PanicRequest
 import com.remoteparadox.watch.data.WatchTokenStore
+import com.remoteparadox.watch.data.panelAccepted
 import com.remoteparadox.watch.tile.StatusTileService
 import com.remoteparadox.watch.ui.DashboardScreen
 import com.remoteparadox.watch.ui.SetupScreen
@@ -96,10 +100,17 @@ class MainActivity : ComponentActivity() {
     private fun executeDirectAction(intent: android.content.Intent) {
         val action = intent.getStringExtra("action")!!
         val pid = intent.getIntExtra("partition_id", -1)
+        intent.removeExtra("action")
         val tokenStore = WatchTokenStore(this)
+        val cache = WatchStatusCache(this, tokenStore)
+        val session = cache.capture()
 
         if (!tokenStore.isLoggedIn) {
             Log.w("MainActivity", "Direct action but not logged in, skipping")
+            finish()
+            return
+        }
+        if (!AlarmCommandGate.tryBegin()) {
             finish()
             return
         }
@@ -119,13 +130,17 @@ class MainActivity : ComponentActivity() {
                 updater.requestUpdate(StatusTileService::class.java)
 
                 val api = ApiClient.create(baseUrl, fingerprint)
-                val auth = tokenStore.bearerHeader
+                val auth = cache.inSession(session) { tokenStore.bearerHeader } ?: return@launch
+                val beforeTicket = cache.capture()
+                if (!cache.isSameSession(session)) return@launch
 
                 val beforeStatus = try {
                     val r = api.alarmStatus(auth)
                     if (r.isSuccessful) r.body() else null
                 } catch (_: Exception) { null }
                 val beforeMode = beforeStatus?.partitions?.find { it.id == pid }?.mode
+                if (beforeStatus == null || !beforeStatus.connected) return@launch
+                if (!cache.save(StatusSnapshot(beforeStatus, System.currentTimeMillis()), beforeTicket)) return@launch
                 Log.d("MainActivity", "Before mode: $beforeMode")
 
                 if (action in listOf("arm_away", "arm_stay")) {
@@ -138,18 +153,28 @@ class MainActivity : ComponentActivity() {
                     }
                 }
 
-                val resp = when (action) {
-                    "arm_away" -> api.armAway(auth, ArmRequest(code, pid))
-                    "arm_stay" -> api.armStay(auth, ArmRequest(code, pid))
-                    "disarm" -> api.disarm(auth, ArmRequest(code, pid))
-                    else -> null
+                val resp = cache.command(beforeTicket) {
+                    updater.requestUpdate(StatusTileService::class.java)
+                    when (action) {
+                        "arm_away" -> api.armAway(auth, ArmRequest(code, pid))
+                        "arm_stay" -> api.armStay(auth, ArmRequest(code, pid))
+                        "disarm" -> api.disarm(auth, ArmRequest(code, pid))
+                        else -> null
+                    }
                 }
                 Log.d("MainActivity", "Action $action response: ${resp?.code()}")
+                if (resp?.isSuccessful != true || resp.body()?.success != true) return@launch
 
-                repeat(15) { i ->
-                    delay(300)
+                repeat(5) { i ->
+                    delay(1_000)
                     try {
+                        val ticket = cache.capture()
+                        if (!cache.isSameSession(session)) return@launch
                         val statusResp = api.alarmStatus(auth)
+                        if (!cache.isCurrent(ticket)) return@launch
+                        if (statusResp.isSuccessful) statusResp.body()?.let {
+                            cache.save(StatusSnapshot(it, System.currentTimeMillis()), ticket)
+                        }
                         val currentMode = statusResp.body()?.partitions?.find { it.id == pid }?.mode
                         updater.requestUpdate(StatusTileService::class.java)
                         Log.d("MainActivity", "Poll $i: mode=$currentMode (was $beforeMode)")
@@ -165,10 +190,18 @@ class MainActivity : ComponentActivity() {
                     }
                 }
                 WatchTokenStore(appContext).clearPendingAction()
-                Log.d("MainActivity", "Refresh burst done (15 polls, no change detected)")
+                Log.d("MainActivity", "Status confirmation ended without a mode change")
             } catch (e: Exception) {
                 Log.e("MainActivity", "Direct action failed: ${e.message}")
                 WatchTokenStore(appContext).clearPendingAction()
+            } finally {
+                tokenStore.clearPendingAction()
+                AlarmCommandGate.finish()
+                try {
+                    TileService.getUpdater(appContext).requestUpdate(StatusTileService::class.java)
+                } catch (_: Exception) {
+                    Log.w("MainActivity", "Could not request tile refresh")
+                }
             }
         }
 
@@ -177,6 +210,8 @@ class MainActivity : ComponentActivity() {
 
     private fun showPanicConfirmation() {
         val tokenStore = WatchTokenStore(this)
+        val cache = WatchStatusCache(this, tokenStore)
+        val session = cache.capture()
         if (!tokenStore.isLoggedIn) {
             Log.w("MainActivity", "Panic action but not logged in, finishing")
             finish()
@@ -235,20 +270,34 @@ class MainActivity : ComponentActivity() {
                                 onClick = {
                                     sending = true
                                     CoroutineScope(Dispatchers.IO).launch {
+                                        if (!AlarmCommandGate.tryBegin()) {
+                                            sending = false
+                                            return@launch
+                                        }
                                         try {
-                                            val api = ApiClient.create(
-                                                tokenStore.baseUrl!!,
-                                                tokenStore.certFingerprint.orEmpty(),
-                                            )
-                                            val resp = api.panic(
-                                                tokenStore.bearerHeader,
-                                                PanicRequest(partitionId = 1),
-                                            )
-                                            Log.d("MainActivity", "Panic response: ${resp.code()}")
+                                            val ticket = cache.capture()
+                                            val credentials = cache.inSession(session) {
+                                                ApiClient.create(tokenStore.baseUrl!!, tokenStore.certFingerprint.orEmpty()) to
+                                                    tokenStore.bearerHeader
+                                            } ?: return@launch
+                                            val (api, auth) = credentials
+                                            val resp = cache.command(ticket) {
+                                                TileService.getUpdater(applicationContext).requestUpdate(StatusTileService::class.java)
+                                                api.panic(auth, PanicRequest(partitionId = 1))
+                                            }
+                                            Log.d("MainActivity", "Panic response: ${resp?.code()}")
+                                            sent = resp?.panelAccepted() == true
                                         } catch (e: Exception) {
                                             Log.e("MainActivity", "Panic failed: ${e.message}")
+                                        } finally {
+                                            sending = false
+                                            AlarmCommandGate.finish()
+                                            try {
+                                                TileService.getUpdater(applicationContext).requestUpdate(StatusTileService::class.java)
+                                            } catch (_: Exception) {
+                                                Log.w("MainActivity", "Could not request tile refresh")
+                                            }
                                         }
-                                        sent = true
                                     }
                                 },
                                 colors = ButtonDefaults.buttonColors(containerColor = AlarmRed),

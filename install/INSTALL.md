@@ -20,7 +20,7 @@ value here is a placeholder. Put your real values only in files that stay off gi
 |------|-------|
 | Raspberry Pi | Reference build is a **Pi Zero 2 W** (≈512 MB RAM). A Pi 3/4 with more RAM is more forgiving. |
 | microSD | Use a **genuine endurance card** (SanDisk High/Max Endurance, Samsung PRO Endurance). Cheap/counterfeit cards are the #1 cause of random lock-ups and no-boot. |
-| Power | Stable 5 V. For an always-on alarm node, add a **UPS / safe-shutdown HAT or supercap** — an unclean power cut can corrupt the SD card. |
+| Power | Stable regulated 5 V. The current installation uses the alarm system's battery-backed supply; no extra HAT is required for this deployment. Unclean power loss can still corrupt an SD card. |
 | Wiring to the panel | TTL serial between the Pi UART and the Paradox panel's serial/PGM header (default **9600 baud**, `/dev/serial0`). See the pin-out reference image in the repo root and your panel's manual. **Do not cross 5 V/3.3 V levels** — use the correct level shifting for your panel. |
 
 ---
@@ -63,8 +63,9 @@ sudo rsync -a /tmp/pb/ /opt/paradox-bridge/
 sudo rsync -a web-app/  /opt/paradox-bridge/web-app/
 
 # build the Python venv (Python 3.11 on bookworm):
-sudo python3 -m venv /opt/paradox-bridge/venv
-sudo /opt/paradox-bridge/venv/bin/pip install -e /opt/paradox-bridge
+sudo apt-get install -y python3-venv python3-cryptography python3-dbus python3-gi bluez
+sudo python3 -m venv --system-site-packages /opt/paradox-bridge/venv
+sudo /opt/paradox-bridge/venv/bin/pip install -e '/opt/paradox-bridge[pi]'
 
 # runtime state dir (owned by the service user):
 sudo install -d -o <user> -g <user> \
@@ -77,8 +78,10 @@ sudo apt-get update && sudo apt-get install -y nginx
 ## 5. Configure the bridge
 
 ```bash
-sudo install -d /etc/paradox-bridge
+sudo install -d -m 0700 -o <user> -g <user> /etc/paradox-bridge
 sudo cp install/config.json.example /etc/paradox-bridge/config.json
+sudo chown <user>:<user> /etc/paradox-bridge/config.json
+sudo chmod 0600 /etc/paradox-bridge/config.json
 sudo nano /etc/paradox-bridge/config.json
 ```
 Fill in:
@@ -96,16 +99,18 @@ Fill in:
 ## 6. Install the services
 
 ```bash
-sudo cp install/systemd/paradox-*.service install/systemd/paradox-*.timer /etc/systemd/system/
+sudo cp install/systemd/paradox-bridge.service install/systemd/paradox-ble.service /etc/systemd/system/
 sudo nano /etc/systemd/system/paradox-bridge.service   # set PARADOX_ADMIN_USER / PARADOX_ADMIN_PASS, and User= if not 'home'
 sudo systemctl daemon-reload
-sudo systemctl enable --now paradox-bridge paradox-ble paradox-state-recorder \
-     paradox-updater.timer
+sudo usermod -aG dialout <user>
+sudo systemctl enable --now paradox-bridge paradox-ble
+sudo bash /opt/paradox-bridge/deploy/setup-state-recorder.sh
+sudo bash /opt/paradox-bridge/deploy/setup-command-diagnostics.sh
 ```
 - `paradox-bridge` — the API/app (binds `127.0.0.1:8080`).
 - `paradox-ble` — local Bluetooth LE control fallback (root).
 - `paradox-state-recorder` — 1 Hz state log for debugging.
-- `paradox-updater.timer` — checks for `bridge-v*` releases every 15 min.
+- Do not enable the legacy unsigned `paradox-updater.timer`.
 
 Then the reverse proxy (this also **hardens SSH to key-only**):
 ```bash
@@ -127,6 +132,7 @@ sudo bash setup-boot-repair.sh      # repair package state + bridge health on a 
 sudo bash setup-watchdog.sh         # hardware watchdog: auto-reset a soft hang
 sudo bash setup-zram-swap.sh        # compressed RAM swap instead of an SD swapfile
 sudo bash setup-panic-recovery.sh   # auto-reboot on kernel panic + capture crash log
+sudo bash setup-power-hardening.sh # disable sleep and Wi-Fi power saving
 sudo reboot                         # required for the cmdline/ramoops changes
 ```
 
@@ -153,10 +159,14 @@ them at your node. The web dashboard is served by nginx from `web-app/`.
 
 ## 9. Updating
 
-Bridge/Pi updates ship on the **`bridge-v*`** GitHub release channel (separate from
-the Android `v*` APK releases). The updater stages the release and `apply_update.sh`
-installs the new source, re-runs the deploy scripts, and restarts services. See
-[`docs/pi-github-operations.md`](../docs/pi-github-operations.md) for details.
+Complete the [signed updater bootstrap](../docs/signed-pi-deployment.md) after
+initial service health checks. Bridge/Pi updates ship on **`bridge-v*`**, separate
+from Android `v*` APKs. GitHub-hosted CI tests and signs each archive. The Pi
+verifies and installs it, checks fresh panel polling, and records a deployment
+receipt or rolls code back. TLS and credentials are preserved. This does not
+upgrade OS packages or replace the OS image. The README and runbook distinguish
+tested live upgrades from a fresh-card installation, which was not rerun as part
+of the September release.
 
 ---
 

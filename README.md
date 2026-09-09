@@ -167,8 +167,9 @@ from saved config, plus username/password.
 
 ### Watch install and pairing
 
-The watch APK is built by the same `v*` Android release workflow only when watch
-files changed. The workflow asset is named `remote-paradox-watch.apk`.
+The watch APK is built by the same `v*` Android release workflow. Both APKs are
+attached with independent versioned names, such as `remote-paradox-watch-1.2.31.apk`.
+Install the watch APK when its own version is newer than the installed version.
 
 Install to a Wear OS watch with ADB after pairing the watch over USB or wireless
 debugging:
@@ -255,11 +256,16 @@ Operational notes for release channels, recovery timers, and CI scope:
 | Channel | Tag pattern | Payload | Consumer |
 |---------|-------------|---------|----------|
 | Android phone/watch | `v*` | Signed APK assets from `.github/workflows/build-android.yml` | Human installs APKs, phone app update checker |
-| Pi bridge/source | `bridge-v*` | GitHub source tarball containing `paradox-bridge/` and deploy scripts | Pi bridge updater and boot-repair recovery |
+| Pi bridge/source | `bridge-v*` | CI-tested archive with Ed25519-signed manifest and file hashes | Root-owned Pi pull updater and boot-repair recovery |
 
-The Android workflow does not deploy to the Pi. The Pi updater now prefers
-`bridge-v*` releases so bridge recovery does not accidentally stage an Android
-APK release.
+Both workflows use GitHub-hosted runners. After the one-time
+[signed updater bootstrap](docs/signed-pi-deployment.md), the Pi automatically
+pulls `bridge-v*` releases, verifies their signature, installs the bridge and
+recovery helpers, and checks the exact running version and fresh panel polling.
+Failed installs restore previous code. A GitHub release alone is not proof of
+deployment: check the Pi's root-owned receipt and live health as documented in
+the runbook. Existing TLS certificates, users and configuration are preserved;
+OS packages are not upgraded by bridge releases.
 
 ### Deployment From Scratch (Pi)
 
@@ -317,10 +323,10 @@ Run these on the Pi after `/opt/paradox-bridge` is populated:
 
 ```bash
 sudo apt-get update
-sudo apt-get install -y python3 python3-venv python3-pip rsync
+sudo apt-get install -y python3 python3-venv python3-pip python3-cryptography python3-dbus python3-gi bluez rsync
 
 cd /opt/paradox-bridge
-python3 -m venv venv
+python3 -m venv --system-site-packages venv
 ./venv/bin/pip install -U pip
 ./venv/bin/pip install -e '.[pi]'
 
@@ -329,6 +335,15 @@ sudo mkdir -p /var/lib/paradox-bridge/maintenance/jobs /var/lib/paradox-bridge/m
 sudo chown -R <PI_USERNAME>:<PI_USERNAME> /opt/paradox-bridge /var/lib/paradox-bridge
 sudo chmod 0750 /var/lib/paradox-bridge /var/lib/paradox-bridge/maintenance
 ```
+
+Before enabling services, copy `install/config.json.example` from the checkout
+to `/etc/paradox-bridge/config.json`, replace every placeholder, and generate a
+fresh JWT secret (`openssl rand -hex 32`). Set the actual panel PC password and
+UART settings, keep `api_host` at `127.0.0.1`, and disable the UART login shell
+with `raspi-config`. Give the service user ownership of `/etc/paradox-bridge`
+with directory mode `0700` and config mode `0600`; the database and initial TLS
+certificate are created there. Add the service user to `dialout`. Do not replace
+this directory when upgrading an existing Pi.
 
 Install the tested systemd unit. Replace `<PI_USERNAME>` and
 `<ADMIN_PASSWORD>` before running:
@@ -363,6 +378,11 @@ sudo systemctl daemon-reload
 sudo systemctl enable --now paradox-bridge
 ```
 
+Install `install/systemd/paradox-ble.service` from the checkout into
+`/etc/systemd/system/`, then run `sudo systemctl daemon-reload` and
+`sudo systemctl enable --now paradox-ble`. The BLE service uses Debian's D-Bus
+and GI modules through the venv's `--system-site-packages` option.
+
 The bridge binds to `127.0.0.1:8080`; nginx exposes it on HTTPS port `9433`.
 After the first successful admin login, change the bootstrap admin password from
 the app or web dashboard.
@@ -382,7 +402,16 @@ ssh <PI_USERNAME>@remote-paradox.local \
   'sudo bash /opt/paradox-bridge/deploy/setup-wifi-watchdog.sh'
 
 ssh <PI_USERNAME>@remote-paradox.local \
+  'sudo bash /opt/paradox-bridge/deploy/setup-power-hardening.sh'
+
+ssh <PI_USERNAME>@remote-paradox.local \
+  'sudo bash /opt/paradox-bridge/deploy/setup-state-recorder.sh'
+
+ssh <PI_USERNAME>@remote-paradox.local \
   'sudo bash /opt/paradox-bridge/deploy/setup-boot-repair.sh'
+
+ssh <PI_USERNAME>@remote-paradox.local \
+  'sudo bash /opt/paradox-bridge/deploy/setup-command-diagnostics.sh && sudo systemctl restart paradox-bridge'
 ```
 
 Recovery helpers:
@@ -392,6 +421,18 @@ Recovery helpers:
 - `setup-wifi-watchdog.sh` installs `wifi-watchdog.timer`, which repairs
   recoverable NetworkManager/WiFi states for interface `wlan0` and connection
   `preconfigured`.
+- `setup-power-hardening.sh` masks system sleep targets, disables logind
+  suspend actions, and sets NetworkManager WiFi power save to disabled for the
+  `preconfigured` connection.
+- `setup-state-recorder.sh` installs `paradox-state-recorder.service`, which
+  writes one compact Pi state sample per second under
+  `/var/log/paradox-bridge/state-recorder/` and deletes minute log files older
+  than 24 hours. See `docs/pi-github-operations.md` for the triage commands and
+  how to interpret the recorder output.
+- `setup-command-diagnostics.sh` enables private, rotating command timing and
+  panel-state logs after the next bridge restart. See
+  [arm/disarm diagnostics](docs/pi-github-operations.md#armdisarm-command-diagnostics)
+  when commands time out or the app appears to show stale alarm state.
 - `setup-boot-repair.sh` installs `paradox-boot-repair.timer`, which repairs
   interrupted package state, restarts the bridge, and can force-stage/reinstall
   the latest `bridge-v*` release if the local bridge remains unhealthy.
@@ -399,27 +440,34 @@ Recovery helpers:
 These helpers do not repair total power loss, a dead SD card, an unbootable
 kernel, or a network that never comes up.
 
-#### 5. Verify services
+#### 5. Enable signed CI/CD and verify services
+
+Follow the [signed release bootstrap](docs/signed-pi-deployment.md#one-time-bootstrap)
+to pin the reviewed public key and install `paradox-signed-updater.timer`.
+The installer does not regenerate TLS certificates or require a GitHub token
+on the Pi. Do not enable the legacy unsigned updater timer.
 
 ```bash
 ssh <PI_USERNAME>@remote-paradox.local 'systemctl status paradox-bridge --no-pager'
 ssh <PI_USERNAME>@remote-paradox.local 'systemctl list-timers wifi-watchdog.timer paradox-boot-repair.timer --no-pager'
-curl -k https://remote-paradox.local:9433/health
-curl -k https://remote-paradox.local:9433/system/version
+ssh <PI_USERNAME>@remote-paradox.local 'curl -fsS http://127.0.0.1:8080/health'
+ssh <PI_USERNAME>@remote-paradox.local 'curl -fsS http://127.0.0.1:8080/system/version'
+ssh <PI_USERNAME>@remote-paradox.local 'sudo cat /var/lib/paradox-updater/deployment.json'
 ```
 
 #### 6. Register clients
 
 Generate an admin invite from the web dashboard or API, then install the Android
 phone APK from a `v*` release and scan the QR code. Install the watch APK only
-when the release includes `remote-paradox-watch.apk`, then keep the watch paired
+when the release includes a newer `remote-paradox-watch-<version>.apk`, then keep the watch paired
 to the phone so credential sync can run.
 
 ### Maintenance operations
 
 Bridge app update controls are separate from OS/package maintenance:
 
-- Bridge updates stage and apply `bridge-v*` GitHub source releases.
+- Bridge updates verify and apply signed `bridge-v*` releases automatically;
+  see the deployment runbook to pause the timer or inspect a rollback.
 - OS maintenance should be explicit and admin-only: check updates, repair
   interrupted package state, apply security updates if supported by the image,
   run `apt-get update` and `apt-get -y upgrade` only after a strong
