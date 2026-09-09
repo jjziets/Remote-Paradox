@@ -17,7 +17,7 @@ dependencies = [
     "websockets>=16.0",
     "pyserial>=3.5",
     "pyserial-asyncio>=0.6",
-    "qrcode>=8.0",
+    "qrcode[pil]>=8.0",
 ]
 
 [project.optional-dependencies]
