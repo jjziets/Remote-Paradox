@@ -1,0 +1,55 @@
+name: Test and Sign Pi Release
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    tags: ['bridge-v*']
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: pip install -e './paradox-bridge[dev]'
+      - run: pytest -q paradox-bridge/tests
+      - run: |
+          for script in paradox-bridge/deploy/*.sh paradox-bridge/scripts/*.sh; do
+            bash -n "$script"
+          done
+  release:
+    if: startsWith(github.ref, 'refs/tags/bridge-v')
+    needs: test
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Require a released main commit
+        run: git merge-base --is-ancestor HEAD origin/main
+      - run: pip install cryptography
+      - name: Sign immutable bridge artifact
+        env:
+          BRIDGE_SIGNING_KEY: ${{ secrets.BRIDGE_SIGNING_KEY }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: python paradox-bridge/scripts/build_release.py "$RELEASE_TAG"
+      - name: Publish for verified Pi pull deployment
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          gh release create "$RELEASE_TAG" --latest=false --title "Bridge ${RELEASE_TAG#bridge-v}" --generate-notes dist/bridge/*
+          echo 'Signed artifacts published. Pi installation is confirmed separately by /var/lib/paradox-updater/deployment.json; publication alone is not deployment success.' >> "$GITHUB_STEP_SUMMARY"

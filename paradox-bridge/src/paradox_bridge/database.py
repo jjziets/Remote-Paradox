@@ -4,15 +4,37 @@ import secrets
 import sqlite3
 import time
 from datetime import datetime, timezone
+from functools import wraps
+from threading import RLock
 from typing import Optional
+
+
+def _serialized(method):
+    """Serialize operations and roll back pending writes when the outer call fails."""
+    @wraps(method)
+    def locked(self, *args, **kwargs):
+        with self._lock:
+            self._operation_depth += 1
+            try:
+                return method(self, *args, **kwargs)
+            except BaseException:
+                if self._operation_depth == 1 and self._conn is not None:
+                    self._conn.rollback()
+                raise
+            finally:
+                self._operation_depth -= 1
+    return locked
 
 
 class Database:
     def __init__(self, db_path: str):
         self._path = db_path
         self._conn: Optional[sqlite3.Connection] = None
+        self._lock = RLock()
+        self._operation_depth = 0
 
     @property
+    @_serialized
     def conn(self) -> sqlite3.Connection:
         if self._conn is None:
             self._conn = sqlite3.connect(self._path, check_same_thread=False)
@@ -21,6 +43,7 @@ class Database:
             self._conn.execute("PRAGMA foreign_keys=ON")
         return self._conn
 
+    @_serialized
     def init(self) -> None:
         c = self.conn
         c.executescript("""
@@ -72,11 +95,13 @@ class Database:
         """)
         c.commit()
 
+    @_serialized
     def close(self) -> None:
         if self._conn:
             self._conn.close()
             self._conn = None
 
+    @_serialized
     def list_tables(self) -> list[str]:
         rows = self.conn.execute(
             "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name"
@@ -85,6 +110,7 @@ class Database:
 
     # ── Users ──
 
+    @_serialized
     def create_user(self, username: str, password_hash: str, role: str = "user") -> None:
         existing = self.get_user(username)
         if existing is not None:
@@ -96,16 +122,19 @@ class Database:
         )
         self.conn.commit()
 
+    @_serialized
     def get_user(self, username: str) -> Optional[dict]:
         row = self.conn.execute(
             "SELECT * FROM users WHERE username = ?", (username,)
         ).fetchone()
         return dict(row) if row else None
 
+    @_serialized
     def list_users(self) -> list[dict]:
         rows = self.conn.execute("SELECT * FROM users ORDER BY created_at").fetchall()
         return [dict(r) for r in rows]
 
+    @_serialized
     def update_user_role(self, username: str, role: str) -> None:
         if role not in ("admin", "user"):
             raise ValueError(f"Invalid role: {role}")
@@ -119,12 +148,14 @@ class Database:
         )
         self.conn.commit()
 
+    @_serialized
     def admin_count(self) -> int:
         row = self.conn.execute(
             "SELECT COUNT(*) as cnt FROM users WHERE role = 'admin'"
         ).fetchone()
         return row["cnt"] if row else 0
 
+    @_serialized
     def update_password(self, username: str, new_password_hash: str) -> None:
         existing = self.get_user(username)
         if existing is None:
@@ -136,6 +167,7 @@ class Database:
         self.revoke_refresh_tokens(username)
         self.conn.commit()
 
+    @_serialized
     def delete_user(self, username: str) -> None:
         existing = self.get_user(username)
         if existing is None:
@@ -148,6 +180,7 @@ class Database:
 
     # ── Refresh Tokens ──
 
+    @_serialized
     def create_refresh_token(self, username: str, token_hash: str, expires_in_seconds: int) -> None:
         now = time.time()
         self.conn.execute(
@@ -159,6 +192,7 @@ class Database:
         )
         self.conn.commit()
 
+    @_serialized
     def get_refresh_token(self, token_hash: str) -> Optional[dict]:
         row = self.conn.execute(
             """
@@ -176,6 +210,7 @@ class Database:
         self.conn.commit()
         return dict(row)
 
+    @_serialized
     def revoke_refresh_tokens(self, username: str) -> None:
         self.conn.execute(
             "UPDATE refresh_tokens SET revoked_at = ? WHERE username = ? AND revoked_at IS NULL",
@@ -185,6 +220,7 @@ class Database:
 
     # ── Invites ──
 
+    @_serialized
     def create_invite(self, created_by: str, expires_in_seconds: int = 900) -> str:
         code = secrets.token_hex(4).upper()
         code = f"{code[:4]}-{code[4:]}"
@@ -196,6 +232,7 @@ class Database:
         self.conn.commit()
         return code
 
+    @_serialized
     def validate_invite(self, code: str) -> bool:
         row = self.conn.execute(
             "SELECT * FROM invites WHERE code = ? AND used_by IS NULL AND expires_at > ?",
@@ -203,6 +240,7 @@ class Database:
         ).fetchone()
         return row is not None
 
+    @_serialized
     def consume_invite(self, code: str, used_by: str) -> None:
         self.conn.execute(
             "UPDATE invites SET used_by = ?, used_at = ? WHERE code = ?",
@@ -212,6 +250,7 @@ class Database:
 
     # ── Audit Log ──
 
+    @_serialized
     def log_action(self, username: str, action: str, detail: Optional[str] = None, device: Optional[str] = None) -> None:
         now = datetime.now(timezone.utc).isoformat()
         self._ensure_audit_device_column()
@@ -221,6 +260,7 @@ class Database:
         )
         self.conn.commit()
 
+    @_serialized
     def _ensure_audit_device_column(self) -> None:
         try:
             self.conn.execute("SELECT device FROM audit_log LIMIT 1")
@@ -228,6 +268,7 @@ class Database:
             self.conn.execute("ALTER TABLE audit_log ADD COLUMN device TEXT")
             self.conn.commit()
 
+    @_serialized
     def get_audit_log(
         self, limit: int = 50, username: Optional[str] = None
     ) -> list[dict]:
@@ -244,6 +285,7 @@ class Database:
 
     # ── Alarm Events ──
 
+    @_serialized
     def insert_event(
         self, etype: str, label: str, prop: str, value: str, timestamp: str,
         user: Optional[str] = None, device: Optional[str] = None,
@@ -255,6 +297,7 @@ class Database:
         )
         self.conn.commit()
 
+    @_serialized
     def _ensure_events_user_columns(self) -> None:
         try:
             self.conn.execute("SELECT user FROM events LIMIT 1")
@@ -263,12 +306,14 @@ class Database:
             self.conn.execute("ALTER TABLE events ADD COLUMN device TEXT")
             self.conn.commit()
 
+    @_serialized
     def get_events(self, limit: int = 50) -> list[dict]:
         rows = self.conn.execute(
             "SELECT * FROM events ORDER BY id DESC LIMIT ?", (limit,)
         ).fetchall()
         return [dict(r) for r in rows]
 
+    @_serialized
     def purge_old_events(self, days: int = 90) -> int:
         from datetime import timedelta
         cutoff = (

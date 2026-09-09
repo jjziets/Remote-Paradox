@@ -28,8 +28,8 @@ android {
         applicationId = "com.remoteparadox.app"
         minSdk = 30
         targetSdk = 34
-        versionCode = 24
-        versionName = "1.2.29"
+        versionCode = 25
+        versionName = "1.2.31"
     }
 
     signingConfigs {

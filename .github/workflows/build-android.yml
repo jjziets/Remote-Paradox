@@ -78,7 +78,8 @@ jobs:
           fi
 
       - name: Build phone app (release)
-        run: ./gradlew :app:assembleRelease
+        # Unit tests run before either signed APK can be published.
+        run: ./gradlew :app:testDebugUnitTest :watch-app:testDebugUnitTest :app:assembleRelease
 
       - name: Build watch app (release)
         run: ./gradlew :watch-app:assembleRelease

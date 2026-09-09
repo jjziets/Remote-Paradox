@@ -40,6 +40,7 @@ object ApiClient {
             chain.proceed(request)
         }
         val builder = OkHttpClient.Builder()
+            .retryOnConnectionFailure(false)
             .addInterceptor(deviceHeader)
             .connectTimeout(5, TimeUnit.SECONDS)
             .readTimeout(10, TimeUnit.SECONDS)

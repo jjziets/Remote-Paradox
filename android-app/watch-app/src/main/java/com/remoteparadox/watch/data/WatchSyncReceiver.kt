@@ -68,13 +68,15 @@ class WatchSyncReceiver : WearableListenerService() {
             Log.d(TAG, "  Fingerprint: ${if (payload.fingerprint.isEmpty()) "EMPTY" else "SET"}")
 
             val store = WatchTokenStore(this)
-            store.serverHost = payload.host
-            store.serverPort = payload.port
-            store.certFingerprint = payload.fingerprint
-            store.token = payload.token
-            store.refreshToken = payload.refreshToken
-            store.username = payload.username
-            store.alarmCode = payload.alarmCode
+            WatchStatusCache(this, store).replaceSession {
+                store.serverHost = payload.host
+                store.serverPort = payload.port
+                store.certFingerprint = payload.fingerprint
+                store.token = payload.token
+                store.refreshToken = payload.refreshToken
+                store.username = payload.username
+                store.alarmCode = payload.alarmCode
+            }
 
             Log.i(TAG, "Credentials STORED for ${payload.username}@${payload.host}:${payload.port}")
             Log.d(TAG, "  Verify isLoggedIn: ${store.isLoggedIn}")

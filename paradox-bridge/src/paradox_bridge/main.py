@@ -9,6 +9,7 @@ import re
 import shutil
 import socket
 import subprocess
+import time
 import uuid
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
@@ -25,6 +26,7 @@ from paradox_bridge.audit import AuditService
 from paradox_bridge.auth import AuthService
 from paradox_bridge.config import AppConfig, load_config, save_config_field
 from paradox_bridge.database import Database
+from paradox_bridge.diagnostics import CommandDiagnosticsMiddleware, start_diagnostics, stop_diagnostics
 from paradox_bridge.models import (
     ActionResult,
     AlarmStatusResponse,
@@ -64,7 +66,7 @@ from paradox_bridge.models import (
 )
 from paradox_bridge.dashboard import router as dashboard_router
 from paradox_bridge.tls import generate_self_signed_cert, get_cert_fingerprint
-from paradox_bridge.ws import ConnectionManager
+from paradox_bridge.ws import ConnectionManager, StatusDispatcher
 
 logger = logging.getLogger(__name__)
 
@@ -82,6 +84,7 @@ _reconnect_task: asyncio.Task | None = None
 _ws_heartbeat_task: asyncio.Task | None = None
 _event_purge_task: asyncio.Task | None = None
 _alert_monitor_task: asyncio.Task | None = None
+_status_dispatcher: StatusDispatcher | None = None
 
 _CONNECT_RETRY_DELAY = 30  # seconds between reconnection attempts
 _CONNECT_MAX_RETRIES = 3   # limit retries per cycle to avoid panel lockout
@@ -199,7 +202,7 @@ _last_partition_alarm: dict[int, bool] = {}
 def _check_alarm_push() -> None:
     """Fire a high-priority push the instant a partition enters alarm.
 
-    Runs on the PAI status-change callback (synchronous), but push.send_alert is
+    Runs on the API event loop after a PAI status change, but push.send_alert is
     fire-and-forget on a background thread, so this never blocks panel handling.
     """
     global _last_partition_alarm
@@ -224,23 +227,23 @@ def _check_alarm_push() -> None:
 
 
 def _on_alarm_status_changed() -> None:
-    """Called (synchronously) by AlarmService when PAI status changes.
-    Fires the alarm push immediately, then broadcasts to WebSocket clients."""
+    """PAI invokes this from its worker thread, not the API event loop."""
+    if _status_dispatcher:
+        _status_dispatcher.notify()
+
+
+async def _publish_alarm_status() -> None:
     _check_alarm_push()
-    if not _ws_manager or _ws_manager.active_count == 0:
-        return
-    try:
-        asyncio.ensure_future(_broadcast_status())
-    except RuntimeError:
-        pass
+    await _broadcast_status()
 
 
 async def _broadcast_status() -> None:
     """Build a full status snapshot and push it to all WebSocket clients."""
-    if not _alarm or not _ws_manager:
+    if not _alarm or not _ws_manager or _ws_manager.active_count == 0:
         return
     try:
-        resp = _build_status_response(_alarm)
+        resp = (_build_status_response(_alarm) if _alarm.is_connected
+                else AlarmStatusResponse(partitions=[], connected=False))
         events = _alarm.get_zone_history(limit=20)
         payload = {
             "type": "status",
@@ -250,7 +253,7 @@ async def _broadcast_status() -> None:
         }
         await _ws_manager.broadcast(payload)
     except Exception:
-        logger.debug("WS broadcast failed", exc_info=True)
+        logger.exception("WS broadcast failed")
 
 
 _WS_HEARTBEAT_INTERVAL = 5  # seconds — fallback push even without PAI pubsub events
@@ -378,7 +381,10 @@ async def _disconnect_alarm() -> None:
 @asynccontextmanager
 async def lifespan(application: FastAPI):
     global _demo_trigger_task, _reconnect_task, _ws_heartbeat_task, _event_purge_task, _alert_monitor_task
+    global _status_dispatcher
     init_services()
+    _status_dispatcher = StatusDispatcher(_publish_alarm_status)
+    diagnostics_task = start_diagnostics(_alarm)
     admin_user = os.environ.get("PARADOX_ADMIN_USER", "admin")
     admin_pass = os.environ.get("PARADOX_ADMIN_PASS")
     if admin_pass and _auth:
@@ -393,6 +399,9 @@ async def lifespan(application: FastAPI):
     elif _alarm and not _alarm.demo_mode:
         _reconnect_task = asyncio.create_task(_connect_alarm())
     yield
+    if _status_dispatcher:
+        await _status_dispatcher.close()
+        _status_dispatcher = None
     if _ws_heartbeat_task:
         _ws_heartbeat_task.cancel()
         _ws_heartbeat_task = None
@@ -411,9 +420,11 @@ async def lifespan(application: FastAPI):
     if _alarm and not _alarm.demo_mode:
         await _disconnect_alarm()
     shutdown_services()
+    await stop_diagnostics(diagnostics_task)
 
 
 app = FastAPI(title="Paradox Bridge", version=BRIDGE_VERSION, lifespan=lifespan)
+app.add_middleware(CommandDiagnosticsMiddleware)
 
 
 def _maybe_add_cors() -> None:
@@ -1414,20 +1425,24 @@ async def websocket_endpoint(
         if alarm.is_connected:
             resp = _build_status_response(alarm)
             events = alarm.get_zone_history(limit=20)
-            await websocket.send_json({
+            if not await mgr.send(websocket, {
                 "type": "status",
                 "partitions": [p.model_dump() for p in resp.partitions],
                 "connected": resp.connected,
                 "events": events,
-            })
+            }):
+                return
     except Exception:
         logger.debug("Failed to send initial WS status", exc_info=True)
     try:
         while True:
             data = await websocket.receive_text()
             if data == "ping":
-                await websocket.send_json({"type": "pong"})
-    except WebSocketDisconnect:
+                if not await mgr.send(websocket, {"type": "pong"}):
+                    break
+    except (WebSocketDisconnect, RuntimeError):
+        pass
+    finally:
         mgr.disconnect(websocket)
         logger.info("WS client disconnected (remaining: %d)", mgr.active_count)
 
@@ -1443,6 +1458,8 @@ def health():
         alarm_connected=alarm.is_connected,
         websocket_clients=mgr.active_count,
         demo_mode=alarm.demo_mode,
+        panel_status_age_s=(round(time.monotonic() - alarm._last_panel_status_at, 2)
+                            if alarm._last_panel_status_at is not None else None),
     )
 
 

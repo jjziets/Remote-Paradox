@@ -1,5 +1,6 @@
 """Tests for the SQLite database layer."""
 
+import sqlite3
 import time
 from datetime import datetime, timezone
 
@@ -102,6 +103,72 @@ class TestUpdatePassword:
         with pytest.raises(ValueError, match="not found"):
             db.update_password("nobody", "hash")
         db.close()
+
+
+class TestTransactionFailures:
+    def test_failed_commit_does_not_leak_event_into_later_audit_commit(self, tmp_db):
+        db = Database(tmp_db)
+        try:
+            db.init()
+            db.insert_event("zone", "Existing", "open", "true", "2026-09-09T12:00:00")
+
+            def deny_commit(action, operation, *args):
+                if action == sqlite3.SQLITE_TRANSACTION and operation == "COMMIT":
+                    return sqlite3.SQLITE_DENY
+                return sqlite3.SQLITE_OK
+
+            db.conn.set_authorizer(deny_commit)
+            with pytest.raises(sqlite3.DatabaseError, match="not authorized"):
+                db.insert_event("zone", "Failed", "open", "true", "2026-09-09T12:00:01")
+            assert not db.conn.in_transaction
+            db.conn.set_authorizer(None)
+            db.log_action("test", "test")
+            db.close()
+            assert [event["label"] for event in db.get_events()] == ["Existing"]
+            assert len(db.get_audit_log()) == 1
+        finally:
+            db.close()
+
+    def test_failed_user_delete_preserves_tokens_after_later_commit(self, tmp_db):
+        db = Database(tmp_db)
+        try:
+            db.init()
+            db.create_user("inviter", "old_hash")
+            db.create_refresh_token("inviter", "token_hash", 3600)
+            invite = db.create_invite("inviter")
+            with pytest.raises(sqlite3.IntegrityError):
+                db.delete_user("inviter")
+            assert not db.conn.in_transaction
+            db.log_action("inviter", "test")
+            db.close()
+            assert db.get_user("inviter") is not None
+            assert db.get_refresh_token("token_hash") is not None
+            assert db.validate_invite(invite)
+        finally:
+            db.close()
+
+    def test_nested_token_failure_rolls_back_password_change(self, tmp_db):
+        db = Database(tmp_db)
+        try:
+            db.init()
+            db.create_user("john", "old_hash")
+            db.create_refresh_token("john", "token_hash", 3600)
+            db.conn.execute("""
+                CREATE TRIGGER fail_revoke BEFORE UPDATE OF revoked_at ON refresh_tokens
+                BEGIN SELECT RAISE(ABORT, 'test revoke failure'); END
+            """)
+            with pytest.raises(sqlite3.IntegrityError, match="test revoke failure"):
+                db.update_password("john", "new_hash")
+            assert not db.conn.in_transaction
+            db.log_action("john", "test")
+            assert db.get_user("john")["password_hash"] == "old_hash"
+            assert db.get_refresh_token("token_hash") is not None
+            db.conn.execute("DROP TRIGGER fail_revoke")
+            db.update_password("john", "new_hash")
+            assert db.get_user("john")["password_hash"] == "new_hash"
+            assert db.get_refresh_token("token_hash") is None
+        finally:
+            db.close()
 
 
 class TestInvites:
@@ -234,10 +301,12 @@ class TestEventPersistence:
         db.close()
 
     def test_purge_old_events(self, tmp_db):
+        from datetime import datetime, timedelta, timezone
         db = Database(tmp_db)
         db.init()
-        db.insert_event("zone", "Old", "open", "true", "2025-01-01T00:00:00")
-        db.insert_event("zone", "Recent", "open", "true", "2026-03-09T10:00:00")
+        now = datetime.now(timezone.utc)
+        db.insert_event("zone", "Old", "open", "true", (now - timedelta(days=100)).isoformat())
+        db.insert_event("zone", "Recent", "open", "true", now.isoformat())
         purged = db.purge_old_events(days=90)
         assert purged >= 1
         events = db.get_events(limit=10)
@@ -246,9 +315,10 @@ class TestEventPersistence:
         db.close()
 
     def test_purge_returns_zero_when_nothing_old(self, tmp_db):
+        from datetime import datetime, timezone
         db = Database(tmp_db)
         db.init()
-        db.insert_event("zone", "Recent", "open", "true", "2026-03-09T10:00:00")
+        db.insert_event("zone", "Recent", "open", "true", datetime.now(timezone.utc).isoformat())
         purged = db.purge_old_events(days=90)
         assert purged == 0
         db.close()

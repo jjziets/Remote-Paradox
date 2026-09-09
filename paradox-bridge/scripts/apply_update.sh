@@ -1,6 +1,11 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Pinned deployments never execute an unsigned staged source tree.
+if [[ -f /etc/paradox-updater/release-public.pem ]]; then
+    exec /usr/bin/python3 -I /usr/local/lib/paradox-updater/signed_update.py --force
+fi
+
 INSTALL_DIR="/opt/paradox-bridge"
 STAGING_DIR="$INSTALL_DIR/staging"
 STATUS_FILE="$INSTALL_DIR/update_status.json"
@@ -69,7 +74,7 @@ if [ -f "$BRIDGE_SRC/deploy/setup-boot-fsck.sh" ]; then
     cp "$BRIDGE_SRC/deploy/setup-boot-fsck.sh" "$INSTALL_DIR/deploy/setup-boot-fsck.sh"
     chmod +x "$INSTALL_DIR/deploy/setup-boot-fsck.sh"
 fi
-for deploy_script in boot-repair.sh setup-boot-repair.sh wifi-watchdog.sh setup-wifi-watchdog.sh setup-watchdog.sh setup-zram-swap.sh setup-panic-recovery.sh; do
+for deploy_script in boot-repair.sh setup-boot-repair.sh wifi-watchdog.sh setup-wifi-watchdog.sh setup-watchdog.sh setup-zram-swap.sh setup-panic-recovery.sh setup-power-hardening.sh state-recorder.sh setup-state-recorder.sh setup-command-diagnostics.sh; do
     if [ -f "$BRIDGE_SRC/deploy/$deploy_script" ]; then
         mkdir -p "$INSTALL_DIR/deploy"
         cp "$BRIDGE_SRC/deploy/$deploy_script" "$INSTALL_DIR/deploy/$deploy_script"
@@ -107,6 +112,14 @@ if [ -x "$INSTALL_DIR/deploy/setup-wifi-watchdog.sh" ]; then
     echo "[apply_update] Ensuring WiFi watchdog is installed..."
     "$INSTALL_DIR/deploy/setup-wifi-watchdog.sh" || echo "[apply_update] WARNING: WiFi watchdog setup failed"
 fi
+if [ -x "$INSTALL_DIR/deploy/setup-power-hardening.sh" ]; then
+    echo "[apply_update] Ensuring power hardening is installed..."
+    "$INSTALL_DIR/deploy/setup-power-hardening.sh" || echo "[apply_update] WARNING: power hardening setup failed"
+fi
+if [ -x "$INSTALL_DIR/deploy/setup-state-recorder.sh" ]; then
+    echo "[apply_update] Ensuring state recorder is installed..."
+    "$INSTALL_DIR/deploy/setup-state-recorder.sh" || echo "[apply_update] WARNING: state recorder setup failed"
+fi
 if [ -x "$INSTALL_DIR/deploy/setup-boot-repair.sh" ]; then
     echo "[apply_update] Ensuring boot repair timer is installed..."
     "$INSTALL_DIR/deploy/setup-boot-repair.sh" || echo "[apply_update] WARNING: boot repair setup failed"
@@ -141,6 +154,9 @@ fi
 systemctl daemon-reload
 
 echo "[apply_update] Restarting services..."
+if [ -x "$INSTALL_DIR/deploy/setup-command-diagnostics.sh" ]; then
+    "$INSTALL_DIR/deploy/setup-command-diagnostics.sh" || echo "[apply_update] WARNING: command diagnostics setup failed"
+fi
 systemctl restart paradox-bridge
 systemctl restart bluetooth || true
 sleep 2

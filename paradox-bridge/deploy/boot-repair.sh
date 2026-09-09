@@ -9,6 +9,7 @@ INSTALL_DIR="${INSTALL_DIR:-/opt/paradox-bridge}"
 HEALTH_URL="${HEALTH_URL:-http://127.0.0.1:8080/health}"
 STATUS_FILE="${STATUS_FILE:-$INSTALL_DIR/update_status.json}"
 LOCK_FILE="${LOCK_FILE:-/run/paradox-boot-repair.lock}"
+DEPLOYMENT_LOCK_FILE="${DEPLOYMENT_LOCK_FILE:-/var/lib/paradox-bridge/maintenance/maintenance.lock}"
 SKIP_APT_REPAIR="${BOOT_REPAIR_SKIP_APT:-0}"
 SLEEP_AFTER_RESTART="${BOOT_REPAIR_SLEEP_AFTER_RESTART:-10}"
 PYTHON_BIN="${PYTHON_BIN:-$INSTALL_DIR/venv/bin/python3}"
@@ -98,6 +99,12 @@ apply_staged_bridge() {
 
 main() {
     if command -v flock >/dev/null 2>&1; then
+        mkdir -p "$(dirname "$DEPLOYMENT_LOCK_FILE")"
+        exec 8>"$DEPLOYMENT_LOCK_FILE"
+        if ! flock -n 8; then
+            log "deployment or package maintenance is active; repair deferred"
+            exit 0
+        fi
         exec 9>"$LOCK_FILE"
         if ! flock -n 9; then
             log "another repair run is active"
@@ -133,6 +140,8 @@ main() {
     fi
 
     log "bridge still unhealthy, staging latest bridge release"
+    # The signed updater acquires this same lock itself.
+    if command -v flock >/dev/null 2>&1; then flock -u 8; fi
     stage_latest_bridge
     apply_staged_bridge
     restart_bridge

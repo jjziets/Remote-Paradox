@@ -164,6 +164,7 @@ class HealthResponse(BaseModel):
     alarm_connected: bool
     websocket_clients: int
     demo_mode: bool = False
+    panel_status_age_s: float | None = None
 
 
 class UserInfo(BaseModel):

@@ -11,9 +11,11 @@ import time
 from collections import deque
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from threading import RLock
 from typing import Optional
 
 from paradox_bridge.virtual_panel import VirtualPanel
+from paradox_bridge.diagnostics import emit, trace_partition_command
 
 logger = logging.getLogger(__name__)
 
@@ -61,6 +63,7 @@ class AlarmService:
         self._pai = None
         self._pai_loop_task: Optional[asyncio.Task] = None
         self._connected = False
+        self._last_panel_status_at: float | None = None
         self._demo_mode = demo_mode
         self._db = db
         self._panel: Optional[VirtualPanel] = None
@@ -69,6 +72,7 @@ class AlarmService:
         self._prev_part_state: dict[int, dict] = {}
         self._on_status_change: Optional[StatusChangeCallback] = None
         self._status_changed = False
+        self._status_lock = RLock()
         self._action_user: Optional[str] = None
         self._action_device: Optional[str] = None
         self._action_context_time: float = 0.0
@@ -135,6 +139,11 @@ class AlarmService:
         return self._status_from_pai()
 
     def _status_from_pai(self) -> AlarmStatus:
+        # HTTP readers and PAI callbacks also update the event history.
+        with self._status_lock:
+            return self._read_status_from_pai()
+
+    def _read_status_from_pai(self) -> AlarmStatus:
         try:
             storage = self._pai.storage
         except Exception:
@@ -254,7 +263,9 @@ class AlarmService:
 
     async def _pai_control_partition(self, partition_id: int, command: str) -> bool:
         try:
-            return await self._pai.control_partition(str(partition_id), command)
+            return await trace_partition_command(
+                self, partition_id, command, self._pai.control_partition,
+            )
         except ConnectionError:
             self._connected = False
             raise
@@ -453,6 +464,8 @@ class AlarmService:
             ) from e
 
         register_encodings()
+        self._last_panel_status_at = None
+        emit("panel_connect_started")
 
         pai_cfg.SERIAL_PORT = self._serial_port
         pai_cfg.SERIAL_BAUD = self._baud
@@ -475,6 +488,7 @@ class AlarmService:
             )
         self._connected = True
         logger.info("Connected to alarm panel via %s", self._serial_port)
+        emit("panel_connected")
 
         self._pai_loop_task = asyncio.create_task(self._run_pai_loop())
         logger.info("PAI status polling loop started")
@@ -482,10 +496,11 @@ class AlarmService:
     def _pai_status_update_hook(self, status) -> None:
         """Called by PAI pubsub on every status update from the panel.
         Reads the latest state, detects changes, and fires the callback."""
+        self._last_panel_status_at = time.monotonic()
         try:
             self._status_from_pai()
-        except Exception:
-            pass
+        except Exception as exc:
+            emit("panel_status_error", error_type=type(exc).__name__)
 
     async def _run_pai_loop(self) -> None:
         """Run PAI's internal loop for status polling and keepalive."""
@@ -505,6 +520,7 @@ class AlarmService:
             logger.exception("PAI loop unexpected error")
         finally:
             self._connected = False
+            emit("panel_poll_stopped")
             logger.info("PAI loop exited — connection marked as lost")
             try:
                 from paradox.lib import ps

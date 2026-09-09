@@ -9,6 +9,7 @@ import tarfile
 import tempfile
 import urllib.request
 import argparse
+import subprocess
 from pathlib import Path
 
 GITHUB_REPO = "jjziets/Remote-Paradox"
@@ -137,6 +138,12 @@ def download_and_stage(tarball_url: str, tag: str, force: bool = False) -> bool:
 
 
 def check_and_stage(force: bool = False):
+    if Path("/etc/paradox-updater/release-public.pem").exists():
+        command = ["sudo", "-n", "/usr/bin/python3", "-I", "/usr/local/lib/paradox-updater/signed_update.py", "--stage-only"]
+        if force:
+            command.append("--force")
+        subprocess.run(command, check=True)
+        return
     cur = current_version()
     release = select_latest_bridge_release(fetch_bridge_releases())
     if not release:
