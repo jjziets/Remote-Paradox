@@ -54,7 +54,12 @@ data class WatchState(
     val tileActionDone: Boolean = false,
     val armAwayEnabled: Boolean = true,
     val armStayEnabled: Boolean = true,
-)
+) {
+    // Closing the action picker can hand off to bypass confirmation, not end the flow.
+    val canReturnToTile: Boolean
+        get() = tileActionDone && screen == WatchScreen.Dashboard &&
+            pendingArm == null && actionInProgress == null && error == null
+}
 
 class WatchViewModel(app: Application) : AndroidViewModel(app) {
     val tokenStore = WatchTokenStore(app)
@@ -309,7 +314,7 @@ class WatchViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun setTilePartitionId(id: Int) {
-        _state.update { it.copy(tilePartitionId = id) }
+        _state.update { it.copy(tilePartitionId = id, tileActionDone = false) }
     }
 
     fun clearTilePartitionId() {

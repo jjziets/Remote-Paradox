@@ -86,6 +86,9 @@ class MainActivity : ComponentActivity() {
                     launchedFromTile = true
                     Log.d("MainActivity", "Tile partition tap: pid=$pid")
                     vm?.setTilePartitionId(pid)
+                } else {
+                    launchedFromTile = false
+                    vm?.resetTileActionDone()
                 }
             }
         }
@@ -344,13 +347,16 @@ class MainActivity : ComponentActivity() {
                     handleTileIntent(intent)
                 }
 
-                LaunchedEffect(state.tileActionDone) {
-                    if (state.tileActionDone && launchedFromTile) {
-                        Log.d("MainActivity", "Tile action done — finishing activity")
+                LaunchedEffect(state.canReturnToTile) {
+                    if (state.canReturnToTile && launchedFromTile) {
                         delay(150)
-                        viewModel.resetTileActionDone()
-                        launchedFromTile = false
-                        finish()
+                        // A bypass-to-arm handoff or a new intent can arrive during the delay.
+                        if (viewModel.state.value.canReturnToTile && launchedFromTile) {
+                            Log.d("MainActivity", "Tile action finished, returning to tile")
+                            viewModel.resetTileActionDone()
+                            launchedFromTile = false
+                            finish()
+                        }
                     }
                 }
 
