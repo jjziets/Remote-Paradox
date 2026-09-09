@@ -73,6 +73,13 @@ entrypoints. The actual deployment then pulls the signed release directly from
 GitHub. No GitHub token, private signing key, inbound SSH from CI, or full runner
 is installed on the Pi. Verify below before removing bootstrap temporary files.
 
+On a fresh installation that already exactly matches the latest signed version,
+the timer may report `Already verified` without creating a deployment receipt.
+Run the explicit `--force` command in the recovery section once to perform the
+full backup/install/three-sample verification and create the initial receipt.
+This extra same-version bootstrap step was not needed for the tested 1.0.9
+upgrade below.
+
 ## What counts as deployed
 
 ```bash
@@ -135,3 +142,59 @@ Releases must keep those changes backward-compatible. The updater cannot fix
 an unbootable kernel, unreadable SD card, absent power or a network that never
 comes up. Disk flushes improve recovery but cannot guarantee SD controller
 behavior after power loss.
+
+## Tested deployment
+
+On 2026-09-09, [PR #6](https://github.com/jjziets/Remote-Paradox/pull/6) merged
+as `bc0efe36d9e732311a9d0a6476171e3dd84165ab`.
+[GitHub CI](https://github.com/jjziets/Remote-Paradox/actions/runs/34352449826)
+tested, signed and published
+[bridge-v1.0.10](https://github.com/jjziets/Remote-Paradox/releases/tag/bridge-v1.0.10).
+The first clean runner exposed an undeclared QR/Pillow dependency, which was
+corrected before merge. The final backend result was 331 passed and one strict
+pre-existing BLE tracker xfail; production BLE client tracking was not changed.
+
+The runbook's asset download, pinned signature verification, archive extraction,
+trusted SSH bootstrap and Pi `systemctl start` path were executed against the
+existing Bookworm/Python 3.11 Pi. The verifier checked 62 signed file hashes.
+The Pi downloaded the release itself and recorded `state=verified` at
+**2026-09-09T12:45:23Z**, upgrading 1.0.9 to 1.0.10. Archive SHA-256:
+`2251eb813c3521a79c85de21cfdfa7f6c4edf327b988c9fee07dd70953c1de7d`.
+
+Post-install checks confirmed:
+
+- Exact version/commit and installed hashes in the root-owned receipt.
+- Authenticated HTTP status plus nine connected WebSocket status frames over
+  37 seconds; maximum observed panel poll age 6.56 seconds.
+- Unchanged TLS certificate, configuration and user-account fingerprints.
+- Active bridge, BLE, nginx, state recorder and signed-updater timer.
+- A successful check through the legacy updater entrypoint as the service user,
+  now delegated to the signed root verifier: `Already verified 1.0.10`.
+- The first automatic timer check also succeeded at 12:50:41 UTC, recognized
+  the verified version and did not reinstall or restart it.
+- Root-owned verifier/public key, private updater state, recent command logs and
+  preserved generated recovery scripts. Sleep targets were masked and Wi-Fi
+  power saving disabled in the pre-deployment check.
+
+GitHub deployment **6350071647** records the operator's verified result in
+`production-pi`; that status was posted after SSH checks, not by an unattended
+callback from the LAN Pi. Future releases still require inspection of the Pi's
+receipt for remote deployment confirmation.
+
+No real arm/disarm/panic/bypass commands, device APK installation, OS package
+upgrade, deliberate power cut or blank-card reflash were performed. Rollback
+and interrupted recovery were exercised with isolated regression tests, not by
+damaging the live installation. Intermittent physical panel/UART fault resolution
+remains a field verification task using the retained diagnostic logs.
+
+The [Android CI run](https://github.com/jjziets/Remote-Paradox/actions/runs/34352449232)
+also succeeded and published [v1.2.31](https://github.com/jjziets/Remote-Paradox/releases/tag/v1.2.31).
+Downloaded APK metadata confirmed phone version code **81** and watch code
+**25**, both version name **1.2.31**. Both signatures match the previous release
+certificate (SHA-256
+`7fe1770a027a44972278222a3d251508ace9e49bfb3758415750accd5b26d0ea`),
+and both downloads match GitHub's published SHA-256 digests. The latest-release
+endpoint points to `v1.2.31`, so bridge publication has not hidden app updates.
+On the phone, use Settings > Check for updates, then Update Watch and approve
+the installer prompts on the respective devices. The APKs were verified but
+not installed on physical devices during this deployment.
