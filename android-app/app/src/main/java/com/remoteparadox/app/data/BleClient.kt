@@ -1,5 +1,9 @@
 package com.remoteparadox.app.data
 
+import com.remoteparadox.app.diagnostics.ClientDiagnostics
+import com.remoteparadox.app.diagnostics.DiagnosticEvents
+import com.remoteparadox.diagnostics.DiagnosticEvent
+
 import android.annotation.SuppressLint
 import android.bluetooth.*
 import android.bluetooth.le.*
@@ -194,7 +198,6 @@ class BleClient(private val context: Context) {
             Log.w(TAG, "sendCommand blocked: rxChar is null")
             return
         }
-        Log.i(TAG, "sendCommand: ${json.take(120)}...")
         char.value = json.toByteArray(Charsets.UTF_8)
         gatt?.writeCharacteristic(char)
     }
@@ -204,16 +207,35 @@ class BleClient(private val context: Context) {
      * Accumulates chunked NUS responses and returns when valid JSON is received.
      */
     suspend fun sendCommandAsync(json: String, timeoutMs: Long = 15_000): String? {
-        if (_state.value != BleConnectionState.Connected) return null
-        return commandMutex.withLock {
-            _response.value = null
-            responseBuffer.clear()
-            bufferFlushJob?.cancel()
-            sendCommand(json)
-            val result = withTimeoutOrNull(timeoutMs) {
-                _response.first { it != null }
+        val session = ClientDiagnostics.capture()
+        val route = runCatching { DiagnosticEvents.route(org.json.JSONObject(json).optString("cmd")) }.getOrNull()
+        val started = System.nanoTime()
+        if (route != "/alarm/status") ClientDiagnostics.record(DiagnosticEvent("command_requested", "ble", route = route,
+            connected = _state.value == BleConnectionState.Connected), session)
+        try {
+            if (_state.value != BleConnectionState.Connected) {
+                ClientDiagnostics.record(DiagnosticEvent("command_finished", "ble", route = route, success = false, error = "connection"), session)
+                return null
             }
-            result
+            val result = commandMutex.withLock {
+                _response.value = null
+                responseBuffer.clear()
+                bufferFlushJob?.cancel()
+                sendCommand(json)
+                withTimeoutOrNull(timeoutMs) { _response.first { it != null } }
+            }
+            val accepted = result?.let { runCatching {
+                val response = org.json.JSONObject(it)
+                !response.has("error") && (if (route == "/alarm/status") response.has("partitions") else response.optBoolean("success", false))
+            }.getOrDefault(false) } ?: false
+            if (route != "/alarm/status" || !accepted) ClientDiagnostics.record(DiagnosticEvent("command_finished", "ble", route = route,
+                success = accepted, error = if (result == null) "timeout" else null,
+                elapsedMs = ((System.nanoTime() - started) / 1_000_000).coerceAtLeast(0)), session)
+            return result
+        } catch (e: Exception) {
+            ClientDiagnostics.record(DiagnosticEvent("command_finished", "ble", route = route, success = false,
+                error = DiagnosticEvents.error(e)), session)
+            throw e
         }
     }
 

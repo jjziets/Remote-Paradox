@@ -6,6 +6,7 @@ import logging
 import time
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
+from uuid import uuid4
 
 import pytest
 from fastapi import FastAPI, Request
@@ -13,6 +14,7 @@ from fastapi.responses import JSONResponse
 from fastapi.testclient import TestClient
 
 from paradox_bridge import diagnostics as diag
+from paradox_bridge.alarm import AlarmService
 
 
 @pytest.fixture
@@ -159,7 +161,7 @@ def test_health_polling_not_added_to_command_log(records):
 def test_pai_handler_allowlists_signals_and_ignores_raw_packets(records):
     handler = diag.PaiDiagnosticHandler()
     for message in ("control_partition timeout", "Message received: PRIVATE PACKET"):
-        handler.emit(logging.LogRecord("paradox.paradox", logging.ERROR, "", 0, message, (), None))
+        handler.emit(logging.LogRecord("PAI.paradox.paradox", logging.ERROR, "", 0, message, (), None))
     assert len(records) == 1
     assert records[0]["signal"] == "command_timeout"
     assert "PRIVATE" not in json.dumps(records)
@@ -220,7 +222,7 @@ async def test_failed_startup_closes_only_its_own_handlers(alarm, tmp_path, monk
 
     monkeypatch.setattr(diag, "TimedRotatingFileHandler", track_handler)
     monkeypatch.setattr(diag.Path, "read_text", fail_boot_id)
-    pai_logger = logging.getLogger("paradox")
+    pai_logger = logging.getLogger("PAI")
     existing_file = original_handler(tmp_path / "existing.jsonl")
     existing_pai = diag.PaiDiagnosticHandler()
     diag.logger.addHandler(existing_file)
@@ -244,3 +246,97 @@ async def test_failed_startup_closes_only_its_own_handlers(alarm, tmp_path, monk
             if handler is existing_pai or handler not in before_pai:
                 pai_logger.removeHandler(handler)
                 handler.close()
+
+
+@pytest.mark.parametrize("path", ["/alarm/bypass", "/alarm/panic"])
+@pytest.mark.parametrize("valid_id", [True, False])
+def test_correlation_keeps_server_id_and_never_echoes_invalid_header(records, path, valid_id):
+    app = FastAPI()
+    app.add_middleware(diag.CommandDiagnosticsMiddleware)
+
+    @app.post(path)
+    async def action():
+        diag.emit("action_observed")
+        return {"success": False}
+
+    correlation = str(uuid4()) if valid_id else "PRIVATE_TOKEN_OR_PIN"
+    with TestClient(app) as client:
+        response = client.post(path, headers={"X-Diagnostic-Request-Id": correlation})
+    assert response.status_code == 200 and response.json()["success"] is False
+    assert {record["client_request_id"] for record in records} == {correlation if valid_id else None}
+    server_ids = {record["request_id"] for record in records}
+    assert len(server_ids) == 1 and None not in server_ids and correlation not in server_ids
+    assert records[-1]["event"] == "request_finished" and records[-1]["accepted"] is False
+    assert "PRIVATE" not in json.dumps(records)
+    assert diag.request_id.get() is None and diag.client_request_id.get() is None
+
+
+@pytest.mark.asyncio
+async def test_concurrent_correlations_are_isolated_and_duplicates_ignored(records):
+    async def app(scope, receive, send):
+        await asyncio.sleep(0)
+        diag.emit("observed", path=scope["path"])
+        await send({"type": "http.response.start", "status": 200})
+        await send({"type": "http.response.body", "body": b'{"success":true}'})
+
+    middleware = diag.CommandDiagnosticsMiddleware(app)
+    ids = [str(uuid4()), str(uuid4())]
+
+    async def call(index):
+        values = [ids[index]] if index < 2 else ids
+        scope = {"type": "http", "method": "POST", "path": "/alarm/disarm",
+                 "headers": [(b"x-diagnostic-request-id", value.encode()) for value in values]}
+        await middleware(scope, AsyncMock(), AsyncMock())
+
+    await asyncio.gather(*(call(index) for index in range(3)))
+    observed = [record for record in records if record["event"] == "observed"]
+    assert {record["client_request_id"] for record in observed} == {*ids, None}
+    assert len({record["request_id"] for record in observed}) == 3
+    assert diag.request_id.get() is None and diag.client_request_id.get() is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("operation,expected_args", [
+    ("bypass_zone", ("16", "bypass")),
+    ("unbypass_zone", ("16", "clear_bypass")),
+    ("send_panic", ("2", "fire", "1")),
+])
+@pytest.mark.parametrize("outcome", [True, False, ConnectionError, asyncio.CancelledError])
+async def test_alarm_zone_and_panic_tracing_preserves_calls_and_outcomes(records, operation, expected_args, outcome):
+    alarm = AlarmService("/dev/null", 9600, "PRIVATE")
+    send = AsyncMock()
+    if isinstance(outcome, type):
+        send.side_effect = outcome("PRIVATE ERROR")
+    else:
+        send.return_value = outcome
+    alarm._pai = SimpleNamespace(connection=SimpleNamespace(connected=True), control_zone=send, send_panic=send)
+    alarm._connected = True
+    command = alarm.send_panic(2, "fire") if operation == "send_panic" else getattr(alarm, operation)(16)
+    if isinstance(outcome, type):
+        with pytest.raises(outcome):
+            await command
+    else:
+        assert await command is outcome
+        assert records[-1]["accepted"] is outcome
+    send.assert_awaited_once_with(*expected_args)
+    assert records[0]["event"] == "command_started"
+    assert records[-1]["event"] == ("command_error" if isinstance(outcome, type) else "command_result")
+    assert "PRIVATE" not in json.dumps(records)
+
+
+@pytest.mark.asyncio
+async def test_real_pai_logger_namespace_and_cleanup(alarm, records, tmp_path, monkeypatch):
+    monkeypatch.setenv("PARADOX_DIAGNOSTICS_DIR", str(tmp_path))
+    monkeypatch.setattr(diag.Path, "read_text", lambda *args, **kwargs: "fixture-boot-id")
+    before = list(logging.getLogger("PAI").handlers)
+    task = diag.start_diagnostics(alarm)
+    try:
+        logging.getLogger("PAI.paradox.paradox").warning("control_partition timeout")
+        logging.getLogger("PAI.paradox.paradox").warning("control_zone timeout")
+        logging.getLogger("PAI.paradox.paradox").warning("PRIVATE PACKET")
+        signals = [record["signal"] for record in records if record["event"] == "pai_signal"]
+        assert signals == ["command_timeout", "zone_command_timeout"]
+        assert "PRIVATE" not in json.dumps(records)
+    finally:
+        await diag.stop_diagnostics(task)
+    assert logging.getLogger("PAI").handlers == before

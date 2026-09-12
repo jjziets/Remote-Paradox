@@ -71,7 +71,7 @@ jobs:
 
           if [[ -z "$base_ref" ]]; then
             echo "watch_changed=true" >> "$GITHUB_OUTPUT"
-          elif git diff --name-only "$base_ref" "$GITHUB_SHA" | grep -qE '^android-app/watch-app/|^android-app/(build.gradle.kts|settings.gradle.kts|gradle.properties)|^android-app/gradle/'; then
+          elif git diff --name-only "$base_ref" "$GITHUB_SHA" | grep -qE '^android-app/(watch-app|diagnostics)/|^android-app/(build.gradle.kts|settings.gradle.kts|gradle.properties)|^android-app/gradle/'; then
             echo "watch_changed=true" >> "$GITHUB_OUTPUT"
           else
             echo "watch_changed=false" >> "$GITHUB_OUTPUT"
@@ -79,7 +79,7 @@ jobs:
 
       - name: Build phone app (release)
         # Unit tests run before either signed APK can be published.
-        run: ./gradlew :app:testDebugUnitTest :watch-app:testDebugUnitTest :app:assembleRelease
+        run: ./gradlew :diagnostics:testDebugUnitTest :app:testDebugUnitTest :watch-app:testDebugUnitTest :app:assembleRelease
 
       - name: Build watch app (release)
         run: ./gradlew :watch-app:assembleRelease

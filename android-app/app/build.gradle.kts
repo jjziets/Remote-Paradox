@@ -28,8 +28,8 @@ android {
         applicationId = "com.remoteparadox.app"
         minSdk = 26
         targetSdk = 35
-        versionCode = 81
-        versionName = "1.2.31"
+        versionCode = 82
+        versionName = "1.2.33"
         buildConfigField("String", "GITHUB_REPO", "\"jjziets/Remote-Paradox\"")
     }
 
@@ -72,6 +72,7 @@ android {
 }
 
 dependencies {
+    implementation(project(":diagnostics"))
     // Firebase (FCM push for health alerts); BoM keeps versions aligned
     implementation(platform("com.google.firebase:firebase-bom:34.14.1"))
     implementation("com.google.firebase:firebase-messaging")
@@ -117,4 +118,7 @@ dependencies {
 
     // Testing
     testImplementation("junit:junit:4.13.2")
+    testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.9.0")
+    testImplementation("com.squareup.okhttp3:mockwebserver:4.12.0")
+    testImplementation("com.squareup.okhttp3:okhttp-tls:4.12.0")
 }

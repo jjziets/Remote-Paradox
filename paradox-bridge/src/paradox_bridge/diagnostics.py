@@ -4,6 +4,7 @@ import asyncio
 import json
 import logging
 import os
+import re
 import time
 import uuid
 from contextlib import suppress
@@ -18,10 +19,14 @@ logger.setLevel(logging.INFO)
 logger.propagate = False
 logger.addHandler(logging.NullHandler())
 request_id = ContextVar("alarm_request_id", default=None)
-_PATHS = {"/alarm/arm-away", "/alarm/arm-stay", "/alarm/disarm"}
+client_request_id = ContextVar("alarm_client_request_id", default=None)
+_PATHS = {"/alarm/arm-away", "/alarm/arm-stay", "/alarm/disarm", "/alarm/bypass", "/alarm/panic"}
+_CLIENT_ID = re.compile(rb"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}")
 _PAI_SIGNALS = {
     "control_partition timeout": "command_timeout",
     "control_partition canceled": "command_cancelled",
+    "control_zone timeout": "zone_command_timeout",
+    "control_zone canceled": "zone_command_cancelled",
     "No partitions selected": "partition_not_found",
     "Lost communication with panel": "polling_timeout",
     "Connection to panel was lost": "connection_lost",
@@ -44,6 +49,7 @@ def emit(event: str, **fields) -> None:
         logger.info(json.dumps({
             "time": datetime.now(timezone.utc).isoformat(),
             "event": event, "request_id": request_id.get(), **fields,
+            "client_request_id": client_request_id.get(),
         }, separators=(",", ":")))
     except Exception:
         pass
@@ -83,9 +89,24 @@ def panel_snapshot(alarm) -> dict:
 
 
 async def trace_partition_command(alarm, partition_id, command, send):
+    return await _trace_command(alarm, {"partition": partition_id, "command": command},
+                                send, str(partition_id), command)
+
+
+async def trace_zone_command(alarm, zone_id, command, send):
+    return await _trace_command(alarm, {"zone": zone_id, "command": command},
+                                send, str(zone_id), command)
+
+
+async def trace_panic_command(alarm, partition_id, panic_type, send):
+    return await _trace_command(alarm, {"partition": partition_id, "command": "panic"},
+                                send, str(partition_id), panic_type, "1")
+
+
+async def _trace_command(alarm, fields, send, *args):
     command_id = uuid.uuid4().hex[:16]
     started = time.monotonic()
-    fields = {"command_id": command_id, "partition": partition_id, "command": command}
+    fields = {"command_id": command_id, **fields}
     emit("command_started", **fields, panel=panel_snapshot(alarm))
 
     async def waiting():
@@ -98,7 +119,7 @@ async def trace_partition_command(alarm, partition_id, command, send):
 
     watcher = asyncio.create_task(waiting())
     try:
-        accepted = await send(str(partition_id), command)
+        accepted = await send(*args)
         emit("command_result", **fields, accepted=bool(accepted),
              elapsed_ms=round((time.monotonic() - started) * 1000),
              panel=panel_snapshot(alarm))
@@ -119,9 +140,23 @@ class CommandDiagnosticsMiddleware:
         self.app = app
 
     async def __call__(self, scope, receive, send):
-        if scope["type"] != "http" or scope.get("path") not in _PATHS:
+        if scope["type"] != "http":
             return await self.app(scope, receive, send)
         token = request_id.set(uuid.uuid4().hex[:16])
+        values = [value for name, value in scope.get("headers", [])
+                  if name.lower() == b"x-diagnostic-request-id"]
+        client_id = (values[0].decode("ascii").lower()
+                     if len(values) == 1 and _CLIENT_ID.fullmatch(values[0]) else None)
+        client_token = client_request_id.set(client_id)
+        try:
+            if scope.get("path") not in _PATHS:
+                return await self.app(scope, receive, send)
+            return await self._trace_request(scope, receive, send)
+        finally:
+            client_request_id.reset(client_token)
+            request_id.reset(token)
+
+    async def _trace_request(self, scope, receive, send):
         started = time.monotonic()
         status = None
         response_bytes = bytearray()
@@ -154,7 +189,6 @@ class CommandDiagnosticsMiddleware:
                         accepted = value
             emit("request_finished", http_status=status, accepted=accepted,
                  elapsed_ms=round((time.monotonic() - started) * 1000))
-            request_id.reset(token)
 
 
 async def monitor_panel(alarm):
@@ -179,7 +213,7 @@ def start_diagnostics(alarm):
         return None
     handler = None
     pai_handler = None
-    pai_logger = logging.getLogger("paradox")
+    pai_logger = logging.getLogger("PAI")
     try:
         # Installer creates this private directory with the bridge user's ownership.
         handler = TimedRotatingFileHandler(
@@ -213,7 +247,7 @@ async def stop_diagnostics(task):
         if isinstance(handler, TimedRotatingFileHandler):
             logger.removeHandler(handler)
             handler.close()
-    pai_logger = logging.getLogger("paradox")
+    pai_logger = logging.getLogger("PAI")
     for handler in list(pai_logger.handlers):
         if isinstance(handler, PaiDiagnosticHandler):
             pai_logger.removeHandler(handler)

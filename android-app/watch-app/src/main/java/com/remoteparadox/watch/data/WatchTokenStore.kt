@@ -2,6 +2,7 @@ package com.remoteparadox.watch.data
 
 import android.content.Context
 import android.content.SharedPreferences
+import com.remoteparadox.watch.diagnostics.ClientDiagnostics
 
 class WatchTokenStore(context: Context) {
     private val prefs: SharedPreferences = context.getSharedPreferences(
@@ -11,10 +12,13 @@ class WatchTokenStore(context: Context) {
     var token: String?
         get() = prefs.getString(KEY_TOKEN, null)
         set(value) {
-            prefs.edit()
-                .putString(KEY_TOKEN, value)
-                .putLong(KEY_TOKEN_SAVED_AT, System.currentTimeMillis())
-                .apply()
+            synchronized(ClientDiagnostics.lock) {
+                prefs.edit()
+                    .putString(KEY_TOKEN, value)
+                    .putLong(KEY_TOKEN_SAVED_AT, System.currentTimeMillis())
+                    .apply()
+                syncDiagnostics()
+            }
         }
 
     var refreshToken: String?
@@ -30,19 +34,19 @@ class WatchTokenStore(context: Context) {
 
     var username: String?
         get() = prefs.getString(KEY_USERNAME, null)
-        set(value) = prefs.edit().putString(KEY_USERNAME, value).apply()
+        set(value) = editCredentials { putString(KEY_USERNAME, value) }
 
     var serverHost: String?
         get() = prefs.getString(KEY_HOST, null)
-        set(value) = prefs.edit().putString(KEY_HOST, value).apply()
+        set(value) = editCredentials { putString(KEY_HOST, value) }
 
     var serverPort: Int
         get() = prefs.getInt(KEY_PORT, 9433)
-        set(value) = prefs.edit().putInt(KEY_PORT, value).apply()
+        set(value) = editCredentials { putInt(KEY_PORT, value) }
 
     var certFingerprint: String?
         get() = prefs.getString(KEY_FINGERPRINT, null)
-        set(value) = prefs.edit().putString(KEY_FINGERPRINT, value).apply()
+        set(value) = editCredentials { putString(KEY_FINGERPRINT, value) }
 
     var alarmCode: String?
         get() = prefs.getString(KEY_ALARM_CODE, null)
@@ -90,7 +94,20 @@ class WatchTokenStore(context: Context) {
     val bearerHeader: String get() = "Bearer ${token.orEmpty()}"
 
     fun clear() {
-        prefs.edit().clear().apply()
+        editCredentials { clear() }
+    }
+
+    init { syncDiagnostics() }
+
+    private fun editCredentials(edit: SharedPreferences.Editor.() -> Unit) {
+        synchronized(ClientDiagnostics.lock) {
+            prefs.edit().apply(edit).apply()
+            syncDiagnostics()
+        }
+    }
+
+    private fun syncDiagnostics() {
+        ClientDiagnostics.bind(baseUrl, username, certFingerprint, token)
     }
 
     companion object {

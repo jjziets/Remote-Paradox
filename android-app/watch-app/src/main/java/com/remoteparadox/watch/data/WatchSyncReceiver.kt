@@ -59,7 +59,6 @@ class WatchSyncReceiver : WearableListenerService() {
 
         try {
             val payloadStr = String(event.data, Charsets.UTF_8)
-            Log.d(TAG, "  Raw payload: ${payloadStr.take(200)}...")
 
             val payload = json.decodeFromString<WatchSyncPayload>(payloadStr)
             Log.d(TAG, "  Parsed: host=${payload.host}, port=${payload.port}, user=${payload.username}")

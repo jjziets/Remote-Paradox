@@ -1,5 +1,9 @@
 package com.remoteparadox.app
 
+import com.remoteparadox.app.diagnostics.ClientDiagnostics
+import com.remoteparadox.app.diagnostics.PhoneDiagnosticReports
+import com.remoteparadox.diagnostics.DiagnosticEvent
+
 import android.Manifest
 import android.content.Intent
 import android.content.pm.PackageManager
@@ -61,6 +65,7 @@ class MainActivity : ComponentActivity() {
         setContent {
             RemoteParadoxTheme {
                 val state by vm.state.collectAsState()
+                val diagnosticState by PhoneDiagnosticReports.state.collectAsState()
 
                 when (state.screen) {
                     Screen.Loading -> {}
@@ -143,6 +148,10 @@ class MainActivity : ComponentActivity() {
                     )
 
                     Screen.Settings -> SettingsScreen(
+                        diagnosticState = diagnosticState,
+                        onSendDiagnostics = PhoneDiagnosticReports::send,
+                        onRetryDiagnostics = PhoneDiagnosticReports::retry,
+                        onForgetDiagnostics = PhoneDiagnosticReports::forget,
                         username = vm.tokenStore.username,
                         serverHost = vm.tokenStore.serverHost,
                         serverPort = vm.tokenStore.serverPort,
@@ -224,12 +233,15 @@ class MainActivity : ComponentActivity() {
     }
 
     override fun onPause() {
+        ClientDiagnostics.record(DiagnosticEvent("background", "phone_app"))
         super.onPause()
         vm.stopRealtimeUpdates()
     }
 
     override fun onResume() {
+        ClientDiagnostics.record(DiagnosticEvent("foreground", "phone_app"))
         super.onResume()
+        PhoneDiagnosticReports.onForeground()
         if (vm.state.value.screen == Screen.Dashboard) {
             vm.startRealtimeUpdates()
         }

@@ -17,3 +17,4 @@ dependencyResolutionManagement {
 rootProject.name = "RemoteParadox"
 include(":app")
 include(":watch-app")
+include(":diagnostics")
