@@ -1,5 +1,10 @@
 package com.remoteparadox.watch
 
+import com.remoteparadox.watch.diagnostics.ClientDiagnostics
+import com.remoteparadox.watch.diagnostics.DiagnosticEvents
+import com.remoteparadox.watch.diagnostics.DiagnosticSession
+import com.remoteparadox.diagnostics.DiagnosticEvent
+
 import android.app.Application
 import android.os.VibrationEffect
 import android.os.Vibrator
@@ -233,6 +238,7 @@ class WatchViewModel(app: Application) : AndroidViewModel(app) {
 
     fun refreshStatus() {
         val (a, session) = connection ?: return
+        val diagnosticSession = ClientDiagnostics.capture()
         val generation = realtimeGeneration.get()
         viewModelScope.launch(Dispatchers.IO) {
             try {
@@ -250,6 +256,7 @@ class WatchViewModel(app: Application) : AndroidViewModel(app) {
                         val newStatus = resp.body()!!
                         val oldStatus = _state.value.alarmStatus
                         if (!updateTileStatus(newStatus, ticket)) return@ifCurrent
+                        DiagnosticEvents.status(newStatus, "watch_app", diagnosticSession)
                         _state.update { it.copy(alarmStatus = newStatus, isLoading = false, error = null) }
                         checkForAlarmVibration(oldStatus, newStatus)
                     } else if (resp.code() == 401) {
@@ -480,7 +487,7 @@ class WatchViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch(Dispatchers.IO) {
             try {
                 maybeRefreshToken(a, session)
-                val resp = sendCommand(a, session, call) ?: return@launch
+                val resp = sendCommand(a, session, name, call) ?: return@launch
                 if (!statusCache.isSameSession(session)) return@launch
                 if (resp.panelAccepted()) {
                     delay(500)
@@ -505,15 +512,17 @@ class WatchViewModel(app: Application) : AndroidViewModel(app) {
     private suspend fun sendCommand(
         a: ParadoxApi,
         session: StatusCacheTicket,
+        name: String = "bypass",
         call: suspend (ParadoxApi, String) -> retrofit2.Response<ActionResult>,
     ): retrofit2.Response<ActionResult>? {
         if (!AlarmCommandGate.tryBegin()) return null
         try {
             val ticket = statusCache.capture()
             val auth = statusCache.inSession(session) { tokenStore.bearerHeader } ?: return null
+            val diagnosticSession = ClientDiagnostics.capture()
             return statusCache.command(ticket) {
                 requestTileUpdate()
-                call(a, auth)
+                DiagnosticEvents.command(name, "watch_app", diagnosticSession, { it.panelAccepted() }) { call(a, auth) }
             }
         } finally {
             AlarmCommandGate.finish()
@@ -532,6 +541,7 @@ class WatchViewModel(app: Application) : AndroidViewModel(app) {
 
     private fun connectWebSocket() {
         val session = connection?.session ?: return
+        val diagnosticSession = ClientDiagnostics.capture()
         val ticket = statusCache.capture()
         if (!statusCache.isSameSession(session) || !statusCache.isCurrent(ticket)) return
         val url = statusCache.inSession(session) { buildWsUrl() } ?: return
@@ -541,6 +551,7 @@ class WatchViewModel(app: Application) : AndroidViewModel(app) {
         val request = Request.Builder().url(url).build()
         webSocket = ApiClient.httpClient.newWebSocket(request, object : WebSocketListener() {
             override fun onOpen(ws: WebSocket, response: Response) {
+                ClientDiagnostics.record(DiagnosticEvent("ws_open", "ws", route = "/ws", connected = true), diagnosticSession)
                 statusCache.ifCurrent(ticket) {
                     if (generation == wsGeneration.get()) _state.update { it.copy(wsConnected = true, error = null) }
                 }
@@ -548,17 +559,19 @@ class WatchViewModel(app: Application) : AndroidViewModel(app) {
 
             override fun onMessage(ws: WebSocket, text: String) {
                 statusCache.ifCurrent(ticket) {
-                    if (generation == wsGeneration.get()) handleWsMessage(text, ticket)
+                    if (generation == wsGeneration.get()) handleWsMessage(text, ticket, diagnosticSession)
                 }
             }
 
             override fun onClosed(ws: WebSocket, code: Int, reason: String) {
+                ClientDiagnostics.record(DiagnosticEvent("ws_closed", "ws", route = "/ws", connected = false), diagnosticSession)
                 statusCache.ifCurrent(ticket) {
                     if (generation == wsGeneration.get()) _state.update { it.copy(wsConnected = false) }
                 }
             }
 
             override fun onFailure(ws: WebSocket, t: Throwable, response: Response?) {
+                ClientDiagnostics.record(DiagnosticEvent("ws_failed", "ws", route = "/ws", connected = false, error = DiagnosticEvents.error(t)), diagnosticSession)
                 Log.w(TAG, "WS failure: ${t.message}")
                 statusCache.ifCurrent(ticket) {
                     if (generation == wsGeneration.get()) _state.update { it.copy(wsConnected = false) }
@@ -567,7 +580,7 @@ class WatchViewModel(app: Application) : AndroidViewModel(app) {
         })
     }
 
-    private fun handleWsMessage(text: String, ticket: StatusCacheTicket) {
+    private fun handleWsMessage(text: String, ticket: StatusCacheTicket, diagnosticSession: DiagnosticSession?) {
         try {
             val obj = json.decodeFromString<JsonObject>(text)
             val type = obj["type"]?.jsonPrimitive?.content ?: return
@@ -577,11 +590,13 @@ class WatchViewModel(app: Application) : AndroidViewModel(app) {
                 )
                 val oldStatus = _state.value.alarmStatus
                 if (!updateTileStatus(status, ticket)) return
+                DiagnosticEvents.status(status, "ws", diagnosticSession)
                 _state.update { it.copy(alarmStatus = status, isLoading = false, error = null) }
                 checkForAlarmVibration(oldStatus, status)
             }
         } catch (e: Exception) {
             Log.w(TAG, "WS parse error: ${e.message}")
+            ClientDiagnostics.record(DiagnosticEvent("ws_failed", "ws", route = "/ws", error = "parse"), diagnosticSession)
         }
     }
 

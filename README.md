@@ -127,6 +127,13 @@ The server address is saved in `localStorage` — you only enter it once.
 
 ## Android App
 
+Phone Settings includes a diagnostic report action in builds containing the
+client diagnostics feature. It collects bounded phone and watch logs and sends
+them to the authenticated Pi, retaining a private capture for retry if the Pi
+is unreachable. See [phone/watch diagnostic reports](docs/client-diagnostics.md)
+for required builds, privacy, retention and SSH retrieval. This feature does
+not itself repair a stalled panel connection.
+
 Android app releases use Git tags named `v*` and publish APK assets through
 GitHub Actions. Download the phone APK from the
 [latest Android release](https://github.com/jjziets/Remote-Paradox/releases)

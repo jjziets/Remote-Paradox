@@ -1,5 +1,9 @@
 package com.remoteparadox.watch
 
+import com.remoteparadox.watch.diagnostics.ClientDiagnostics
+import com.remoteparadox.watch.diagnostics.DiagnosticEvents
+import com.remoteparadox.diagnostics.DiagnosticEvent
+
 import android.os.Bundle
 import android.util.Log
 import androidx.activity.ComponentActivity
@@ -72,6 +76,8 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun handleTileIntent(tileIntent: android.content.Intent) {
+        ClientDiagnostics.record(DiagnosticEvent("tile_action", "watch_tile",
+            partitionId = tileIntent.getIntExtra("partition_id", -1).takeIf { it in 1..32 }))
         val action = tileIntent.getStringExtra("action")
         val pid = tileIntent.getIntExtra("partition_id", -1)
 
@@ -101,8 +107,11 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun executeDirectAction(intent: android.content.Intent) {
+        val diagnosticSession = ClientDiagnostics.capture()
         val action = intent.getStringExtra("action")!!
         val pid = intent.getIntExtra("partition_id", -1)
+        ClientDiagnostics.record(DiagnosticEvent("tile_action", "watch_tile", route = DiagnosticEvents.route(action),
+            partitionId = pid.takeIf { it in 1..32 }), diagnosticSession)
         intent.removeExtra("action")
         val tokenStore = WatchTokenStore(this)
         val cache = WatchStatusCache(this, tokenStore)
@@ -144,6 +153,7 @@ class MainActivity : ComponentActivity() {
                 val beforeMode = beforeStatus?.partitions?.find { it.id == pid }?.mode
                 if (beforeStatus == null || !beforeStatus.connected) return@launch
                 if (!cache.save(StatusSnapshot(beforeStatus, System.currentTimeMillis()), beforeTicket)) return@launch
+                DiagnosticEvents.status(beforeStatus, "watch_tile", diagnosticSession)
                 Log.d("MainActivity", "Before mode: $beforeMode")
 
                 if (action in listOf("arm_away", "arm_stay")) {
@@ -158,11 +168,13 @@ class MainActivity : ComponentActivity() {
 
                 val resp = cache.command(beforeTicket) {
                     updater.requestUpdate(StatusTileService::class.java)
-                    when (action) {
-                        "arm_away" -> api.armAway(auth, ArmRequest(code, pid))
-                        "arm_stay" -> api.armStay(auth, ArmRequest(code, pid))
-                        "disarm" -> api.disarm(auth, ArmRequest(code, pid))
-                        else -> null
+                    DiagnosticEvents.command(action, "watch_tile", diagnosticSession, { it?.panelAccepted() == true }) {
+                        when (action) {
+                            "arm_away" -> api.armAway(auth, ArmRequest(code, pid))
+                            "arm_stay" -> api.armStay(auth, ArmRequest(code, pid))
+                            "disarm" -> api.disarm(auth, ArmRequest(code, pid))
+                            else -> null
+                        }
                     }
                 }
                 Log.d("MainActivity", "Action $action response: ${resp?.code()}")
@@ -177,6 +189,7 @@ class MainActivity : ComponentActivity() {
                         if (!cache.isCurrent(ticket)) return@launch
                         if (statusResp.isSuccessful) statusResp.body()?.let {
                             cache.save(StatusSnapshot(it, System.currentTimeMillis()), ticket)
+                            DiagnosticEvents.status(it, "watch_tile", diagnosticSession)
                         }
                         val currentMode = statusResp.body()?.partitions?.find { it.id == pid }?.mode
                         updater.requestUpdate(StatusTileService::class.java)
@@ -212,6 +225,7 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun showPanicConfirmation() {
+        val diagnosticSession = ClientDiagnostics.capture()
         val tokenStore = WatchTokenStore(this)
         val cache = WatchStatusCache(this, tokenStore)
         val session = cache.capture()
@@ -286,7 +300,9 @@ class MainActivity : ComponentActivity() {
                                             val (api, auth) = credentials
                                             val resp = cache.command(ticket) {
                                                 TileService.getUpdater(applicationContext).requestUpdate(StatusTileService::class.java)
-                                                api.panic(auth, PanicRequest(partitionId = 1))
+                                                DiagnosticEvents.command("panic", "watch_tile", diagnosticSession, { it.panelAccepted() }) {
+                                                    api.panic(auth, PanicRequest(partitionId = 1))
+                                                }
                                             }
                                             Log.d("MainActivity", "Panic response: ${resp?.code()}")
                                             sent = resp?.panelAccepted() == true
@@ -317,6 +333,16 @@ class MainActivity : ComponentActivity() {
                 }
             }
         }
+    }
+
+    override fun onResume() {
+        super.onResume()
+        ClientDiagnostics.record(DiagnosticEvent("foreground", "watch_app"))
+    }
+
+    override fun onPause() {
+        ClientDiagnostics.record(DiagnosticEvent("background", "watch_app"))
+        super.onPause()
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {

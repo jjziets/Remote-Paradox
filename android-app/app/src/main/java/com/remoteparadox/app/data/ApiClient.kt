@@ -1,6 +1,7 @@
 package com.remoteparadox.app.data
 
 import android.os.Build
+import com.remoteparadox.diagnostics.Diagnostics
 import kotlinx.serialization.json.Json
 import okhttp3.Interceptor
 import okhttp3.MediaType.Companion.toMediaType
@@ -42,6 +43,7 @@ object ApiClient {
         }
         val builder = OkHttpClient.Builder()
             .retryOnConnectionFailure(false)
+            .addInterceptor(Diagnostics.interceptor())
             .addInterceptor(deviceHeader)
             .connectTimeout(5, TimeUnit.SECONDS)
             .readTimeout(10, TimeUnit.SECONDS)

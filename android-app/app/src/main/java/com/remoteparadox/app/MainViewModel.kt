@@ -1,5 +1,10 @@
 package com.remoteparadox.app
 
+import com.remoteparadox.app.diagnostics.ClientDiagnostics
+import com.remoteparadox.app.diagnostics.DiagnosticEvents
+import com.remoteparadox.app.diagnostics.DiagnosticSession
+import com.remoteparadox.diagnostics.DiagnosticEvent
+
 import android.app.Application
 import android.app.NotificationChannel
 import android.app.NotificationManager
@@ -274,6 +279,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     private fun refreshStatusViaBle() {
         val ble = bleClient ?: return
         val token = tokenStore.token ?: return
+        val diagnosticSession = ClientDiagnostics.capture()
         viewModelScope.launch(Dispatchers.IO) {
             try {
                 _state.update { it.copy(isLoading = true) }
@@ -291,10 +297,12 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                     return@launch
                 }
                 val status = json.decodeFromString<AlarmStatus>(resp)
+                DiagnosticEvents.status(status, "ble", diagnosticSession)
                 checkStatusChanges(status)
                 _state.update { it.copy(alarmStatus = status, isLoading = false, error = null, bleConnected = true) }
             } catch (e: Exception) {
                 Log.w(TAG, "BLE status refresh failed: ${e.message}")
+                ClientDiagnostics.record(DiagnosticEvent("status_received", "ble", success = false, error = DiagnosticEvents.error(e)), diagnosticSession)
                 _state.update { it.copy(isLoading = false, error = "BLE: ${e.message}") }
             }
         }
@@ -498,9 +506,10 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             return
         }
         if (!beginAlarmAction(name)) return
+        val diagnosticSession = ClientDiagnostics.capture()
         viewModelScope.launch(Dispatchers.IO) {
             try {
-                val resp = call(a)
+                val resp = DiagnosticEvents.command(name, "phone_app", diagnosticSession, { it.panelAccepted() }) { call(a) }
                 if (resp.panelAccepted()) {
                     httpReachable = true
                     delay(500)
@@ -552,6 +561,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             refreshStatusViaBle()
             return
         }
+        val diagnosticSession = ClientDiagnostics.capture()
         viewModelScope.launch(Dispatchers.IO) {
             try {
                 maybeRefreshToken()
@@ -560,6 +570,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 if (resp.isSuccessful && resp.body() != null) {
                     httpReachable = true
                     val body = resp.body()!!
+                    DiagnosticEvents.status(body, "phone_app", diagnosticSession)
                     checkStatusChanges(body)
                     _state.update { it.copy(alarmStatus = body, isLoading = false, error = null) }
                 } else if (resp.code() == 401) {
@@ -675,6 +686,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     private fun connectWebSocket() {
         val url = buildWsUrl() ?: return
+        val diagnosticSession = ClientDiagnostics.capture()
         val generation = wsGeneration.incrementAndGet()
         webSocket?.cancel()
         val request = Request.Builder().url(url).build()
@@ -683,12 +695,13 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 if (generation != wsGeneration.get()) return
                 lastWsStatusAt = SystemClock.elapsedRealtime()
                 Log.i(TAG, "WebSocket connected")
+                ClientDiagnostics.record(DiagnosticEvent("ws_open", "ws", route = "/ws", connected = true), diagnosticSession)
                 _state.update { it.copy(wsConnected = true, error = null) }
             }
 
             override fun onMessage(ws: WebSocket, text: String) {
                 if (generation != wsGeneration.get()) return
-                handleWsMessage(text)
+                handleWsMessage(text, diagnosticSession)
             }
 
             override fun onClosing(ws: WebSocket, code: Int, reason: String) {
@@ -699,18 +712,20 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             override fun onClosed(ws: WebSocket, code: Int, reason: String) {
                 if (generation != wsGeneration.get()) return
                 Log.i(TAG, "WebSocket closed: $code")
+                ClientDiagnostics.record(DiagnosticEvent("ws_closed", "ws", route = "/ws", connected = false), diagnosticSession)
                 _state.update { it.copy(wsConnected = false) }
             }
 
             override fun onFailure(ws: WebSocket, t: Throwable, response: Response?) {
                 if (generation != wsGeneration.get()) return
                 Log.w(TAG, "WebSocket failure: ${t.message}")
+                ClientDiagnostics.record(DiagnosticEvent("ws_failed", "ws", route = "/ws", connected = false, error = DiagnosticEvents.error(t)), diagnosticSession)
                 _state.update { it.copy(wsConnected = false) }
             }
         })
     }
 
-    private fun handleWsMessage(text: String) {
+    private fun handleWsMessage(text: String, diagnosticSession: DiagnosticSession?) {
         try {
             val obj = json.decodeFromString<JsonObject>(text)
             val type = obj["type"]?.jsonPrimitive?.content ?: return
@@ -723,6 +738,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                         json.decodeFromString<PanelEvent>(it.toString())
                     } ?: emptyList()
                     checkStatusChanges(status)
+                    DiagnosticEvents.status(status, "ws", diagnosticSession)
                     lastWsStatusAt = SystemClock.elapsedRealtime()
                     httpReachable = true
                     _state.update {
@@ -734,6 +750,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             }
         } catch (e: Exception) {
             Log.w(TAG, "Failed to parse WS message: ${e.message}")
+            ClientDiagnostics.record(DiagnosticEvent("ws_failed", "ws", route = "/ws", error = "parse"), diagnosticSession)
         }
     }
 
@@ -1988,6 +2005,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     private suspend fun maybeRefreshToken() {
         val a = api ?: return
+        val diagnosticSession = ClientDiagnostics.capture()
         if (tokenStore.tokenAgeMs < TOKEN_REFRESH_AGE_MS) return
         try {
             Log.i(TAG, "Token is ${tokenStore.tokenAgeMs / 3600000}h old, refreshing...")
@@ -1999,8 +2017,11 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             }
             if (resp.isSuccessful && resp.body() != null) {
                 val body = resp.body()!!
-                tokenStore.token = body.token
-                tokenStore.refreshToken = body.refreshToken.ifBlank { tokenStore.refreshToken }
+                synchronized(ClientDiagnostics.lock) {
+                    if (diagnosticSession != null && !ClientDiagnostics.matches(diagnosticSession)) return
+                    tokenStore.token = body.token
+                    tokenStore.refreshToken = body.refreshToken.ifBlank { tokenStore.refreshToken }
+                }
                 if (!tokenStore.refreshToken.isNullOrBlank()) {
                     watchSync.sendCredentialsToWatch(tokenStore)
                 }
@@ -2009,8 +2030,11 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 val fallback = a.refreshToken(tokenStore.bearerHeader)
                 if (fallback.isSuccessful && fallback.body() != null) {
                     val body = fallback.body()!!
-                    tokenStore.token = body.token
-                    tokenStore.refreshToken = body.refreshToken.ifBlank { tokenStore.refreshToken }
+                    synchronized(ClientDiagnostics.lock) {
+                        if (diagnosticSession != null && !ClientDiagnostics.matches(diagnosticSession)) return
+                        tokenStore.token = body.token
+                        tokenStore.refreshToken = body.refreshToken.ifBlank { tokenStore.refreshToken }
+                    }
                     if (!tokenStore.refreshToken.isNullOrBlank()) {
                         watchSync.sendCredentialsToWatch(tokenStore)
                     }

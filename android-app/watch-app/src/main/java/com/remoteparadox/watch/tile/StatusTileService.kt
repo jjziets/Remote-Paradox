@@ -1,5 +1,10 @@
 package com.remoteparadox.watch.tile
 
+import com.remoteparadox.watch.diagnostics.ClientDiagnostics
+import com.remoteparadox.watch.diagnostics.DiagnosticEvents
+import com.remoteparadox.watch.diagnostics.DiagnosticSession
+import com.remoteparadox.diagnostics.DiagnosticEvent
+
 import androidx.concurrent.futures.CallbackToFutureAdapter
 import androidx.wear.protolayout.*
 import androidx.wear.protolayout.ActionBuilders
@@ -46,6 +51,8 @@ class StatusTileService : TileService() {
 
     override fun onTileRequest(requestParams: RequestBuilders.TileRequest): ListenableFuture<Tile> {
         val tokenStore = WatchTokenStore(this)
+        val diagnosticSession = ClientDiagnostics.capture()
+        fun buildTile(result: TileStatus, tokens: WatchTokenStore) = buildTile(result, tokens, diagnosticSession)
         if (!tokenStore.isLoggedIn) {
             return Futures.immediateFuture(buildNotLoggedInTile())
         }
@@ -97,9 +104,12 @@ class StatusTileService : TileService() {
         super.onDestroy()
     }
 
-    private fun buildTile(result: TileStatus, tokenStore: WatchTokenStore): Tile {
+    private fun buildTile(result: TileStatus, tokenStore: WatchTokenStore, diagnosticSession: DiagnosticSession?): Tile {
         val snapshot = result.snapshot?.takeIf { it.isFresh(System.currentTimeMillis()) }
         val status = snapshot?.status
+        ClientDiagnostics.record(DiagnosticEvent("tile_render", "watch_tile", success = status?.connected == true,
+            connected = status?.connected ?: false, error = if (status == null) "unknown" else null), diagnosticSession)
+        status?.let { DiagnosticEvents.status(it, "watch_tile", diagnosticSession) }
         val layout = when {
             status == null -> buildErrorLayout(result.error ?: "Status stale\nOpen app")
             !status.connected -> buildErrorLayout("Panel disconnected\nOpen app")

@@ -2,6 +2,7 @@ package com.remoteparadox.app.data
 
 import android.content.Context
 import android.content.SharedPreferences
+import com.remoteparadox.app.diagnostics.ClientDiagnostics
 import androidx.security.crypto.EncryptedSharedPreferences
 import androidx.security.crypto.MasterKey
 
@@ -21,10 +22,13 @@ class TokenStore(context: Context) {
     var token: String?
         get() = prefs.getString(KEY_TOKEN, null)
         set(value) {
-            prefs.edit()
-                .putString(KEY_TOKEN, value)
-                .putLong(KEY_TOKEN_SAVED_AT, System.currentTimeMillis())
-                .apply()
+            synchronized(ClientDiagnostics.lock) {
+                prefs.edit()
+                    .putString(KEY_TOKEN, value)
+                    .putLong(KEY_TOKEN_SAVED_AT, System.currentTimeMillis())
+                    .apply()
+                syncDiagnostics()
+            }
         }
 
     var refreshToken: String?
@@ -40,7 +44,7 @@ class TokenStore(context: Context) {
 
     var username: String?
         get() = prefs.getString(KEY_USERNAME, null)
-        set(value) = prefs.edit().putString(KEY_USERNAME, value).apply()
+        set(value) = editCredentials { putString(KEY_USERNAME, value) }
 
     var role: String?
         get() = prefs.getString(KEY_ROLE, null)
@@ -48,15 +52,15 @@ class TokenStore(context: Context) {
 
     var serverHost: String?
         get() = prefs.getString(KEY_HOST, null)
-        set(value) = prefs.edit().putString(KEY_HOST, value).apply()
+        set(value) = editCredentials { putString(KEY_HOST, value) }
 
     var serverPort: Int
         get() = prefs.getInt(KEY_PORT, 9433)
-        set(value) = prefs.edit().putInt(KEY_PORT, value).apply()
+        set(value) = editCredentials { putInt(KEY_PORT, value) }
 
     var certFingerprint: String?
         get() = prefs.getString(KEY_FINGERPRINT, null)
-        set(value) = prefs.edit().putString(KEY_FINGERPRINT, value).apply()
+        set(value) = editCredentials { putString(KEY_FINGERPRINT, value) }
 
     val isLoggedIn: Boolean get() = token != null && serverHost != null
 
@@ -102,17 +106,30 @@ class TokenStore(context: Context) {
     val hasServerConfig: Boolean get() = serverHost != null
 
     fun clearAuth() {
-        prefs.edit()
-            .remove(KEY_TOKEN)
-            .remove(KEY_REFRESH_TOKEN)
-            .remove(KEY_USERNAME)
-            .remove(KEY_ROLE)
-            .remove(KEY_ALARM_CODE)
-            .apply()
+        editCredentials {
+            remove(KEY_TOKEN)
+            remove(KEY_REFRESH_TOKEN)
+            remove(KEY_USERNAME)
+            remove(KEY_ROLE)
+            remove(KEY_ALARM_CODE)
+        }
     }
 
     fun clear() {
-        prefs.edit().clear().apply()
+        editCredentials { clear() }
+    }
+
+    init { syncDiagnostics() }
+
+    private fun editCredentials(edit: SharedPreferences.Editor.() -> Unit) {
+        synchronized(ClientDiagnostics.lock) {
+            prefs.edit().apply(edit).apply()
+            syncDiagnostics()
+        }
+    }
+
+    private fun syncDiagnostics() {
+        ClientDiagnostics.bind(baseUrl, username, certFingerprint, token)
     }
 
     companion object {

@@ -25,6 +25,9 @@ from paradox_bridge.alarm import AlarmService
 from paradox_bridge.audit import AuditService
 from paradox_bridge.auth import AuthService
 from paradox_bridge.config import AppConfig, load_config, save_config_field
+from paradox_bridge.client_diagnostics import (
+    ClientDiagnosticsStore, DiagnosticReceipt, cleanup_client_reports, receive_report,
+)
 from paradox_bridge.database import Database
 from paradox_bridge.diagnostics import CommandDiagnosticsMiddleware, start_diagnostics, stop_diagnostics
 from paradox_bridge.models import (
@@ -85,6 +88,7 @@ _ws_heartbeat_task: asyncio.Task | None = None
 _event_purge_task: asyncio.Task | None = None
 _alert_monitor_task: asyncio.Task | None = None
 _status_dispatcher: StatusDispatcher | None = None
+_client_diagnostics: ClientDiagnosticsStore | None = None
 
 _CONNECT_RETRY_DELAY = 30  # seconds between reconnection attempts
 _CONNECT_MAX_RETRIES = 3   # limit retries per cycle to avoid panel lockout
@@ -135,6 +139,16 @@ def get_current_user(
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=str(exc))
 
 
+def require_diagnostics_user(
+    user: Annotated[dict, Depends(get_current_user)],
+    db: Annotated[Database, Depends(get_db)],
+) -> dict:
+    existing = db.get_user(user["sub"])
+    if existing is None:
+        raise HTTPException(status_code=401, detail="Invalid user")
+    return {"username": existing["username"], "role": existing["role"]}
+
+
 def require_admin(user: Annotated[dict, Depends(get_current_user)]) -> dict:
     if user.get("role") != "admin":
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Admin required")
@@ -159,6 +173,7 @@ def _get_local_ip() -> str:
 def init_services(config_path: str | None = None) -> None:
     """Initialise all services. Called by lifespan or tests."""
     global _db, _config, _auth, _audit, _alarm, _ws_manager, _cert_fingerprint
+    global _client_diagnostics
     path = config_path or _CONFIG_PATH
     _config = load_config(path)
 
@@ -186,6 +201,7 @@ def init_services(config_path: str | None = None) -> None:
         db=_db,
     )
     _ws_manager = ConnectionManager()
+    _client_diagnostics = ClientDiagnosticsStore.for_config(path)
 
 
 def shutdown_services() -> None:
@@ -398,7 +414,12 @@ async def lifespan(application: FastAPI):
         _demo_trigger_task = asyncio.create_task(_demo_zone_trigger_loop())
     elif _alarm and not _alarm.demo_mode:
         _reconnect_task = asyncio.create_task(_connect_alarm())
-    yield
+    client_cleanup_task = asyncio.create_task(cleanup_client_reports(_client_diagnostics))
+    try:
+        yield
+    finally:
+        client_cleanup_task.cancel()
+        await asyncio.gather(client_cleanup_task, return_exceptions=True)
     if _status_dispatcher:
         await _status_dispatcher.close()
         _status_dispatcher = None
@@ -425,6 +446,17 @@ async def lifespan(application: FastAPI):
 
 app = FastAPI(title="Paradox Bridge", version=BRIDGE_VERSION, lifespan=lifespan)
 app.add_middleware(CommandDiagnosticsMiddleware)
+
+
+@app.post("/system/diagnostics", response_model=DiagnosticReceipt)
+async def upload_client_diagnostics(
+    request: Request,
+    uploader: Annotated[dict, Depends(require_diagnostics_user)],
+    alarm: Annotated[AlarmService, Depends(get_alarm)],
+):
+    if _client_diagnostics is None:
+        raise HTTPException(503, "Diagnostic storage unavailable")
+    return await receive_report(request, _client_diagnostics, uploader, alarm)
 
 
 def _maybe_add_cors() -> None:

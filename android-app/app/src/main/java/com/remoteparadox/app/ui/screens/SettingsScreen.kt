@@ -22,6 +22,7 @@ import androidx.compose.ui.unit.sp
 import com.remoteparadox.app.BuildConfig
 import com.remoteparadox.app.UpdateState
 import com.remoteparadox.app.WatchUpdateState
+import com.remoteparadox.app.diagnostics.DiagnosticReportState
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -32,6 +33,10 @@ fun SettingsScreen(
     soundEnabled: Boolean,
     notificationsEnabled: Boolean,
     updateState: UpdateState,
+    diagnosticState: DiagnosticReportState = DiagnosticReportState(),
+    onSendDiagnostics: () -> Unit = {},
+    onRetryDiagnostics: () -> Unit = {},
+    onForgetDiagnostics: () -> Unit = {},
     isAdmin: Boolean = false,
     piUpdate: com.remoteparadox.app.PiUpdateState = com.remoteparadox.app.PiUpdateState(),
     piMaintenance: com.remoteparadox.app.PiMaintenanceState = com.remoteparadox.app.PiMaintenanceState(),
@@ -101,6 +106,7 @@ fun SettingsScreen(
                         verticalArrangement = Arrangement.spacedBy(12.dp),
                     ) {
                         SettingsAccountCard(username, serverHost, serverPort)
+                        DiagnosticsSettingsSection(diagnosticState, onSendDiagnostics, onRetryDiagnostics, onForgetDiagnostics)
                         if (isAdmin) {
                             SettingsAdminCard(onManageUsers)
                             SettingsPiSystemCard(piSystem, onRefreshPiSystem)
@@ -162,6 +168,8 @@ fun SettingsScreen(
                     }
                 }
             }
+
+            DiagnosticsSettingsSection(diagnosticState, onSendDiagnostics, onRetryDiagnostics, onForgetDiagnostics)
 
             // Admin section
             if (isAdmin) {

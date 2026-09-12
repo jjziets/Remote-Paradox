@@ -15,7 +15,7 @@ from threading import RLock
 from typing import Optional
 
 from paradox_bridge.virtual_panel import VirtualPanel
-from paradox_bridge.diagnostics import emit, trace_partition_command
+from paradox_bridge.diagnostics import emit, trace_partition_command, trace_panic_command, trace_zone_command
 
 logger = logging.getLogger(__name__)
 
@@ -300,7 +300,7 @@ class AlarmService:
         if self._demo_mode:
             return self._panel.control_zone(zone_id, "bypass")
         try:
-            return await self._pai.control_zone(str(zone_id), "bypass")
+            return await trace_zone_command(self, zone_id, "bypass", self._pai.control_zone)
         except ConnectionError:
             self._connected = False
             raise
@@ -309,7 +309,7 @@ class AlarmService:
         if self._demo_mode:
             return self._panel.control_zone(zone_id, "clear_bypass")
         try:
-            return await self._pai.control_zone(str(zone_id), "clear_bypass")
+            return await trace_zone_command(self, zone_id, "clear_bypass", self._pai.control_zone)
         except ConnectionError:
             self._connected = False
             raise
@@ -329,9 +329,7 @@ class AlarmService:
         if self._demo_mode:
             return self._panel.send_panic(partition_id, panic_type)
         try:
-            return await self._pai.send_panic(
-                str(partition_id), panic_type, "1",
-            )
+            return await trace_panic_command(self, partition_id, panic_type, self._pai.send_panic)
         except ConnectionError:
             self._connected = False
             raise
