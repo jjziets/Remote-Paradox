@@ -133,6 +133,8 @@ them to the authenticated Pi, retaining a private capture for retry if the Pi
 is unreachable. See [phone/watch diagnostic reports](docs/client-diagnostics.md)
 for required builds, privacy, retention and SSH retrieval. This feature does
 not itself repair a stalled panel connection.
+Phone/watch **1.2.33** and Pi **1.0.11** are the first signed releases with this
+feature; see [release and deployment verification](docs/client-diagnostics-release-2026-09-12.md).
 
 Android app releases use Git tags named `v*` and publish APK assets through
 GitHub Actions. Download the phone APK from the
