@@ -1,9 +1,10 @@
 # Phone and Watch Diagnostic Reports
 
-This feature targets phone/watch 1.2.33 and Pi 1.0.11. Install all three updated
+This feature is released in phone/watch 1.2.33 and Pi 1.0.11. Install all three updated
 components before collecting a combined report. Adding it to source does not
 update installed devices. It adds evidence collection, not a fix for panel
-communication stalls. Release/deployment verification is recorded separately.
+communication stalls. See the [verified release and Pi deployment](client-diagnostics-release-2026-09-12.md)
+for signed artifact checks and remaining physical-device tests.
 
 ## Capture
 

@@ -39,7 +39,7 @@ Replace `PI` with the SSH destination, never commit it:
 
 ```bash
 PI='<user>@<pi-host>'
-RELEASE=bridge-v1.0.10
+RELEASE=bridge-v1.0.11
 BUNDLE=$(mktemp -d)
 gh release download "$RELEASE" --repo jjziets/Remote-Paradox --dir "$BUNDLE" \
   --pattern bridge-manifest.json --pattern bridge-manifest.sig \
@@ -144,6 +144,11 @@ comes up. Disk flushes improve recovery but cannot guarantee SD controller
 behavior after power loss.
 
 ## Tested deployment
+
+The latest tested update is [bridge 1.0.11 on 12 September 2026](client-diagnostics-release-2026-09-12.md),
+including signed archive/installed-file verification, preserved TLS/config/users
+and a live authenticated HTTPS diagnostic upload. The original bootstrap evidence
+below remains the record of the one-time setup, not a new blank-card reflash.
 
 On 2026-09-09, [PR #6](https://github.com/jjziets/Remote-Paradox/pull/6) merged
 as `bc0efe36d9e732311a9d0a6476171e3dd84165ab`.

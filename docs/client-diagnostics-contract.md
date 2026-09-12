@@ -1,6 +1,6 @@
 # Client Diagnostics Work Item
 
-Status: implemented and locally verified on 12 September 2026; release preparation in progress.
+Status: released on 12 September 2026; Pi deployment verified, physical app installation pending.
 Authority: owner request on 12 September 2026 to collect phone and watch
 active/debugging logs and send both to the Pi. No formal TraceWeaver baseline
 exists in this repository; this is scoped engineering evidence, not a formal
@@ -15,8 +15,8 @@ requirements approval or a fix for the panel-session incident.
 - Android tests independently rerun with `--rerun-tasks`: recorder 41, phone 75, watch 81 passed (197 total).
 - Both debug and optimized release APK builds passed with JDK 17, including release lint and R8. The first offline release attempt needed an uncached lint dependency; the online rerun passed.
 - Workflow YAML parses and `git diff --check` passes. Shared-recorder changes now trigger watch release inclusion and its tests run in Android CI.
-- No physical phone/watch is connected to ADB; no alarm controls or production deployment performed.
-- The owner's follow-up on 12 September requests the missing release. Publish `codex/client-diagnostics` to `jjziets/Remote-Paradox` through reviewed main and the existing signed GitHub pipelines: phone/watch 1.2.33 (codes 82/27), Pi 1.0.11. Publication and live deployment verification are still pending at this checkpoint.
+- No physical phone/watch is connected to ADB; no alarm controls were sent. The live Pi HTTPS endpoint passed an authenticated synthetic report and idempotent retry check.
+- The owner's follow-up on 12 September requested the missing release. PR #9 merged through main; GitHub signed and published phone/watch 1.2.33 (codes 82/27) and Pi 1.0.11. APK signatures/metadata/digests, public latest-release discovery and the Pi's signed deployment receipt were verified. See [release evidence](client-diagnostics-release-2026-09-12.md).
 
 ## Scope and Acceptance
 
