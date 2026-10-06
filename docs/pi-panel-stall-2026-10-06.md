@@ -147,6 +147,19 @@ The main session independently reran the complete Python 3.11 suite for this
 follow-up: 487 passed and the same documented expected failure. Independent
 architecture review accepted the exact adapter and service source hashes.
 
+[PR #12](https://github.com/jjziets/Remote-Paradox/pull/12) merged as
+`cf73de8f06a1be11e818af6030bc73aa01cb8654`. GitHub-hosted CI tested, signed and
+published bridge 1.0.13. The workstation verified its pinned signature and all
+68 archive files; the Pi pulled it using the existing signed updater.
+The root-owned receipt recorded `state=verified` at
+`2026-10-06T05:54:46.635403+00:00`, upgrading the restored 1.0.11 installation.
+All 42 managed installed hashes plus verifier/public pin matched. Nine
+pinned-TLS WebSocket snapshots over 26.52 seconds stayed connected, with panel
+poll age at most 7.53 seconds. Authenticated HTTP and pinned HTTPS health agreed.
+Configuration, TLS certificate/key and all five user records were unchanged;
+database integrity and active bridge/BLE/nginx/recorder/timer services passed.
+No physical alarm controls, reboot or OS package changes were performed.
+
 ## Remaining Limits
 
 The existing PAI panic serialization failure was reproduced without real

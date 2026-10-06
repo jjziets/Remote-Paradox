@@ -1,0 +1,35 @@
+# Secrets and local configuration
+.env*
+*.pem
+*.key
+*.crt
+*.jks
+*.keystore
+google-services.json
+local.properties
+keystore.properties
+
+# Dependencies and generated/local agent state
+node_modules/
+venv/
+.venv/
+.gradle/
+__pycache__/
+*.egg-info/
+build/
+dist/
+.pytest_cache/
+.git/
+.agents/
+.codex/
+.memsearch/
+.beads/
+graphify-out/
+AGENTS.md
+Agent.md
+
+# Binary build artifacts and images
+*.apk
+*.img
+*.img.xz
+*.dmg

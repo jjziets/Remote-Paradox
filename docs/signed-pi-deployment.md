@@ -22,9 +22,13 @@ app certificate pins. It does not obtain a public CA certificate.
 
 ## One-time bootstrap
 
-Prerequisites: a bootable networked Pi, Python 3.11+, working bridge/BLE/nginx
+Prerequisites: a bootable networked Pi, Python 3.11, working bridge/BLE/nginx
 services, existing Python dependencies, and trusted SSH access. On a new card,
 complete [README deployment](../README.md#deployment-from-scratch-pi) first.
+PAI is pinned to 3.7.0 in project metadata; its upstream Construct requirement
+is a range. The README bootstrap explicitly selects the tested Construct 2.9.52
+runtime. These versions were qualified on Python 3.11; do not treat a newer
+Python or OS release as covered by this deployment check.
 The signing verifier needs Debian's `python3-cryptography` outside the app venv:
 
 ```bash
@@ -39,7 +43,7 @@ Replace `PI` with the SSH destination, never commit it:
 
 ```bash
 PI='<user>@<pi-host>'
-RELEASE=bridge-v1.0.11
+RELEASE=bridge-v1.0.13
 BUNDLE=$(mktemp -d)
 gh release download "$RELEASE" --repo jjziets/Remote-Paradox --dir "$BUNDLE" \
   --pattern bridge-manifest.json --pattern bridge-manifest.sig \
@@ -145,9 +149,49 @@ behavior after power loss.
 
 ## Tested deployment
 
-The latest tested update is [bridge 1.0.11 on 12 September 2026](client-diagnostics-release-2026-09-12.md),
-including signed archive/installed-file verification, preserved TLS/config/users
-and a live authenticated HTTPS diagnostic upload. The original bootstrap evidence
+The latest tested update is bridge 1.0.13 on 6 October 2026, from
+[PR #12](https://github.com/jjziets/Remote-Paradox/pull/12), commit
+`cf73de8f06a1be11e818af6030bc73aa01cb8654`.
+[GitHub CI](https://github.com/jjziets/Remote-Paradox/actions/runs/37420650699)
+tested, signed and published
+[bridge-v1.0.13](https://github.com/jjziets/Remote-Paradox/releases/tag/bridge-v1.0.13).
+The workstation verified the pinned Ed25519 signature and all 68 archive files.
+Archive SHA-256:
+`79cc4dfb39e5847433e1ae375d44158e04c5af2d499521c3cdcf99369e51ed8f`.
+
+The existing root-owned pull service downloaded the release directly from
+GitHub. Its receipt recorded `state=verified` at
+`2026-10-06T05:54:46.635403+00:00`, upgrading 1.0.11 to 1.0.13.
+All 42 managed installed hashes, the verifier and public pin matched the signed
+manifest. Authenticated HTTP and pinned HTTPS health were connected and non-demo;
+nine pinned-TLS WebSocket snapshots over 26.52 seconds had a maximum completed
+panel-poll age of 7.53 seconds. TLS certificate/key, configuration and all five
+user records were unchanged; database quick-check was `ok`. Bridge, BLE, nginx,
+state recorder and updater timer were active; all four sleep/suspend targets
+remained masked. No alarm controls, reboot or OS package upgrades were run.
+GitHub production-Pi deployment **6876851923** records success after these SSH
+checks; this is operator-verified evidence, not an unattended Pi callback.
+The next automatic timer check at 06:00:03 UTC reported `Already verified
+1.0.13`, without reinstalling or restarting the bridge.
+
+The first 1.0.12 rollout failed fresh-panel qualification and automatically
+restored 1.0.11. Its immutable release is now marked prerelease and excluded from
+stable discovery. Do not force it. The corrected 1.0.13 tests cover the live PAI
+constructor's corrected subscription as well as the stock typo, complete boot
+parsing and partial-construction cleanup. Full local Python 3.11 results were
+487 passed and one documented existing BLE xfail; independent review and PR CI
+passed. See the [incident and repair record](pi-panel-stall-2026-10-06.md).
+
+Android [v1.2.34](https://github.com/jjziets/Remote-Paradox/releases/tag/v1.2.34)
+remains the public latest release with both APKs. Phone build 83 was installed
+in place over authorized USB debugging without uninstalling/clearing data.
+Watch build 28's hash/signature were verified, but physical watch installation
+and supervised alarm command acceptance remain untested. Use phone Settings
+to check for watch updates, send the APK and approve the watch installer.
+Signing identity is unchanged; Pi-only releases do not require new APKs.
+
+The [September 1.0.11 record](client-diagnostics-release-2026-09-12.md) retains
+live authenticated diagnostic-upload evidence. The original bootstrap evidence
 below remains the record of the one-time setup, not a new blank-card reflash.
 
 On 2026-09-09, [PR #6](https://github.com/jjziets/Remote-Paradox/pull/6) merged
