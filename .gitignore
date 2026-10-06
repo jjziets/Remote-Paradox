@@ -37,6 +37,9 @@ google-services.json
 AGENTS.md
 Agent.md
 
+# Local generated code graph
+graphify-out/
+
 # OS images, installers & saved webpages
 *.img
 *.img.xz

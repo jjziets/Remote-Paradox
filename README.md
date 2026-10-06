@@ -151,6 +151,12 @@ validated Report ID. Trusted QR enrollment can replace the diagnostic scope and
 discard its old capture, so collect a new report after enrolling a missing pin.
 See [the incident and qualification note](docs/pi-panel-stall-2026-10-06.md).
 
+**Verified 2026-10-06:** phone/watch 1.2.34 is published and signed; the USB
+phone was updated in place to build 83. Watch build 28 still needs installation
+through the phone and approval on the watch. The Pi runs signed bridge 1.0.13,
+with fresh HTTP/WebSocket status and preserved certificates, configuration and
+accounts. Bridge 1.0.12 was withdrawn after automatic rollback; do not force it.
+
 Android app releases use Git tags named `v*` and publish APK assets through
 GitHub Actions. Download the phone APK from the
 [latest Android release](https://github.com/jjziets/Remote-Paradox/releases)
@@ -291,13 +297,15 @@ deployment: check the Pi's root-owned receipt and live health as documented in
 the runbook. Existing TLS certificates, users and configuration are preserved;
 OS packages are not upgraded by bridge releases.
 
-**Live verified 2026-09-09:** GitHub CI published signed `bridge-v1.0.10` from
-`bc0efe3`; the Pi pulled it and recorded `state=verified` at 12:45:23 UTC.
-Authenticated HTTP status and nine WebSocket snapshots over 37 seconds were
-healthy, with panel poll age at most 6.56 seconds. Certificate, configuration and
-user-account fingerprints were unchanged. The bridge, BLE, nginx, state recorder
-and signed timer were active. No physical alarm command or OS upgrade was run.
-See the [tested deployment record](docs/signed-pi-deployment.md#tested-deployment).
+**Live verified 2026-10-06:** GitHub CI published signed `bridge-v1.0.13` from
+`cf73de8`; the Pi pulled it and recorded `state=verified` at 05:54:46 UTC.
+All 42 managed installed hashes matched the signed manifest. Authenticated HTTP
+status and nine pinned-TLS WebSocket snapshots over 26.52 seconds were healthy,
+with panel poll age at most 7.53 seconds. Certificate/key, configuration and all
+five user records were unchanged. Bridge, BLE, nginx, state recorder and the
+signed timer were active; sleep targets remained masked. No physical alarm
+command, reboot or OS upgrade was run. See the
+[tested deployment record](docs/signed-pi-deployment.md#tested-deployment).
 
 ### Deployment From Scratch (Pi)
 
@@ -305,7 +313,8 @@ This is the repo-backed path from a blank SD card to a working Pi. Commands that
 depend on the current Pi image are explicitly marked for live verification.
 The signed bootstrap and live upgrade below were tested on the existing
 Bookworm/Python 3.11 Pi; a destructive fresh-card flash was not repeated during
-this release.
+this release. Keep Python 3.11 with PAI 3.7.0 and the tested Construct 2.9.52
+runtime; a newer Python or OS release needs separate dependency qualification.
 
 #### 1. Prepare and flash the SD card
 
@@ -363,7 +372,7 @@ sudo apt-get install -y python3 python3-venv python3-pip python3-cryptography py
 cd /opt/paradox-bridge
 python3 -m venv --system-site-packages venv
 ./venv/bin/pip install -U pip
-./venv/bin/pip install -e '.[pi]'
+./venv/bin/pip install -e '.[pi]' 'construct==2.9.52'
 
 sudo mkdir -p /etc/paradox-bridge
 sudo mkdir -p /var/lib/paradox-bridge/maintenance/jobs /var/lib/paradox-bridge/maintenance/logs
@@ -501,12 +510,20 @@ ssh <PI_USERNAME>@remote-paradox.local 'curl -fsS http://127.0.0.1:8080/system/v
 ssh <PI_USERNAME>@remote-paradox.local 'sudo cat /var/lib/paradox-updater/deployment.json'
 ```
 
+Require `state=verified` with the expected tag/commit/version, active services,
+`alarm_connected=true`, `demo_mode=false`, and `panel_status_age_s` below 15.
+An APK download, published GitHub release or running service alone is not proof
+of healthy deployment. Follow the runbook's rollback checks if these fail.
+
 #### 6. Register clients
 
 Generate an admin invite from the web dashboard or API, then install the Android
 phone APK from a `v*` release and scan the QR code. Install the watch APK only
 when the release includes a newer `remote-paradox-watch-<version>.apk`, then keep the watch paired
 to the phone so credential sync can run.
+For 1.2.34, open phone Settings, check for watch updates, send the watch update
+and approve its installer prompt. Both APKs retain the existing signing identity;
+do not uninstall or clear data to update. Pi-only tags do not require APK updates.
 
 ### Maintenance operations
 
