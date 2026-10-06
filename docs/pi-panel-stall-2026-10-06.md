@@ -108,9 +108,44 @@ caller wiring is required by compilation, rather than a default argument.
 Independent backend architecture and Android correctness reviews found no
 remaining blocker after the close-handshake, command-gate, BLE-drain and panic
 UI wiring repairs. The main session independently reran both complete suites.
-Release and signed Pi deployment evidence will be recorded after verification.
+Release and signed Pi deployment evidence are recorded below as they are verified.
 Simulated tests cannot establish the physical cause of the first missing panel
 reply.
+
+## Signed Rollout Qualification
+
+[PR #11](https://github.com/jjziets/Remote-Paradox/pull/11) merged as
+`f05a27bab8882a966c1937a941cd1e0553fb9e65`. GitHub-hosted CI published
+[phone/watch 1.2.34](https://github.com/jjziets/Remote-Paradox/releases/tag/v1.2.34).
+Downloaded APK hashes matched GitHub's asset digests; both signatures matched
+the installed phone and previous release certificate. The USB phone was updated
+in place to 1.2.34 (build 83), without uninstalling or clearing data. The watch
+APK is 1.2.34 (build 28); physical watch installation was not verified.
+
+The first signed Pi deployment, bridge 1.0.12, failed fresh-panel qualification
+and automatically restored 1.0.11. The root-owned receipt recorded
+`state=rolled_back`. Configuration, TLS certificate/key and user-record
+fingerprints were preserved, and the restored bridge resumed fresh polling.
+The failed release remains immutable but is marked prerelease, so stable
+discovery excludes it. Do not force this failed version.
+
+The live PAI 3.7.0 constructor already used `definitions_loaded`; the stock
+library used the typo `definitons_loaded`. Unconditional removal of the typo
+raised `ValueError` on the live variant before connecting. Partially registered
+callbacks and an empty retained owner then prevented the next cleanup. Read-only
+source inspection found identical implementations of seven critical handshake,
+polling, status and control methods; the constructor differed.
+
+The bridge 1.0.13 follow-up reconciles both topic spellings per instance,
+including duplicates, and cleans up failed construction. Any allocated UART
+remains owned until drain and closure are proven. Regression tests exercise
+both constructor variants through actual PAI parsing, simulated handshake,
+EEPROM loading and all seven RAM status blocks. They also cover constructor
+failure, callback isolation and failed UART closure. Live signed deployment
+must still confirm fresh polling; passing simulated tests alone is insufficient.
+The main session independently reran the complete Python 3.11 suite for this
+follow-up: 487 passed and the same documented expected failure. Independent
+architecture review accepted the exact adapter and service source hashes.
 
 ## Remaining Limits
 

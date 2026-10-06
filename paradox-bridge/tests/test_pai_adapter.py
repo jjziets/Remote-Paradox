@@ -19,6 +19,313 @@ from paradox_bridge.pai_adapter import SessionCleanupError
 pytestmark = pytest.mark.skipif(sys.version_info >= (3, 12), reason="PAI 3.7 dependencies require Python <3.12")
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("topics", [
+    ("definitons_loaded",), ("definitions_loaded",),
+    ("definitons_loaded", "definitions_loaded", "definitions_loaded"),
+])
+async def test_actual_constructor_reconciles_only_its_definition_subscriptions(monkeypatch, topics):
+    pytest.importorskip("paradox.paradox")
+    from paradox.lib import ps
+    from paradox.paradox import Paradox
+
+    original_init = Paradox.__init__
+    loop = asyncio.get_running_loop()
+    original_handler = loop.get_exception_handler()
+    foreign = Mock()
+    for topic in ("definitons_loaded", "definitions_loaded"):
+        ps.subscribe(foreign, topic)
+    before = sum(len(listeners) for listeners in ps.pub.listeners.values())
+
+    def upstream_variant(core, *args, **kwargs):
+        original_init(core, *args, **kwargs)
+        ps.pub.unsubscribe(core._on_definitions_load, ps.PREFIX + "definitons_loaded")
+        for topic in topics:
+            ps.subscribe(core._on_definitions_load, topic)
+
+    monkeypatch.setattr(Paradox, "__init__", upstream_variant)
+    session = PanelSession(lambda: True, lambda: False)
+    core = None
+    try:
+        core = create_session_pai(session, "/dev/TEST-NEVER-OPEN", 9600, Mock(), Mock())
+        assert core._connection is None  # constructor must never allocate/open UART
+        for topic in ("definitons_loaded", "definitions_loaded"):
+            callbacks = [listener.callback for listener in ps.pub.listeners[ps.PREFIX + topic]]
+            assert callbacks.count(foreign) == 1
+            assert callbacks.count(core._on_definitions_load) == (topic == "definitions_loaded")
+        assert sum(len(listeners) for listeners in ps.pub.listeners.values()) == before + 5
+        core.detach()
+        core.detach()  # removal is instance-local and idempotent too
+        assert sum(len(listeners) for listeners in ps.pub.listeners.values()) == before
+    finally:
+        if core is not None:
+            core.detach()
+        for topic in ("definitons_loaded", "definitions_loaded"):
+            ps.pub.unsubscribe(foreign, ps.PREFIX + topic)
+        loop.set_exception_handler(original_handler)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("phase", ["base-constructor", "adapter-subscribe"])
+async def test_actual_constructor_failure_removes_listeners_and_empty_owner_can_retry(monkeypatch, phase):
+    pytest.importorskip("paradox.paradox")
+    from paradox.lib import ps
+    from paradox.paradox import Paradox
+    from paradox.connections.serial_connection import SerialCommunication
+
+    original_init, original_subscribe = Paradox.__init__, ps.subscribe
+    loop = asyncio.get_running_loop()
+    original_handler = loop.get_exception_handler()
+    before = sum(len(listeners) for listeners in ps.pub.listeners.values())
+    uart_init = Mock(side_effect=AssertionError("Constructor failure must not allocate UART"))
+    monkeypatch.setattr(SerialCommunication, "__init__", uart_init)
+
+    def fail_after_base(core, *args, **kwargs):
+        original_init(core, *args, **kwargs)
+        raise ValueError("injected constructor failure")
+
+    def fail_subscribe(listener, topic, **kwargs):
+        if topic == "definitions_loaded":
+            raise ValueError("injected constructor failure")
+        original_subscribe(listener, topic, **kwargs)
+
+    if phase == "base-constructor":
+        monkeypatch.setattr(Paradox, "__init__", fail_after_base)
+    else:
+        monkeypatch.setattr(ps, "subscribe", fail_subscribe)
+    alarm = AlarmService("/dev/TEST-NEVER-OPEN", 9600, "0000")
+    try:
+        with pytest.raises(ValueError, match="injected constructor failure"):
+            await alarm.connect()
+        assert alarm._session is None and alarm._pai is None
+        assert not alarm._cleanup_failed and alarm.reconnect_allowed
+        assert not alarm.is_connected and alarm._last_panel_status_at is None
+        assert sum(len(listeners) for listeners in ps.pub.listeners.values()) == before
+        assert loop.get_exception_handler() is original_handler
+        uart_init.assert_not_called()
+        await alarm.disconnect()
+
+        monkeypatch.setattr(Paradox, "__init__", original_init)
+        monkeypatch.setattr(ps, "subscribe", original_subscribe)
+        monkeypatch.setattr(Paradox, "full_connect", AsyncMock(return_value=True))
+        await alarm.connect()
+        assert alarm._session.active and alarm._session.pai is alarm._pai
+        assert alarm._pai._connection is None and not alarm.is_connected
+        uart_init.assert_not_called()
+    finally:
+        await alarm.disconnect()
+        loop.set_exception_handler(original_handler)
+    assert sum(len(listeners) for listeners in ps.pub.listeners.values()) == before
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("close_fails", [False, True])
+async def test_actual_partial_constructor_uart_remains_owned_until_safe_cleanup(monkeypatch, close_fails):
+    pytest.importorskip("paradox.paradox")
+    from paradox.lib import ps
+    from paradox.paradox import Paradox
+
+    original_init = Paradox.__init__
+    loop = asyncio.get_running_loop()
+    original_handler = loop.get_exception_handler()
+    before = sum(len(listeners) for listeners in ps.pub.listeners.values())
+    order = []
+    fake = SimpleNamespace(connected=True, _protocol=object(), write=Mock())
+
+    async def close():
+        order.append("uart-close")
+        assert order == ["construct", "uart-close"]
+        if close_fails:
+            raise OSError("injected UART close failure")
+        fake.connected = False
+        fake._protocol = None
+
+    fake.close = AsyncMock(side_effect=close)
+
+    def partially_construct(core, *args, **kwargs):
+        original_init(core, *args, **kwargs)
+        order.append("construct")
+        if len(order) == 1:
+            core._connection = fake
+            raise ValueError("injected allocated-handle failure")
+
+    monkeypatch.setattr(Paradox, "__init__", partially_construct)
+    monkeypatch.setattr(Paradox, "full_connect", AsyncMock(return_value=True))
+    alarm = AlarmService("/dev/TEST-NEVER-OPEN", 9600, "0000")
+    try:
+        with pytest.raises(ValueError, match="allocated-handle failure"):
+            await alarm.connect()
+        owner = alarm._session
+        assert owner.pai is alarm._pai and alarm._pai._connection is fake
+        assert owner.invalidated and not alarm.is_connected
+        assert sum(len(listeners) for listeners in ps.pub.listeners.values()) == before
+        if close_fails:
+            with pytest.raises(SessionCleanupError):
+                await alarm.connect()
+            assert alarm._session is owner and alarm._pai is owner.pai
+            assert alarm._cleanup_failed and not alarm.reconnect_allowed
+            with pytest.raises(ConnectionError):
+                await alarm.connect()
+            assert order == ["construct", "uart-close"]
+        else:
+            await alarm.connect()
+            assert order == ["construct", "uart-close", "construct"]
+            assert alarm._session is not owner and alarm._session.active
+        fake.write.assert_called_once()  # exact lifecycle close, never replayed
+    finally:
+        if close_fails:
+            # Test-only requalification after fixing the synthetic close failure.
+            async def safe_close():
+                fake.connected = False
+                fake._protocol = None
+            fake.close.side_effect = safe_close
+            alarm._cleanup_failed = False
+            alarm._cleanup_task = None
+        await alarm.disconnect()
+        loop.set_exception_handler(original_handler)
+    fake.write.assert_called_once()
+    assert sum(len(listeners) for listeners in ps.pub.listeners.values()) == before
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("corrected_topic", [False, True])
+async def test_actual_boot_memory_and_every_ram_block_over_owned_raw_receive(monkeypatch, corrected_topic):
+    pytest.importorskip("paradox.paradox")
+    from contextvars import Context
+    from paradox.config import config as cfg
+    from paradox.connections.serial_connection import SerialCommunication
+    from paradox.hardware import parsers as generic
+    from paradox.hardware.common import ProductIdEnum
+    from paradox.hardware.spectra_magellan import parsers
+    from paradox.lib import ps
+    from paradox.paradox import Paradox
+
+    loop = asyncio.get_running_loop()
+    original_handler = loop.get_exception_handler()
+    original_init = Paradox.__init__
+    before = sum(len(listeners) for listeners in ps.pub.listeners.values())
+    if corrected_topic:
+        def corrected_init(core, *args, **kwargs):
+            original_init(core, *args, **kwargs)
+            ps.pub.unsubscribe(core._on_definitions_load, ps.PREFIX + "definitons_loaded")
+            ps.subscribe(core._on_definitions_load, "definitions_loaded")
+        monkeypatch.setattr(Paradox, "__init__", corrected_init)
+    monkeypatch.setattr(cfg, "LIMITS", {})
+    monkeypatch.setattr(cfg, "SYNC_TIME", False)
+    eeprom = bytearray(0x1000)
+    eeprom[0x730:0x733] = bytes([8, 1, 0])  # actual instant-zone definition, partition 1
+    eeprom[0x10:0x15] = b"Entry"
+    eeprom[0x310:0x314] = b"Home"
+    ram = {i: bytearray(parser.sizeof()) for i, parser in parsers.RAMDataParserMap.items()}
+    ram[0][5:11] = bytes([20, 26, 10, 6, 7, 30])  # valid DateAdapter input
+    ram[0][15] = 1  # zone 1 open in actual StatusAdapter encoding
+    requested, writes, lifecycle, held = [], [], [], []
+    final_requested = asyncio.Event()
+
+    def packet(parser, fields):
+        # RawCopy builds checksum-bearing wire packets; parsing is entirely PAI's.
+        return parser.build({"fields": {"data": bytes(fields)}})
+
+    initiate = bytearray(36)
+    initiate[:2] = bytes([0x72, 0xFF])
+    initiate[-8:] = b"SP6000  "
+    start = bytearray(36)
+    start[4] = ProductIdEnum.build("SPECTRA_SP6000")[0]
+    start[5] = 6
+    authenticate = bytearray(36)
+    authenticate[0] = 0x10
+    handshake = [packet(generic.InitiateCommunicationResponse, initiate),
+                 packet(generic.StartCommunicationResponse, start),
+                 packet(parsers.InitializeCommunicationResponse, authenticate)]
+
+    class Protocol:
+        def __init__(self, serial):
+            self.serial = serial
+            self.active = True
+
+        def is_active(self):
+            return self.active
+
+        def variable_message_length(self, mode):
+            pass
+
+        def send_message(self, message):
+            writes.append(message)
+            if handshake:
+                response = handshake.pop(0)
+            elif message[0] == 0x70:
+                lifecycle.append("panel-close")
+                return
+            else:
+                assert message[0] == 0x50  # boot issues reads only, never controls
+                address = parsers.ReadEEPROM.parse(message).fields.value.address
+                if address >= 0x8000:
+                    address -= 0x8000
+                    requested.append(address)
+                    response = packet(parsers.ReadStatusResponse,
+                                      bytes([0x50, 0, 0x80, address]) + ram[address])
+                    if address == max(ram):
+                        held.append((self.serial, response))
+                        final_requested.set()
+                        return
+                else:
+                    response = packet(parsers.ReadEEPROMResponse,
+                                      bytes([0x50, 0]) + address.to_bytes(2, "big")
+                                      + eeprom[address:address + 32])
+            # Real serial callbacks do not carry a control/publisher context.
+            loop.call_soon(self.serial.on_message, response, context=Context())
+
+        async def close(self):
+            lifecycle.append("uart-close")
+            self.active = False
+
+    async def serial_connect(serial):
+        lifecycle.append("open-double")
+        serial._protocol = Protocol(serial)
+        serial.connected = True
+        return True
+
+    monkeypatch.setattr(SerialCommunication, "connect", serial_connect)
+    alarm = AlarmService("/dev/TEST-NEVER-OPEN", 9600, "0000")
+    callback = Mock()
+    alarm.set_status_change_callback(callback)
+    try:
+        await alarm.connect()
+        await asyncio.wait_for(final_requested.wait(), 2)
+        assert requested == list(parsers.RAMDataParserMap)
+        assert alarm._last_panel_status_at is None and not alarm.is_connected
+        callback.assert_not_called()  # six parsed blocks are not a full poll
+        storage = alarm._pai.storage
+        assert storage.get_container("zone")[1]["definition"] == "instant"
+        assert storage.get_container("zone")[1]["key"] == "Entry"
+        assert storage.get_container("partition")[1]["label"] == "Home"
+        serial, response = held.pop()
+        loop.call_soon(serial.on_message, response, context=Context())
+
+        async def ready():
+            while not alarm.is_connected:
+                await asyncio.sleep(0)
+        await asyncio.wait_for(ready(), 1)
+        assert alarm._last_panel_status_at is not None
+        status = alarm.get_status()
+        assert status.partitions[0].name == "Home"
+        assert status.partitions[0].mode == "disarmed"
+        assert status.partitions[0].zones[0].name == "Entry"
+        assert status.partitions[0].zones[0].open
+        callback.assert_called()
+        assert lifecycle == ["open-double"]
+        assert not handshake
+        await alarm.disconnect()
+        assert lifecycle == ["open-double", "panel-close", "uart-close"]
+        assert writes[-1] == parsers.CloseConnection.build({})
+    finally:
+        await alarm.disconnect()
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+        assert sum(len(listeners) for listeners in ps.pub.listeners.values()) == before
+        loop.set_exception_handler(original_handler)
+
+
 @pytest.fixture
 async def pai_alarm():
     pytest.importorskip("paradox.paradox")

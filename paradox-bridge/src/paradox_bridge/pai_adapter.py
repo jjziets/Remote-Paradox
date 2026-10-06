@@ -298,8 +298,16 @@ class SessionParadoxMixin:
             # attempt UART closure; the service retains failed cleanup ownership.
             await connection.close()
 
-    def detach(self):
+    @staticmethod
+    def _unsubscribe_all(method, topic):
         from paradox.lib import ps
+        while True:
+            try:
+                ps.pub.unsubscribe(method, ps.PREFIX + topic)
+            except ValueError:
+                return
+
+    def detach(self):
         for method, topic in (
             (self._on_labels_load, "labels_loaded"),
             (self._on_definitions_load, "definitons_loaded"),
@@ -307,10 +315,7 @@ class SessionParadoxMixin:
             (self._on_status_update, "status_update"),
             (self._on_event, "events"), (self._on_property_change, "changes"),
         ):
-            try:
-                ps.pub.unsubscribe(method, ps.PREFIX + topic)
-            except ValueError:
-                pass
+            self._unsubscribe_all(method, topic)
 
 
 def create_session_pai(session, serial_port, baud, on_full_poll, on_session_lost):
@@ -335,10 +340,30 @@ def create_session_pai(session, serial_port, baud, on_full_poll, on_session_lost
             self.session = session
             self.on_full_poll = on_full_poll
             self.on_session_lost = on_session_lost
-            super().__init__(retries=1)
-            # PAI 3.7 has a misspelt subscription. Correct only this instance.
-            ps.pub.unsubscribe(self._on_definitions_load, ps.PREFIX + "definitons_loaded")
-            ps.subscribe(self._on_definitions_load, "definitions_loaded")
+            self._connection = None
+            # Retain partial construction until callbacks and any UART are proven
+            # safe. Assignment at the factory return would lose this ownership.
+            session.pai = self
+            loop = asyncio.get_running_loop()
+            previous_handler = loop.get_exception_handler()
+            try:
+                super().__init__(retries=1)
+                # Stock 3.7 misspells this topic; some installations correct it.
+                # Reconcile only this callback, including duplicate registrations.
+                for topic in ("definitons_loaded", "definitions_loaded"):
+                    self._unsubscribe_all(self._on_definitions_load, topic)
+                ps.subscribe(self._on_definitions_load, "definitions_loaded")
+            except BaseException:
+                session.invalidated = True
+                try:
+                    self.detach()
+                except Exception:
+                    logger.exception("Failed to detach partially constructed PAI")
+                else:
+                    if self._connection is None and not session.tasks:
+                        session.pai = None
+                loop.set_exception_handler(previous_handler)
+                raise
 
         @property
         def connection(self):

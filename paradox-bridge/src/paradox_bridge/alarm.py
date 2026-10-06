@@ -576,11 +576,13 @@ class AlarmService:
                 session, self._serial_port, self._baud,
                 self._full_poll_completed, self._retire_session,
             )
-        except ImportError:
-            # A rejected PAI version never owns a UART or a partially open session.
+        except BaseException:
+            # Factory rollback releases only detached, empty owners. Retain any
+            # partial instance/UART so the normal drain/close policy still applies.
             self._retire_session(session)
-            self._session = None
-            self._pai = None
+            self._pai = session.pai
+            if session.pai is None and not session.tasks:
+                self._session = None
             raise
         task = session.spawn(self._pai.full_connect())
         try:
