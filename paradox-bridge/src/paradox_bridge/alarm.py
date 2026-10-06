@@ -16,6 +16,9 @@ from typing import Optional
 
 from paradox_bridge.virtual_panel import VirtualPanel
 from paradox_bridge.diagnostics import emit, trace_partition_command, trace_panic_command, trace_zone_command
+from paradox_bridge.pai_adapter import (
+    ControlOperation, PanelSession, SessionCleanupError, control_operation, create_session_pai,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -53,6 +56,11 @@ class AlarmStatus:
 
 
 class AlarmService:
+    STATUS_MAX_AGE = 30.0  # PAI full polls normally complete every 10 seconds
+    CONTROL_TIMEOUT = 10.0
+    CLEANUP_TIMEOUT = 5.0
+    CONNECT_TIMEOUT = 60.0
+
     def __init__(
         self, serial_port: str, baud: int, pc_password: str,
         demo_mode: bool = False, db=None,
@@ -64,6 +72,13 @@ class AlarmService:
         self._pai_loop_task: Optional[asyncio.Task] = None
         self._connected = False
         self._last_panel_status_at: float | None = None
+        self._session: PanelSession | None = None
+        self._control: ControlOperation | None = None
+        self._lifecycle_lock = asyncio.Lock()
+        self._admin_stopped = False
+        self._admin_epoch = 0
+        self._cleanup_failed = False
+        self._cleanup_task: asyncio.Task | None = None
         self._demo_mode = demo_mode
         self._db = db
         self._panel: Optional[VirtualPanel] = None
@@ -92,18 +107,52 @@ class AlarmService:
     def is_connected(self) -> bool:
         if self._demo_mode:
             return self._connected
-        if not self._pai:
-            self._connected = False
-            return False
-        try:
-            conn = getattr(self._pai, "connection", None)
-            if conn is not None and not conn.connected:
-                if self._connected:
-                    logger.warning("PAI connection dropped (detected via health check)")
-                self._connected = False
-        except Exception:
-            self._connected = False
+        with self._status_lock:
+            if not self._connected:
+                return False
+            session = self._session
+            try:
+                valid = (self._pai is not None and session is not None and session.active
+                         and bool(self._pai.connection.connected)
+                         and self._last_panel_status_at is not None
+                         and 0 <= time.monotonic() - self._last_panel_status_at < self.STATUS_MAX_AGE)
+            except Exception:
+                valid = False
+            if not valid:
+                self._retire_session(session)
         return self._connected
+
+    @property
+    def reconnect_allowed(self) -> bool:
+        return not self._admin_stopped and not self._cleanup_failed
+
+    @property
+    def needs_reconnect(self) -> bool:
+        if self.is_connected:
+            return False
+        session = self._session
+        # A new session has not yet completed its first full poll. It remains
+        # unavailable to APIs/controls, but gets the same bounded startup grace.
+        return (session is None or not session.active
+                or time.monotonic() - session.started_at >= self.STATUS_MAX_AGE)
+
+    def _notify_availability(self, connected: bool) -> None:
+        changed = self._connected != connected
+        self._connected = connected
+        if changed and self._on_status_change:
+            try:
+                self._on_status_change()
+            except Exception:
+                logger.exception("Availability callback failed")
+
+    def _retire_session(self, session) -> None:
+        with self._status_lock:
+            if session is not None:
+                session.invalidated = True
+            if self._session is session:
+                if self._control is not None and self._control.session is session:
+                    self._control.invalidated = True
+                self._notify_availability(False)
 
     @property
     def demo_mode(self) -> bool:
@@ -141,6 +190,7 @@ class AlarmService:
     def _status_from_pai(self) -> AlarmStatus:
         # HTTP readers and PAI callbacks also update the event history.
         with self._status_lock:
+            self._require_connection()
             return self._read_status_from_pai()
 
     def _read_status_from_pai(self) -> AlarmStatus:
@@ -262,13 +312,53 @@ class AlarmService:
     # ── Partition control (maps to PAI commands) ──
 
     async def _pai_control_partition(self, partition_id: int, command: str) -> bool:
+        return await trace_partition_command(
+            self, partition_id, command,
+            lambda *args: self._supervise_control("control_partition", *args),
+        )
+
+    async def _supervise_control(self, method, *args) -> bool:
+        self._require_connection()
+        # Admission is synchronous on the API loop; never queue another control.
+        if self._control is not None:
+            emit("control_rejected", reason="busy")
+            return False
+        session = self._session
+        op = ControlOperation(session, time.monotonic() + self.CONTROL_TIMEOUT)
+        self._control = op
+
+        async def send():
+            token = control_operation.set(op)
+            try:
+                return await getattr(session.pai, method)(*args)
+            finally:
+                control_operation.reset(token)
+
+        task = session.spawn(send(), operation=op)
         try:
-            return await trace_partition_command(
-                self, partition_id, command, self._pai.control_partition,
-            )
-        except ConnectionError:
-            self._connected = False
+            done, _ = await asyncio.wait({task}, timeout=max(0, op.deadline - time.monotonic()))
+            if (not done or not op.valid()
+                    or (task.cancelling() and not task.cancelled())):
+                op.invalidated = True
+                self._retire_session(session)
+                task.cancel()
+                emit("control_unconfirmed", reason="deadline_or_retired", write_attempt=op.write_attempt)
+                return False
+            accepted = bool(task.result())
+            if not accepted and op.write_attempt:
+                op.invalidated = True
+                self._retire_session(session)
+            return accepted
+        except BaseException:
+            # Invalidate BEFORE cancel, including when PAI swallows cancellation.
+            op.invalidated = True
+            self._retire_session(session)
+            task.cancel()
             raise
+        finally:
+            op.invalidated = True
+            if self._control is op:
+                self._control = None
 
     async def arm_away(self, code: str, partition_id: int = 1) -> bool:
         self._require_connection()
@@ -297,22 +387,18 @@ class AlarmService:
     # ── Zone control (maps to PAI commands) ──
 
     async def bypass_zone(self, zone_id: int) -> bool:
+        self._require_connection()
         if self._demo_mode:
             return self._panel.control_zone(zone_id, "bypass")
-        try:
-            return await trace_zone_command(self, zone_id, "bypass", self._pai.control_zone)
-        except ConnectionError:
-            self._connected = False
-            raise
+        return await trace_zone_command(self, zone_id, "bypass",
+                                        lambda *args: self._supervise_control("control_zone", *args))
 
     async def unbypass_zone(self, zone_id: int) -> bool:
+        self._require_connection()
         if self._demo_mode:
             return self._panel.control_zone(zone_id, "clear_bypass")
-        try:
-            return await trace_zone_command(self, zone_id, "clear_bypass", self._pai.control_zone)
-        except ConnectionError:
-            self._connected = False
-            raise
+        return await trace_zone_command(self, zone_id, "clear_bypass",
+                                        lambda *args: self._supervise_control("control_zone", *args))
 
     # ── Zone toggle (demo only — simulates physical sensor) ──
 
@@ -328,11 +414,8 @@ class AlarmService:
         self._require_connection()
         if self._demo_mode:
             return self._panel.send_panic(partition_id, panic_type)
-        try:
-            return await trace_panic_command(self, partition_id, panic_type, self._pai.send_panic)
-        except ConnectionError:
-            self._connected = False
-            raise
+        return await trace_panic_command(self, partition_id, panic_type,
+                                         lambda *args: self._supervise_control("send_panic", *args))
 
     # ── State change tracking (real mode event history) ──
 
@@ -451,10 +534,18 @@ class AlarmService:
         if self._demo_mode:
             self._connected = True
             return
+        async with self._lifecycle_lock:
+            if not self.reconnect_allowed:
+                raise ConnectionError("Panel administratively stopped or cleanup unproven")
+            if self.is_connected:
+                return
+            await self._disconnect_locked()
+            await self._connect_locked()
+
+    async def _connect_locked(self) -> None:
         try:
             from paradox.config import config as pai_cfg
             from paradox.lib.encodings import register_encodings
-            from paradox.paradox import Paradox
         except ImportError as e:
             raise ImportError(
                 "paradox-alarm-interface not installed. "
@@ -477,39 +568,51 @@ class AlarmService:
             "****" if pai_cfg.PASSWORD else "None",
         )
 
-        self._pai = Paradox(retries=1)
-        result = await self._pai.full_connect()
-        if not result:
-            self._pai = None
-            raise ConnectionError(
-                f"PAI failed to connect via {self._serial_port} at {self._baud} baud"
+        session = PanelSession(lambda: self._session is session,
+                               lambda: self.is_connected, status_lock=self._status_lock)
+        self._session = session
+        try:
+            self._pai = session.pai = create_session_pai(
+                session, self._serial_port, self._baud,
+                self._full_poll_completed, self._retire_session,
             )
-        self._connected = True
-        logger.info("Connected to alarm panel via %s", self._serial_port)
-        emit("panel_connected")
-
-        self._pai_loop_task = asyncio.create_task(self._run_pai_loop())
+        except ImportError:
+            # A rejected PAI version never owns a UART or a partially open session.
+            self._retire_session(session)
+            self._session = None
+            self._pai = None
+            raise
+        task = session.spawn(self._pai.full_connect())
+        try:
+            done, _ = await asyncio.wait({task}, timeout=self.CONNECT_TIMEOUT)
+            if not done or not session.active or self._admin_stopped or not task.result():
+                raise ConnectionError("PAI failed to establish an active panel session")
+        except BaseException:
+            self._retire_session(session)
+            task.cancel()
+            # Keep session ownership until cleanup is proven by disconnect.
+            raise
+        # Handshake/memory loading has its own deadline. Only now does the
+        # initial full-poll grace begin; this is not completed-poll freshness.
+        session.started_at = time.monotonic()
+        self._pai_loop_task = session.spawn(self._run_pai_loop(session))
         logger.info("PAI status polling loop started")
 
-    def _pai_status_update_hook(self, status) -> None:
-        """Called by PAI pubsub on every status update from the panel.
-        Reads the latest state, detects changes, and fires the callback."""
-        self._last_panel_status_at = time.monotonic()
-        try:
-            self._status_from_pai()
-        except Exception as exc:
-            emit("panel_status_error", error_type=type(exc).__name__)
+    def _full_poll_completed(self, session) -> None:
+        with self._status_lock:
+            if self._session is not session or not session.active or self._admin_stopped:
+                return
+            self._last_panel_status_at = time.monotonic()
+            self._notify_availability(True)
+            try:
+                self._status_from_pai()
+            except Exception as exc:
+                emit("panel_status_error", error_type=type(exc).__name__)
 
-    async def _run_pai_loop(self) -> None:
+    async def _run_pai_loop(self, session) -> None:
         """Run PAI's internal loop for status polling and keepalive."""
         try:
-            from paradox.lib import ps
-            ps.subscribe(self._pai_status_update_hook, "status_update")
-            logger.info("Subscribed to PAI status_update pubsub")
-        except Exception:
-            logger.warning("Could not subscribe to PAI pubsub — push disabled")
-        try:
-            await self._pai.loop()
+            await session.pai.loop()
         except ConnectionError:
             logger.warning("PAI loop: connection lost")
         except asyncio.CancelledError:
@@ -517,33 +620,76 @@ class AlarmService:
         except Exception:
             logger.exception("PAI loop unexpected error")
         finally:
-            self._connected = False
+            self._retire_session(session)
             emit("panel_poll_stopped")
             logger.info("PAI loop exited — connection marked as lost")
-            try:
-                from paradox.lib import ps
-                ps.unsubscribe(self._pai_status_update_hook, "status_update")
-            except Exception:
-                pass
 
     async def disconnect(self) -> None:
         if self._demo_mode:
             self._connected = False
             return
-        if self._pai_loop_task and not self._pai_loop_task.done():
-            self._pai_loop_task.cancel()
+        async with self._lifecycle_lock:
+            await self._disconnect_locked()
+
+    async def _disconnect_locked(self) -> None:
+        session = self._session
+        self._retire_session(session)
+        if self._cleanup_failed:
+            raise SessionCleanupError("Panel cleanup unproven; explicit start/restart required")
+        if session is not None:
+            deadline = time.monotonic() + self.CLEANUP_TIMEOUT
             try:
-                await self._pai_loop_task
-            except asyncio.CancelledError:
-                pass
+                await session.drain(deadline)
+                if self._cleanup_task is None:
+                    session.pai.detach()
+                    self._cleanup_task = asyncio.create_task(session.pai.disconnect(deadline=deadline))
+                    session.cleanup_task = self._cleanup_task
+                    self._cleanup_task.add_done_callback(
+                        lambda task: task.exception() if not task.cancelled() else None,
+                    )
+                task = self._cleanup_task
+                done, _ = await asyncio.wait({task}, timeout=max(0, deadline - time.monotonic()))
+                if not done:
+                    raise SessionCleanupError("Old UART close did not finish; restart may be required")
+                task.result()
+                connection = getattr(session.pai, "_connection", None)
+                if connection is not None and (connection.connected or getattr(connection, "_protocol", None) is not None):
+                    raise SessionCleanupError("Old UART was not proven closed")
+            except BaseException as exc:
+                # Never drop old references and then open another UART on failure.
+                self._cleanup_failed = True
+                emit("panel_cleanup_failed", restart_may_be_required=True)
+                if not isinstance(exc, Exception) or isinstance(exc, SessionCleanupError):
+                    raise
+                raise SessionCleanupError("Old panel cleanup failed; restart may be required") from exc
+            self._cleanup_task = None
+        with self._status_lock:
+            self._session = None
+            self._pai = None
             self._pai_loop_task = None
-        if self._pai:
-            try:
-                await self._pai.disconnect()
-            except Exception:
-                pass
-        self._connected = False
-        self._pai = None
-        self._prev_zone_state.clear()
-        self._prev_part_state.clear()
+            self._last_panel_status_at = None
+            self._prev_zone_state.clear()
+            self._prev_part_state.clear()
         logger.info("Disconnected from alarm panel")
+
+    async def stop(self) -> None:
+        # Set before waiting for the lock so in-flight connects cannot win a stop.
+        self._admin_stopped = True
+        self._admin_epoch += 1
+        self._retire_session(self._session)
+        await self.disconnect()
+
+    async def start(self) -> None:
+        epoch = self._admin_epoch
+        async with self._lifecycle_lock:
+            if epoch != self._admin_epoch:
+                raise ConnectionError("Start superseded by an administrative stop")
+            self._admin_stopped = False
+            self._cleanup_failed = False  # explicit request permits rechecking drain/close
+            if self._cleanup_task is not None and self._cleanup_task.done():
+                if self._cleanup_task.cancelled() or self._cleanup_task.exception() is not None:
+                    self._cleanup_task = None
+            if self.is_connected:
+                return
+            await self._disconnect_locked()
+            await self._connect_locked()

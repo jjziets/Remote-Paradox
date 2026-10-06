@@ -136,6 +136,21 @@ not itself repair a stalled panel connection.
 Phone/watch **1.2.33** and Pi **1.0.11** are the first signed releases with this
 feature; see [release and deployment verification](docs/client-diagnostics-release-2026-09-12.md).
 
+The panel-session repair stops replaying alarm commands after missing replies,
+rejects concurrent controls, and retires stale connections before reconnecting.
+Old polling work and callbacks must finish before another serial connection is
+opened. If cleanup cannot be proven, the bridge stays unavailable rather than
+opening overlapping sessions. A timed-out command is **unconfirmed**, not proof
+that the panel ignored it: check the physical keypad before retrying.
+
+Phone/watch status becomes unknown when fresh telemetry is unavailable; losing
+connectivity must never be interpreted as disarmed. Diagnostic upload failures
+identify missing certificate pins, secure connection failures, rejected requests
+and invalid receipts. A saved Capture ID is not server delivery; require a
+validated Report ID. Trusted QR enrollment can replace the diagnostic scope and
+discard its old capture, so collect a new report after enrolling a missing pin.
+See [the incident and qualification note](docs/pi-panel-stall-2026-10-06.md).
+
 Android app releases use Git tags named `v*` and publish APK assets through
 GitHub Actions. Download the phone APK from the
 [latest Android release](https://github.com/jjziets/Remote-Paradox/releases)

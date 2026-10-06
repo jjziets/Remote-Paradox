@@ -4,23 +4,27 @@ import android.content.Context
 import java.io.IOException
 import kotlinx.serialization.encodeToString
 
-internal data class StatusCacheTicket(val owner: String, val session: Long, val command: Long)
+internal data class StatusCacheTicket(val owner: String, val session: Long, val command: Long, val read: Long = 0)
 
 // All cache instances share this guard. Callers hold its monitor through storage operations.
 internal class StatusCachePolicy {
     private var session = 0L
     private var command = 0L
+    private var read = 0L
     private var sending = false
 
-    fun capture(owner: String) = StatusCacheTicket(owner, session, command)
+    fun capture(owner: String) = StatusCacheTicket(owner, session, command, read)
     fun sameSession(ticket: StatusCacheTicket, owner: String) =
         ticket.owner == owner && ticket.session == session
     fun current(ticket: StatusCacheTicket, owner: String) =
-        sameSession(ticket, owner) && ticket.command == command && !sending
+        sameSession(ticket, owner) && ticket.command == command && ticket.read == read && !sending
+
+    fun invalidateReads() { read++ }
 
     fun newSession() {
         session++
         command++
+        invalidateReads()
         sending = false
     }
 
@@ -108,6 +112,12 @@ internal class WatchStatusCache(context: Context, private val tokens: WatchToken
     }
 
     fun clear() { replaceSession() }
+
+    // Telemetry failure is not logout and must not release an in-flight command guard.
+    fun invalidateSnapshot() = synchronized(policy) {
+        policy.invalidateReads()
+        prefs.edit().clear().apply()
+    }
 
     suspend fun <T> command(ticket: StatusCacheTicket, send: suspend () -> T): T? =
         policy.command(ticket, { owner }, {

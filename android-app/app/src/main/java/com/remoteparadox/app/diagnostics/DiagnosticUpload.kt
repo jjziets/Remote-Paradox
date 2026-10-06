@@ -1,5 +1,6 @@
 package com.remoteparadox.app.diagnostics
 
+import com.remoteparadox.diagnostics.OneShotRequestBody
 import kotlinx.coroutines.suspendCancellableCoroutine
 import okhttp3.*
 import okhttp3.HttpUrl.Companion.toHttpUrl
@@ -23,10 +24,17 @@ internal data class DiagnosticTarget(
 )
 
 internal fun diagnosticUploadClient(baseUrl: String, pin: String): OkHttpClient {
-    val url = baseUrl.toHttpUrl()
-    require(url.isHttps && url.username.isEmpty() && url.password.isEmpty())
-    require(url.encodedPath == "/" && url.query == null && url.fragment == null)
-    require(pin.matches(Regex("[0-9a-fA-F]{64}")))
+    if (pin.isBlank()) throw DiagnosticUploadException(DiagnosticUploadFailure.MISSING_PIN)
+    if (!pin.matches(Regex("[0-9a-fA-F]{64}"))) {
+        throw DiagnosticUploadException(DiagnosticUploadFailure.MALFORMED_PIN)
+    }
+    val url = try { baseUrl.toHttpUrl() } catch (_: IllegalArgumentException) {
+        throw DiagnosticUploadException(DiagnosticUploadFailure.INVALID_ENDPOINT)
+    }
+    if (!url.isHttps || url.username.isNotEmpty() || url.password.isNotEmpty() ||
+        url.encodedPath != "/" || url.query != null || url.fragment != null) {
+        throw DiagnosticUploadException(DiagnosticUploadFailure.INVALID_ENDPOINT)
+    }
     val trust = object : X509TrustManager {
         override fun checkClientTrusted(chain: Array<out X509Certificate>?, authType: String?) =
             throw SSLPeerUnverifiedException("Client certificates unsupported")
@@ -34,7 +42,7 @@ internal fun diagnosticUploadClient(baseUrl: String, pin: String): OkHttpClient 
             val certificate = chain?.firstOrNull() ?: throw SSLPeerUnverifiedException("Missing certificate")
             val actual = MessageDigest.getInstance("SHA-256").digest(certificate.encoded)
                 .joinToString("") { "%02x".format(it) }
-            if (!actual.equals(pin, ignoreCase = true)) throw SSLPeerUnverifiedException("Certificate mismatch")
+            if (!actual.equals(pin, ignoreCase = true)) throw DiagnosticCertificateMismatchException()
         }
         override fun getAcceptedIssuers(): Array<X509Certificate> = emptyArray()
     }
@@ -53,7 +61,7 @@ internal suspend fun uploadDiagnostic(target: DiagnosticTarget, body: String): S
     val request = Request.Builder()
         .url(target.baseUrl.toHttpUrl().newBuilder().encodedPath("/system/diagnostics").build())
         .header("Authorization", target.bearer)
-        .post(body.toRequestBody("application/json".toMediaType()))
+        .post(OneShotRequestBody(body.toRequestBody("application/json".toMediaType())))
         .build()
     return suspendCancellableCoroutine { continuation ->
         val call = client.newCall(request)
@@ -65,20 +73,20 @@ internal suspend fun uploadDiagnostic(target: DiagnosticTarget, body: String): S
             }
             call.enqueue(object : Callback {
                 override fun onFailure(call: Call, e: IOException) {
-                    if (continuation.isActive) continuation.resumeWithException(e)
+                    if (continuation.isActive) continuation.resumeWithException(DiagnosticUploadException(diagnosticUploadFailure(e)))
                 }
                 override fun onResponse(call: Call, response: Response) {
                     try {
                         val result = response.use {
-                            if (!it.isSuccessful) throw IOException("Upload rejected")
-                            val source = it.body?.source() ?: throw IOException("Missing receipt")
+                            if (!it.isSuccessful) throw DiagnosticUploadException(diagnosticHttpFailure(it.code))
+                            val source = it.body?.source() ?: throw DiagnosticUploadException(DiagnosticUploadFailure.MALFORMED_RECEIPT)
                             source.request(8193)
-                            if (source.buffer.size > 8192) throw IOException("Receipt too large")
+                            if (source.buffer.size > 8192) throw DiagnosticUploadException(DiagnosticUploadFailure.MALFORMED_RECEIPT)
                             source.buffer.readUtf8()
                         }
                         if (continuation.isActive) continuation.resume(result)
                     } catch (e: Exception) {
-                        if (continuation.isActive) continuation.resumeWithException(e)
+                        if (continuation.isActive) continuation.resumeWithException(DiagnosticUploadException(diagnosticUploadFailure(e)))
                     }
                 }
             })

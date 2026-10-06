@@ -366,6 +366,8 @@ async def _connect_alarm() -> None:
 
     async def _try_connect() -> bool:
         for attempt in range(1, _CONNECT_MAX_RETRIES + 1):
+            if not _alarm.reconnect_allowed:
+                return False
             try:
                 await _alarm.disconnect()
                 await _alarm.connect()
@@ -381,7 +383,7 @@ async def _connect_alarm() -> None:
 
     while True:
         await asyncio.sleep(_RECONNECT_CHECK_INTERVAL)
-        if not _alarm.is_connected:
+        if _alarm.reconnect_allowed and _alarm.needs_reconnect:
             logger.warning("Connection lost — attempting reconnect...")
             await _try_connect()
 
@@ -437,6 +439,7 @@ async def lifespan(application: FastAPI):
         _demo_trigger_task = None
     if _reconnect_task:
         _reconnect_task.cancel()
+        await asyncio.gather(_reconnect_task, return_exceptions=True)
         _reconnect_task = None
     if _alarm and not _alarm.demo_mode:
         await _disconnect_alarm()
@@ -1170,9 +1173,10 @@ async def system_pai_stop(
 ):
     if alarm.demo_mode:
         raise HTTPException(status_code=400, detail="Not available in demo mode")
-    if not alarm.is_connected:
-        return ActionResult(success=True, action="pai_stop", message="PAI already disconnected")
-    await alarm.disconnect()
+    try:
+        await alarm.stop()
+    except ConnectionError:
+        raise HTTPException(status_code=503, detail="PAI stopped; cleanup unproven, restart may be required")
     audit.record(admin["sub"], "pai_stop", "Admin disconnected PAI from panel")
     return ActionResult(success=True, action="pai_stop", message="PAI disconnected — panel keypad is free")
 
@@ -1185,10 +1189,8 @@ async def system_pai_start(
 ):
     if alarm.demo_mode:
         raise HTTPException(status_code=400, detail="Not available in demo mode")
-    if alarm.is_connected:
-        return ActionResult(success=True, action="pai_start", message="PAI already connected")
     try:
-        await alarm._connect_pai()
+        await alarm.start()
         audit.record(admin["sub"], "pai_start", "Admin reconnected PAI to panel")
         return ActionResult(success=True, action="pai_start", message="PAI reconnected to panel")
     except Exception as e:
@@ -1219,7 +1221,7 @@ async def system_pai_password(
 ):
     if alarm.demo_mode:
         raise HTTPException(status_code=400, detail="Not available in demo mode")
-    if alarm.is_connected:
+    if not alarm._admin_stopped or alarm._session is not None:
         raise HTTPException(
             status_code=409,
             detail="Stop PAI first before changing the PC password",
@@ -1254,7 +1256,12 @@ def system_ble_clients(_admin: Annotated[dict, Depends(require_admin)]):
 # ── Alarm routes ──
 
 def _build_status_response(alarm: AlarmService) -> AlarmStatusResponse:
-    st = alarm.get_status()
+    try:
+        st = alarm.get_status()
+    except ConnectionError:
+        return AlarmStatusResponse(partitions=[], connected=False)
+    if not alarm.is_connected:
+        return AlarmStatusResponse(partitions=[], connected=False)
     return AlarmStatusResponse(
         partitions=[
             PartitionResponse(
@@ -1357,14 +1364,16 @@ async def bypass_zone(
 ):
     try:
         if req.bypass:
-            await alarm.bypass_zone(req.zone_id)
+            ok = await alarm.bypass_zone(req.zone_id)
         else:
-            await alarm.unbypass_zone(req.zone_id)
+            ok = await alarm.unbypass_zone(req.zone_id)
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
+    except ConnectionError:
+        raise HTTPException(status_code=503, detail="Alarm connection unavailable")
     action = "bypass" if req.bypass else "unbypass"
-    audit.record(user["sub"], action, f"zone={req.zone_id}")
-    return ActionResult(success=True, action=action)
+    audit.record(user["sub"], action, f"zone={req.zone_id} success={bool(ok)}")
+    return ActionResult(success=bool(ok), action=action)
 
 
 # ── Zone toggle (demo debug) ──
@@ -1454,16 +1463,16 @@ async def websocket_endpoint(
     logger.info("WS client connected: %s (total: %d)", payload["sub"], mgr.active_count)
     try:
         alarm = get_alarm()
-        if alarm.is_connected:
-            resp = _build_status_response(alarm)
-            events = alarm.get_zone_history(limit=20)
-            if not await mgr.send(websocket, {
-                "type": "status",
-                "partitions": [p.model_dump() for p in resp.partitions],
-                "connected": resp.connected,
-                "events": events,
-            }):
-                return
+        resp = (_build_status_response(alarm) if alarm.is_connected
+                else AlarmStatusResponse(partitions=[], connected=False))
+        events = alarm.get_zone_history(limit=20)
+        if not await mgr.send(websocket, {
+            "type": "status",
+            "partitions": [p.model_dump() for p in resp.partitions],
+            "connected": resp.connected,
+            "events": events,
+        }):
+            return
     except Exception:
         logger.debug("Failed to send initial WS status", exc_info=True)
     try:

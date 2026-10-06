@@ -4,12 +4,19 @@ The heavy lifting is tested in test_virtual_panel.py. These tests verify
 that AlarmService correctly delegates and transforms data.
 """
 
+import time
 from unittest.mock import MagicMock
 
 import pytest
 
 from paradox_bridge.alarm import AlarmService, AlarmStatus, PartitionStatus, ZoneInfo
 from paradox_bridge.database import Database
+from paradox_bridge.pai_adapter import PanelSession
+
+
+def _fresh_session(svc):
+    svc._session = PanelSession(lambda: True, lambda: svc.is_connected, pai=svc._pai)
+    svc._last_panel_status_at = time.monotonic()
 
 
 class TestAlarmServiceWithMock:
@@ -20,6 +27,7 @@ class TestAlarmServiceWithMock:
         svc = AlarmService(serial_port="/dev/null", baud=9600, pc_password="0000")
         svc._pai = MagicMock()
         svc._connected = True
+        _fresh_session(svc)
         return svc
 
     def _setup_storage(self, alarm, partitions, zones):
@@ -69,6 +77,7 @@ class TestStatusChangeCallback:
         svc = AlarmService(serial_port="/dev/null", baud=9600, pc_password="0000")
         svc._pai = MagicMock()
         svc._connected = True
+        _fresh_session(svc)
         return svc
 
     def _setup_storage(self, alarm, partitions, zones):
@@ -330,6 +339,7 @@ class TestEventPersistence:
         )
         svc._pai = MagicMock()
         svc._connected = True
+        _fresh_session(svc)
         return svc, db
 
     def _setup_storage(self, alarm, partitions, zones):
@@ -379,6 +389,7 @@ class TestEventPersistence:
         svc = AlarmService(serial_port="/dev/null", baud=9600, pc_password="0000")
         svc._pai = MagicMock()
         svc._connected = True
+        _fresh_session(svc)
         part_container = MagicMock()
         part_container.items.return_value = [(1, {"label": "Area 1", "arm": False, "exit_delay": False, "entry_delay": False, "ready_status": True})]
         zone_container = MagicMock()

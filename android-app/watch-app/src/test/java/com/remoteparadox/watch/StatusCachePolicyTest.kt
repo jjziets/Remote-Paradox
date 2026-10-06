@@ -12,6 +12,25 @@ import java.io.IOException
 class StatusCachePolicyTest {
     private val owner = "https://alarm/|alice|certificate"
 
+    @Test fun `telemetry invalidation rejects old reads without ending the account session`() {
+        val policy = StatusCachePolicy()
+        val oldRead = policy.capture(owner)
+        policy.invalidateReads()
+        assertFalse(policy.current(oldRead, owner))
+        assertTrue(policy.sameSession(oldRead, owner))
+        assertTrue(policy.current(policy.capture(owner), owner))
+    }
+
+    @Test fun `telemetry invalidation does not release or strand an in flight command`() {
+        val policy = StatusCachePolicy()
+        val command = policy.beginCommand(policy.capture(owner), owner)!!
+        policy.invalidateReads()
+        assertFalse(policy.current(policy.capture(owner), owner))
+        assertNull(policy.beginCommand(policy.capture(owner), owner))
+        assertTrue(policy.finishCommand(command, owner))
+        assertTrue(policy.current(policy.capture(owner), owner))
+    }
+
     @Test fun `old HTTP and websocket tickets cannot restore invalidated status`() = runTest {
         val policy = StatusCachePolicy()
         val oldRead = policy.capture(owner)

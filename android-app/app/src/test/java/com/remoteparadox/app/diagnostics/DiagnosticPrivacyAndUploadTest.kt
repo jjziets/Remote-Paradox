@@ -74,9 +74,12 @@ class DiagnosticPrivacyAndUploadTest {
     }
 
     @Test fun uploadRequiresHttpsAndFullPinAndDisablesRedirectsAndAutomaticRetry() {
-        assertThrows(IllegalArgumentException::class.java) { diagnosticUploadClient("http://localhost/", "a".repeat(64)) }
+        assertEquals(DiagnosticUploadFailure.INVALID_ENDPOINT,
+            assertThrows(DiagnosticUploadException::class.java) { diagnosticUploadClient("http://localhost/", "a".repeat(64)) }.failure)
         listOf("", " ", "a".repeat(63), "g".repeat(64)).forEach { pin ->
-            assertThrows(IllegalArgumentException::class.java) { diagnosticUploadClient("https://localhost/", pin) }
+            val expected = if (pin.isBlank()) DiagnosticUploadFailure.MISSING_PIN else DiagnosticUploadFailure.MALFORMED_PIN
+            assertEquals(expected,
+                assertThrows(DiagnosticUploadException::class.java) { diagnosticUploadClient("https://localhost/", pin) }.failure)
         }
         val client = diagnosticUploadClient("https://localhost/", "A".repeat(64))
         assertFalse(client.followRedirects)
@@ -104,6 +107,10 @@ class DiagnosticPrivacyAndUploadTest {
             assertEquals("immutable-body", request.body.readUtf8())
             server.enqueue(MockResponse().setResponseCode(302).addHeader("Location", "https://example.invalid/"))
             assertTrue(runCatching { uploadDiagnostic(target, "immutable-body") }.isFailure)
+            assertEquals(2, server.requestCount)
+            val mismatch = runCatching { uploadDiagnostic(target.copy(pin = "0".repeat(64)), "immutable-body") }.exceptionOrNull()
+            assertNotNull(mismatch)
+            assertEquals(DiagnosticUploadFailure.CERTIFICATE_MISMATCH, diagnosticUploadFailure(mismatch!!))
             assertEquals(2, server.requestCount)
             assertTrue(runCatching {
                 diagnosticUploadClient(base, "0".repeat(64)).newCall(Request.Builder().url(base).build()).execute().use { }

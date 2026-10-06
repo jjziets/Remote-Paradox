@@ -60,16 +60,19 @@ def panel_snapshot(alarm) -> dict:
     try:
         pai = alarm._pai
         updated = getattr(alarm, "_last_panel_status_at", None)
-        age = round(time.monotonic() - updated, 2) if updated is not None else None
+        age = time.monotonic() - updated if updated is not None else None
+        max_age = getattr(alarm, "STATUS_MAX_AGE", 30.0)
         result = {
-            "connected": bool(alarm._connected),
-            "status_age_s": age,
-            "status_stale": age is None or age > 15,
+            "connected": bool(getattr(alarm, "is_connected", alarm._connected)),
+            "status_age_s": round(age, 2) if age is not None else None,
+            "status_stale": age is None or age >= max_age,
             "poll_task_done": alarm._pai_loop_task.done() if alarm._pai_loop_task else None,
         }
         if pai is None:
             return result
-        result["serial_connected"] = bool(pai.connection.connected)
+        # Never create PAI's lazy connection while a connect task is starting.
+        conn = getattr(pai, "_connection", None) if hasattr(pai, "_connection") else pai.connection
+        result["serial_connected"] = bool(conn is not None and conn.connected)
         result["request_locked"] = bool(pai.request_lock.locked())
         result["partitions"] = {
             str(pid): {key: bool(data[key]) if key in data else None for key in (

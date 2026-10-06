@@ -133,7 +133,10 @@ internal class DiagnosticReportCoordinator(
                     ensureCurrent(selected, generation, runningJob)
                     mutableState.value = DiagnosticReportState(true, report.reportId, report.watchStatus, "Uploading diagnostic report", true)
                 }
-                val receipt = validateReceipt(upload(selected, pending.body), report)
+                val receiptBody = upload(selected, pending.body)
+                val receipt = try { validateReceipt(receiptBody, report) } catch (_: IllegalArgumentException) {
+                    throw DiagnosticUploadException(DiagnosticUploadFailure.MALFORMED_RECEIPT)
+                }
                 synchronized(lock) {
                     ensureCurrent(selected, generation, runningJob)
                     store.clear()
@@ -142,12 +145,12 @@ internal class DiagnosticReportCoordinator(
                 }
             } catch (e: CancellationException) {
                 throw e
-            } catch (_: Exception) {
+            } catch (e: Exception) {
                 synchronized(lock) {
                     if (isCurrent(selected, generation, runningJob)) {
                         val pending = runCatching { store.read(selected.session.scope) }.getOrNull()
                         mutableState.value = if (pending != null) mutableState.value.copy(busy = false, pending = true,
-                            message = "Upload not confirmed. Report saved privately for retry (24 hours).")
+                            message = diagnosticUploadFailure(e).savedCaptureMessage())
                         else DiagnosticReportState(message = "Could not save the report, or the saved report expired.")
                     }
                 }

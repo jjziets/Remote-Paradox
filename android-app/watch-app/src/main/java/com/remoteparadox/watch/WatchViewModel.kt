@@ -7,6 +7,7 @@ import com.remoteparadox.diagnostics.DiagnosticEvent
 
 import android.app.Application
 import android.os.VibrationEffect
+import android.os.SystemClock
 import android.os.Vibrator
 import android.util.Log
 import androidx.lifecycle.AndroidViewModel
@@ -84,7 +85,10 @@ class WatchViewModel(app: Application) : AndroidViewModel(app) {
     private var webSocket: WebSocket? = null
     private var webSocketTicket: StatusCacheTicket? = null
     private val wsGeneration = AtomicLong()
-    private val realtimeGeneration = AtomicLong()
+    private val statusPolicy = RealtimeStatusPolicy()
+    private val statusJobs = StatusRefreshJobs(viewModelScope)
+    private val statusOwner: String
+        get() = "${tokenStore.baseUrl}|${tokenStore.username}|${tokenStore.certFingerprint}"
     private val json = Json { ignoreUnknownKeys = true; isLenient = true }
 
     private val messageClient: MessageClient = Wearable.getMessageClient(app)
@@ -150,6 +154,7 @@ class WatchViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun onCredentialsSynced() {
+        stopRealtimeUpdates()
         statusCache.clear()
         Log.d(TAG, "=== onCredentialsSynced ===")
         Log.d(TAG, "  isLoggedIn: ${tokenStore.isLoggedIn}")
@@ -239,42 +244,117 @@ class WatchViewModel(app: Application) : AndroidViewModel(app) {
     fun refreshStatus() {
         val (a, session) = connection ?: return
         val diagnosticSession = ClientDiagnostics.capture()
-        val generation = realtimeGeneration.get()
-        viewModelScope.launch(Dispatchers.IO) {
-            try {
-                maybeRefreshToken(a, session)
+        synchronized(statusPolicy) {
+            val read = statusPolicy.capture(statusOwner)
+            if (!statusPolicy.current(read, statusOwner)) return
+            statusJobs.refresh {
                 val ticket = statusCache.capture()
-                val auth = statusCache.inSession(session) { tokenStore.bearerHeader } ?: return@launch
-                if (!statusCache.isCurrent(ticket) || generation != realtimeGeneration.get()) return@launch
-                Log.d(TAG, "refreshStatus: fetching alarm status...")
-                _state.update { it.copy(isLoading = true) }
-                val resp = a.alarmStatus(auth)
-                Log.d(TAG, "refreshStatus: response code=${resp.code()}, success=${resp.isSuccessful}")
-                statusCache.ifCurrent(ticket) {
-                    if (generation != realtimeGeneration.get()) return@ifCurrent
-                    if (resp.isSuccessful && resp.body() != null) {
-                        val newStatus = resp.body()!!
-                        val oldStatus = _state.value.alarmStatus
-                        if (!updateTileStatus(newStatus, ticket)) return@ifCurrent
-                        DiagnosticEvents.status(newStatus, "watch_app", diagnosticSession)
-                        _state.update { it.copy(alarmStatus = newStatus, isLoading = false, error = null) }
-                        checkForAlarmVibration(oldStatus, newStatus)
-                    } else if (resp.code() == 401) {
-                        handleTokenExpired()
-                    } else {
-                        _state.update { it.copy(isLoading = false) }
+                try {
+                    maybeRefreshToken(a, session, read)
+                    val auth =
+                        statusCache.inSession(session) { tokenStore.bearerHeader } ?: return@refresh
+                    if (!statusCache.isCurrent(ticket)) return@refresh
+                    Log.d(TAG, "refreshStatus: fetching alarm status...")
+                    synchronized(statusPolicy) {
+                        if (!statusPolicy.current(read, statusOwner)) return@refresh
+                        _state.update { it.copy(isLoading = true) }
                     }
-                }
-            } catch (e: CancellationException) {
-                throw e
-            } catch (e: Exception) {
-                statusCache.inSession(session) {
-                    if (generation == realtimeGeneration.get()) {
-                        _state.update { it.copy(isLoading = false, error = "Connection lost") }
+                    val resp = a.alarmStatus(auth)
+                    Log.d(
+                        TAG,
+                        "refreshStatus: response code=${resp.code()}, success=${resp.isSuccessful}",
+                    )
+                    statusCache.ifCurrent(ticket) {
+                        synchronized(statusPolicy) {
+                            if (!statusPolicy.current(read, statusOwner)) return@ifCurrent
+                            if (resp.isSuccessful && resp.body() != null) {
+                                val newStatus = resp.body()!!
+                                val confirmed = newStatus.confirmedStatus()
+                                val oldStatus = _state.value.alarmStatus
+                                if (!updateTileStatus(newStatus, ticket)) return@ifCurrent
+                                statusPolicy.accept(
+                                    read,
+                                    statusOwner,
+                                    "http",
+                                    SystemClock.elapsedRealtime(),
+                                    confirmed != null,
+                                )
+                                DiagnosticEvents.status(newStatus, "watch_app", diagnosticSession)
+                                _state.update {
+                                    it.copy(
+                                        alarmStatus = confirmed,
+                                        isLoading = false,
+                                        error =
+                                            if (confirmed == null) "Panel offline. Status unknown."
+                                            else null,
+                                    )
+                                }
+                                if (confirmed != null) checkForAlarmVibration(oldStatus, confirmed)
+                            } else if (resp.code() == 401) {
+                                handleTokenExpired()
+                            } else {
+                                statusReadFailed(read, "http", "Status unavailable")
+                            }
+                        }
+                    }
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    statusCache.ifCurrent(ticket) {
+                        statusReadFailed(read, "http", "Connection lost")
+                    }
+                } finally {
+                    statusCache.inSession(session) {
+                        synchronized(statusPolicy) {
+                            if (statusPolicy.sameSession(read, statusOwner))
+                                _state.update { it.copy(isLoading = false) }
+                        }
                     }
                 }
             }
         }
+    }
+
+    private fun statusReadFailed(read: RealtimeStatusTicket, source: String, error: String) =
+        synchronized(statusPolicy) {
+            if (statusPolicy.fail(read, statusOwner, source, SystemClock.elapsedRealtime())) {
+                clearVisibleStatus(error)
+            }
+        }
+
+    private fun <T> inControlSession(
+        session: StatusCacheTicket,
+        realtime: RealtimeStatusTicket,
+        block: () -> T,
+    ): T? =
+        statusCache.inSession(session) {
+            synchronized(statusPolicy) {
+                if (statusPolicy.sameSession(realtime, statusOwner)) block() else null
+            }
+        }
+
+    private suspend fun refreshStatusAndWait(
+        session: StatusCacheTicket,
+        realtime: RealtimeStatusTicket,
+    ): Boolean {
+        if (
+            inControlSession(session, realtime) {
+                refreshStatus()
+                true
+            } != true
+        )
+            return false
+        statusJobs.awaitRead()
+        return inControlSession(session, realtime) { true } == true
+    }
+
+    // Call with the cache session guard held, before the realtime guard.
+    private fun clearVisibleStatus(error: String? = null) {
+        statusCache.invalidateSnapshot()
+        _state.update {
+            it.copy(alarmStatus = null, pendingArm = null, isLoading = false, error = error)
+        }
+        requestTileUpdate()
     }
 
     // -- Arm / Disarm --
@@ -362,6 +442,12 @@ class WatchViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     private fun updateTileStatus(status: AlarmStatus, ticket: StatusCacheTicket): Boolean {
+        if (status.confirmedStatus() == null) {
+            if (!statusCache.isCurrent(ticket)) return false
+            statusCache.invalidateSnapshot()
+            requestTileUpdate()
+            return true
+        }
         val now = System.currentTimeMillis()
         val changed = statusCache.read()?.status != status
         if (!statusCache.save(StatusSnapshot(status, now), ticket)) return false
@@ -374,45 +460,67 @@ class WatchViewModel(app: Application) : AndroidViewModel(app) {
 
     fun bypassZone(zoneId: Int, thenArm: Boolean = false) {
         val (a, session) = connection ?: return
+        val realtime = synchronized(statusPolicy) { statusPolicy.capture(statusOwner) }
         _state.update { it.copy(actionInProgress = "bypass") }
         viewModelScope.launch(Dispatchers.IO) {
             try {
-                val resp = sendCommand(a, session) { client, auth ->
-                    client.bypassZone(auth, BypassRequest(zoneId, bypass = true))
-                } ?: return@launch
-                if (!statusCache.isSameSession(session)) return@launch
+                val resp =
+                    sendCommand(a, session, realtime) { client, auth ->
+                        client.bypassZone(auth, BypassRequest(zoneId, bypass = true))
+                    } ?: return@launch
                 if (resp.panelAccepted()) {
                     delay(300)
-                    refreshStatus()
-                    delay(300)
-                    if (!statusCache.isSameSession(session)) return@launch
-                    if (thenArm) {
-                        val pending = _state.value.pendingArm
-                        if (pending != null) {
-                            val partition = _state.value.alarmStatus?.partitions?.find { it.id == pending.partitionId }
-                            val stillBlocking = if (partition != null) openUnbypassedZones(partition) else emptyList()
-                            if (stillBlocking.isEmpty()) {
-                                _state.update { it.copy(pendingArm = null, actionInProgress = null) }
-                                if (pending.action == "arm_away") armAway(pending.partitionId)
-                                else armStay(pending.partitionId)
-                                return@launch
+                    if (!refreshStatusAndWait(session, realtime)) return@launch
+                    inControlSession(session, realtime) {
+                        val pending = _state.value.pendingArm.takeIf { thenArm }
+                        if (pending == null) {
+                            _state.update { it.copy(actionInProgress = null) }
+                        } else {
+                            val partition =
+                                _state.value.alarmStatus?.partitions?.find {
+                                    it.id == pending.partitionId
+                                }
+                            if (partition == null) {
+                                _state.update {
+                                    it.copy(
+                                        actionInProgress = null,
+                                        error = "Status unavailable. Check status before arming.",
+                                    )
+                                }
                             } else {
-                                _state.update { it.copy(pendingArm = pending.copy(openZones = stillBlocking), actionInProgress = null) }
-                                return@launch
+                                val blocking = openUnbypassedZones(partition)
+                                if (blocking.isEmpty()) {
+                                    _state.update {
+                                        it.copy(pendingArm = null, actionInProgress = null)
+                                    }
+                                    if (pending.action == "arm_away") armAway(pending.partitionId)
+                                    else armStay(pending.partitionId)
+                                } else {
+                                    _state.update {
+                                        it.copy(
+                                            pendingArm = pending.copy(openZones = blocking),
+                                            actionInProgress = null,
+                                        )
+                                    }
+                                }
                             }
                         }
                     }
-                    _state.update { it.copy(actionInProgress = null) }
                 } else {
-                    _state.update { it.copy(actionInProgress = null, error = "Bypass failed") }
+                    inControlSession(session, realtime) {
+                        _state.update { it.copy(actionInProgress = null, error = "Bypass failed") }
+                    }
                 }
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
-                statusCache.inSession(session) { _state.update { it.copy(error = e.message) } }
+                inControlSession(session, realtime) { _state.update { it.copy(error = e.message) } }
             } finally {
-                statusCache.inSession(session) {
-                    _state.update { if (it.actionInProgress == "bypass") it.copy(actionInProgress = null) else it }
+                inControlSession(session, realtime) {
+                    _state.update {
+                        if (it.actionInProgress == "bypass") it.copy(actionInProgress = null)
+                        else it
+                    }
                 }
             }
         }
@@ -421,33 +529,57 @@ class WatchViewModel(app: Application) : AndroidViewModel(app) {
     fun bypassAllAndArm() {
         val pending = _state.value.pendingArm ?: return
         val (a, session) = connection ?: return
+        val realtime = synchronized(statusPolicy) { statusPolicy.capture(statusOwner) }
         _state.update { it.copy(actionInProgress = "bypass") }
         viewModelScope.launch(Dispatchers.IO) {
             try {
                 for (zone in pending.openZones) {
-                    val resp = sendCommand(a, session) { client, auth ->
-                        client.bypassZone(auth, BypassRequest(zone.id, bypass = true))
-                    } ?: return@launch
-                    if (!statusCache.isSameSession(session)) return@launch
+                    val resp =
+                        sendCommand(a, session, realtime) { client, auth ->
+                            client.bypassZone(auth, BypassRequest(zone.id, bypass = true))
+                        } ?: return@launch
                     if (!resp.panelAccepted()) {
-                        _state.update { it.copy(actionInProgress = null, error = "Bypass failed for ${zone.name}") }
+                        inControlSession(session, realtime) {
+                            _state.update {
+                                it.copy(
+                                    actionInProgress = null,
+                                    error = "Bypass failed for ${zone.name}",
+                                )
+                            }
+                        }
                         return@launch
                     }
+                    if (!refreshStatusAndWait(session, realtime)) return@launch
                 }
                 delay(500)
-                refreshStatus()
-                delay(300)
-                if (!statusCache.isSameSession(session)) return@launch
-                _state.update { it.copy(pendingArm = null, actionInProgress = null) }
-                if (pending.action == "arm_away") armAway(pending.partitionId)
-                else armStay(pending.partitionId)
+                if (!refreshStatusAndWait(session, realtime)) return@launch
+                inControlSession(session, realtime) {
+                    val partition =
+                        _state.value.alarmStatus?.partitions?.find { it.id == pending.partitionId }
+                    if (partition == null || openUnbypassedZones(partition).isNotEmpty()) {
+                        _state.update {
+                            it.copy(
+                                actionInProgress = null,
+                                error =
+                                    "Status unavailable or zones still open. Check status before arming.",
+                            )
+                        }
+                    } else {
+                        _state.update { it.copy(pendingArm = null, actionInProgress = null) }
+                        if (pending.action == "arm_away") armAway(pending.partitionId)
+                        else armStay(pending.partitionId)
+                    }
+                }
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
-                statusCache.inSession(session) { _state.update { it.copy(error = e.message) } }
+                inControlSession(session, realtime) { _state.update { it.copy(error = e.message) } }
             } finally {
-                statusCache.inSession(session) {
-                    _state.update { if (it.actionInProgress == "bypass") it.copy(actionInProgress = null) else it }
+                inControlSession(session, realtime) {
+                    _state.update {
+                        if (it.actionInProgress == "bypass") it.copy(actionInProgress = null)
+                        else it
+                    }
                 }
             }
         }
@@ -455,24 +587,26 @@ class WatchViewModel(app: Application) : AndroidViewModel(app) {
 
     fun unbypassZone(zoneId: Int) {
         val (a, session) = connection ?: return
+        val realtime = synchronized(statusPolicy) { statusPolicy.capture(statusOwner) }
         _state.update { it.copy(actionInProgress = "unbypass") }
         viewModelScope.launch(Dispatchers.IO) {
             try {
-                val resp = sendCommand(a, session) { client, auth ->
-                    client.bypassZone(auth, BypassRequest(zoneId, bypass = false))
-                } ?: return@launch
-                if (!statusCache.isSameSession(session)) return@launch
+                val resp =
+                    sendCommand(a, session, realtime, "unbypass") { client, auth ->
+                        client.bypassZone(auth, BypassRequest(zoneId, bypass = false))
+                    } ?: return@launch
                 if (resp.panelAccepted()) {
                     delay(300)
-                    refreshStatus()
+                    inControlSession(session, realtime) { refreshStatus() }
                 }
-                _state.update { it.copy(actionInProgress = null) }
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
-                statusCache.inSession(session) { _state.update { it.copy(error = e.message) } }
+                inControlSession(session, realtime) { _state.update { it.copy(error = e.message) } }
             } finally {
-                statusCache.inSession(session) { _state.update { it.copy(actionInProgress = null) } }
+                inControlSession(session, realtime) {
+                    _state.update { it.copy(actionInProgress = null) }
+                }
             }
         }
     }
@@ -482,18 +616,18 @@ class WatchViewModel(app: Application) : AndroidViewModel(app) {
         call: suspend (ParadoxApi, String) -> retrofit2.Response<ActionResult>,
     ) {
         val (a, session) = connection ?: return
+        val realtime = synchronized(statusPolicy) { statusPolicy.capture(statusOwner) }
         if (_state.value.actionInProgress != null) return
         _state.update { it.copy(actionInProgress = name, error = null) }
         viewModelScope.launch(Dispatchers.IO) {
             try {
-                maybeRefreshToken(a, session)
-                val resp = sendCommand(a, session, name, call) ?: return@launch
-                if (!statusCache.isSameSession(session)) return@launch
+                maybeRefreshToken(a, session, realtime)
+                val resp = sendCommand(a, session, realtime, name, call) ?: return@launch
                 if (resp.panelAccepted()) {
                     delay(500)
-                    refreshStatus()
+                    inControlSession(session, realtime) { refreshStatus() }
                 } else {
-                    statusCache.inSession(session) {
+                    inControlSession(session, realtime) {
                         if (resp.code() == 401) handleTokenExpired()
                         else _state.update { it.copy(error = UNCONFIRMED_COMMAND) }
                     }
@@ -501,9 +635,13 @@ class WatchViewModel(app: Application) : AndroidViewModel(app) {
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
-                statusCache.inSession(session) { _state.update { it.copy(error = UNCONFIRMED_COMMAND) } }
+                inControlSession(session, realtime) {
+                    _state.update { it.copy(error = UNCONFIRMED_COMMAND) }
+                }
             } finally {
-                statusCache.inSession(session) { _state.update { it.copy(actionInProgress = null) } }
+                inControlSession(session, realtime) {
+                    _state.update { it.copy(actionInProgress = null) }
+                }
                 requestTileUpdate()
             }
         }
@@ -512,6 +650,7 @@ class WatchViewModel(app: Application) : AndroidViewModel(app) {
     private suspend fun sendCommand(
         a: ParadoxApi,
         session: StatusCacheTicket,
+        realtime: RealtimeStatusTicket,
         name: String = "bypass",
         call: suspend (ParadoxApi, String) -> retrofit2.Response<ActionResult>,
     ): retrofit2.Response<ActionResult>? {
@@ -521,8 +660,40 @@ class WatchViewModel(app: Application) : AndroidViewModel(app) {
             val auth = statusCache.inSession(session) { tokenStore.bearerHeader } ?: return null
             val diagnosticSession = ClientDiagnostics.capture()
             return statusCache.command(ticket) {
+                val allowed =
+                    statusCache.inSession(session) {
+                        synchronized(statusPolicy) {
+                            if (
+                                !canSendAlarmCommand(name, null) &&
+                                    !statusPolicy.sameSession(realtime, statusOwner)
+                            )
+                                return@synchronized false
+                            if (statusPolicy.expire(SystemClock.elapsedRealtime()))
+                                clearVisibleStatus("Status unavailable")
+                            if (!canSendAlarmCommand(name, _state.value.alarmStatus)) {
+                                _state.update {
+                                    it.copy(
+                                        error =
+                                            "Status unknown. Refresh status before sending a command."
+                                    )
+                                }
+                                return@synchronized false
+                            }
+                            statusPolicy.invalidate()
+                            _state.update { it.copy(alarmStatus = null) }
+                            true
+                        }
+                    }
+                if (allowed != true) return@command null
                 requestTileUpdate()
-                DiagnosticEvents.command(name, "watch_app", diagnosticSession, { it.panelAccepted() }) { call(a, auth) }
+                DiagnosticEvents.command(
+                    name,
+                    "watch_app",
+                    diagnosticSession,
+                    { it.panelAccepted() },
+                ) {
+                    call(a, auth)
+                }
             }
         } finally {
             AlarmCommandGate.finish()
@@ -541,93 +712,221 @@ class WatchViewModel(app: Application) : AndroidViewModel(app) {
 
     private fun connectWebSocket() {
         val session = connection?.session ?: return
-        val diagnosticSession = ClientDiagnostics.capture()
-        val ticket = statusCache.capture()
-        if (!statusCache.isSameSession(session) || !statusCache.isCurrent(ticket)) return
-        val url = statusCache.inSession(session) { buildWsUrl() } ?: return
-        val generation = wsGeneration.incrementAndGet()
-        webSocket?.cancel()
-        webSocketTicket = ticket
-        val request = Request.Builder().url(url).build()
-        webSocket = ApiClient.httpClient.newWebSocket(request, object : WebSocketListener() {
-            override fun onOpen(ws: WebSocket, response: Response) {
-                ClientDiagnostics.record(DiagnosticEvent("ws_open", "ws", route = "/ws", connected = true), diagnosticSession)
-                statusCache.ifCurrent(ticket) {
-                    if (generation == wsGeneration.get()) _state.update { it.copy(wsConnected = true, error = null) }
-                }
-            }
+        statusCache.inSession(session) {
+            synchronized(statusPolicy) {
+                val realtime = statusPolicy.capture(statusOwner)
+                if (!statusPolicy.sameSession(realtime, statusOwner)) return@inSession
+                val diagnosticSession = ClientDiagnostics.capture()
+                val ticket = statusCache.capture()
+                if (!statusCache.isSameSession(session) || !statusCache.isCurrent(ticket))
+                    return@inSession
+                val url = statusCache.inSession(session) { buildWsUrl() } ?: return@inSession
+                val generation = wsGeneration.incrementAndGet()
+                webSocket?.cancel()
+                webSocketTicket = ticket
+                val request = Request.Builder().url(url).build()
+                webSocket =
+                    ApiClient.httpClient.newWebSocket(
+                        request,
+                        object : WebSocketListener() {
+                            override fun onOpen(ws: WebSocket, response: Response) {
+                                ClientDiagnostics.record(
+                                    DiagnosticEvent(
+                                        "ws_open",
+                                        "ws",
+                                        route = "/ws",
+                                        connected = true,
+                                    ),
+                                    diagnosticSession,
+                                )
+                                statusCache.ifCurrent(ticket) {
+                                    synchronized(statusPolicy) {
+                                        if (!statusPolicy.sameSession(realtime, statusOwner))
+                                            return@ifCurrent
+                                        if (generation == wsGeneration.get())
+                                            _state.update {
+                                                it.copy(wsConnected = true)
+                                            }
+                                    }
+                                }
+                            }
 
-            override fun onMessage(ws: WebSocket, text: String) {
-                statusCache.ifCurrent(ticket) {
-                    if (generation == wsGeneration.get()) handleWsMessage(text, ticket, diagnosticSession)
-                }
-            }
+                            override fun onMessage(ws: WebSocket, text: String) {
+                                statusCache.ifCurrent(ticket) {
+                                    synchronized(statusPolicy) {
+                                        if (!statusPolicy.sameSession(realtime, statusOwner))
+                                            return@ifCurrent
+                                        if (generation == wsGeneration.get())
+                                            handleWsMessage(text, ticket, diagnosticSession)
+                                    }
+                                }
+                            }
 
-            override fun onClosed(ws: WebSocket, code: Int, reason: String) {
-                ClientDiagnostics.record(DiagnosticEvent("ws_closed", "ws", route = "/ws", connected = false), diagnosticSession)
-                statusCache.ifCurrent(ticket) {
-                    if (generation == wsGeneration.get()) _state.update { it.copy(wsConnected = false) }
-                }
-            }
+                            override fun onClosed(ws: WebSocket, code: Int, reason: String) {
+                                ClientDiagnostics.record(
+                                    DiagnosticEvent(
+                                        "ws_closed",
+                                        "ws",
+                                        route = "/ws",
+                                        connected = false,
+                                    ),
+                                    diagnosticSession,
+                                )
+                                statusCache.ifCurrent(ticket) {
+                                    synchronized(statusPolicy) {
+                                        if (
+                                            !statusPolicy.sameSession(realtime, statusOwner) ||
+                                                generation != wsGeneration.get()
+                                        )
+                                            return@ifCurrent
+                                        _state.update { it.copy(wsConnected = false) }
+                                        statusReadFailed(
+                                            statusPolicy.capture(statusOwner),
+                                            "ws",
+                                            "Connection lost",
+                                        )
+                                    }
+                                }
+                            }
 
-            override fun onFailure(ws: WebSocket, t: Throwable, response: Response?) {
-                ClientDiagnostics.record(DiagnosticEvent("ws_failed", "ws", route = "/ws", connected = false, error = DiagnosticEvents.error(t)), diagnosticSession)
-                Log.w(TAG, "WS failure: ${t.message}")
-                statusCache.ifCurrent(ticket) {
-                    if (generation == wsGeneration.get()) _state.update { it.copy(wsConnected = false) }
-                }
+                            override fun onFailure(
+                                ws: WebSocket,
+                                t: Throwable,
+                                response: Response?,
+                            ) {
+                                ClientDiagnostics.record(
+                                    DiagnosticEvent(
+                                        "ws_failed",
+                                        "ws",
+                                        route = "/ws",
+                                        connected = false,
+                                        error = DiagnosticEvents.error(t),
+                                    ),
+                                    diagnosticSession,
+                                )
+                                Log.w(TAG, "WS failure: ${t.message}")
+                                statusCache.ifCurrent(ticket) {
+                                    synchronized(statusPolicy) {
+                                        if (
+                                            !statusPolicy.sameSession(realtime, statusOwner) ||
+                                                generation != wsGeneration.get()
+                                        )
+                                            return@ifCurrent
+                                        _state.update { it.copy(wsConnected = false) }
+                                        statusReadFailed(
+                                            statusPolicy.capture(statusOwner),
+                                            "ws",
+                                            "Connection lost",
+                                        )
+                                    }
+                                }
+                            }
+                        },
+                    )
             }
-        })
+        }
     }
 
-    private fun handleWsMessage(text: String, ticket: StatusCacheTicket, diagnosticSession: DiagnosticSession?) {
+    private fun handleWsMessage(
+        text: String,
+        ticket: StatusCacheTicket,
+        diagnosticSession: DiagnosticSession?,
+    ) {
         try {
             val obj = json.decodeFromString<JsonObject>(text)
             val type = obj["type"]?.jsonPrimitive?.content ?: return
             if (type == "status") {
-                val status = json.decodeFromString<AlarmStatus>(
-                    JsonObject(obj.filterKeys { it in setOf("partitions", "connected") }).toString()
-                )
+                val status =
+                    json.decodeFromString<AlarmStatus>(
+                        JsonObject(obj.filterKeys { it in setOf("partitions", "connected") })
+                            .toString()
+                    )
                 val oldStatus = _state.value.alarmStatus
+                val confirmed = status.confirmedStatus()
                 if (!updateTileStatus(status, ticket)) return
+                statusPolicy.accept(
+                    statusPolicy.capture(statusOwner),
+                    statusOwner,
+                    "ws",
+                    SystemClock.elapsedRealtime(),
+                    confirmed != null,
+                )
                 DiagnosticEvents.status(status, "ws", diagnosticSession)
-                _state.update { it.copy(alarmStatus = status, isLoading = false, error = null) }
-                checkForAlarmVibration(oldStatus, status)
+                _state.update {
+                    it.copy(
+                        alarmStatus = confirmed,
+                        isLoading = false,
+                        error = if (confirmed == null) "Panel offline. Status unknown." else null,
+                    )
+                }
+                if (confirmed != null) checkForAlarmVibration(oldStatus, confirmed)
             }
         } catch (e: Exception) {
             Log.w(TAG, "WS parse error: ${e.message}")
-            ClientDiagnostics.record(DiagnosticEvent("ws_failed", "ws", route = "/ws", error = "parse"), diagnosticSession)
+            ClientDiagnostics.record(
+                DiagnosticEvent("ws_failed", "ws", route = "/ws", error = "parse"),
+                diagnosticSession,
+            )
+            statusReadFailed(statusPolicy.capture(statusOwner), "ws", "Status unavailable")
         }
     }
 
     fun startRealtimeUpdates() {
         stopRealtimeUpdates()
-        refreshStatus()
-        connectWebSocket()
-        wsJob = viewModelScope.launch(Dispatchers.IO) {
-            while (isActive) {
-                delay(POLL_INTERVAL_MS)
-                if (connection?.session?.let { !statusCache.isSameSession(it) } == true) {
-                    onCredentialsSynced()
-                    return@launch
-                }
-                if (!_state.value.wsConnected || webSocketTicket?.let { !statusCache.isCurrent(it) } == true) {
-                    connectWebSocket()
-                }
+        val session = connection?.session ?: return
+        statusCache.inSession(session) {
+            synchronized(statusPolicy) {
+                statusPolicy.restart()
+                val realtimeScope = statusJobs.start()
+                val realtime = statusPolicy.capture(statusOwner)
                 refreshStatus()
+                connectWebSocket()
+                wsJob =
+                    realtimeScope.launch(Dispatchers.IO) {
+                        while (isActive) {
+                            delay(POLL_INTERVAL_MS)
+                            statusCache.inSession(session) {
+                                synchronized(statusPolicy) {
+                                    if (!statusPolicy.sameSession(realtime, statusOwner))
+                                        return@inSession
+                                    if (statusPolicy.expire(SystemClock.elapsedRealtime()))
+                                        clearVisibleStatus("Status unavailable")
+                                }
+                            }
+                            if (
+                                connection?.session?.let { !statusCache.isSameSession(it) } == true
+                            ) {
+                                onCredentialsSynced()
+                                return@launch
+                            }
+                            if (
+                                !_state.value.wsConnected ||
+                                    webSocketTicket?.let { !statusCache.isCurrent(it) } == true
+                            ) {
+                                connectWebSocket()
+                            }
+                            refreshStatus()
+                        }
+                    }
             }
         }
     }
 
     fun stopRealtimeUpdates() {
-        realtimeGeneration.incrementAndGet()
-        wsGeneration.incrementAndGet()
-        wsJob?.cancel()
-        wsJob = null
-        webSocket?.close(1000, "bye")
-        webSocket = null
-        webSocketTicket = null
-        _state.update { it.copy(wsConnected = false) }
+        statusCache.inSession(statusCache.capture()) {
+            synchronized(statusPolicy) {
+                statusPolicy.stop()
+                statusJobs.stop()
+                wsGeneration.incrementAndGet()
+                wsJob?.cancel()
+                wsJob = null
+                webSocket?.close(1000, "bye")
+                webSocket = null
+                webSocketTicket = null
+                _state.update { it.copy(wsConnected = false, actionInProgress = null) }
+                clearVisibleStatus()
+            }
+        }
     }
 
     // -- Haptics --
@@ -668,24 +967,35 @@ class WatchViewModel(app: Application) : AndroidViewModel(app) {
         _state.update { it.copy(screen = WatchScreen.Setup, isLoading = false, error = "Session expired") }
     }
 
-    private suspend fun maybeRefreshToken(a: ParadoxApi, session: StatusCacheTicket) {
+    private suspend fun maybeRefreshToken(
+        a: ParadoxApi,
+        session: StatusCacheTicket,
+        realtime: RealtimeStatusTicket,
+    ) {
         if (!statusCache.isSameSession(session)) return
         if (tokenStore.tokenAgeMs < TOKEN_REFRESH_AGE_MS) return
         try {
             Log.i(TAG, "Token is ${tokenStore.tokenAgeMs / 3600000}h old, refreshing...")
-            val credentials = statusCache.inSession(session) { tokenStore.refreshToken to tokenStore.bearerHeader }
-                ?: return
+            val credentials =
+                statusCache.inSession(session) {
+                    tokenStore.refreshToken to tokenStore.bearerHeader
+                } ?: return
             val (storedRefreshToken, bearer) = credentials
-            val resp = if (!storedRefreshToken.isNullOrBlank()) {
-                a.refreshToken(RefreshRequest(storedRefreshToken))
-            } else {
-                a.refreshToken(bearer)
-            }
+            val resp =
+                if (!storedRefreshToken.isNullOrBlank()) {
+                    a.refreshToken(RefreshRequest(storedRefreshToken))
+                } else {
+                    a.refreshToken(bearer)
+                }
             if (resp.isSuccessful && resp.body() != null) {
                 val body = resp.body()!!
                 statusCache.inSession(session) {
-                    tokenStore.token = body.token
-                    tokenStore.refreshToken = body.refreshToken.ifBlank { tokenStore.refreshToken }
+                    synchronized(statusPolicy) {
+                        if (!statusPolicy.sameSession(realtime, statusOwner)) return@inSession
+                        tokenStore.token = body.token
+                        tokenStore.refreshToken =
+                            body.refreshToken.ifBlank { tokenStore.refreshToken }
+                    }
                 }
                 Log.i(TAG, "Token refreshed successfully")
             } else if (!storedRefreshToken.isNullOrBlank()) {
@@ -694,12 +1004,19 @@ class WatchViewModel(app: Application) : AndroidViewModel(app) {
                 if (fallback.isSuccessful && fallback.body() != null) {
                     val body = fallback.body()!!
                     statusCache.inSession(session) {
-                        tokenStore.token = body.token
-                        tokenStore.refreshToken = body.refreshToken.ifBlank { tokenStore.refreshToken }
+                        synchronized(statusPolicy) {
+                            if (!statusPolicy.sameSession(realtime, statusOwner)) return@inSession
+                            tokenStore.token = body.token
+                            tokenStore.refreshToken =
+                                body.refreshToken.ifBlank { tokenStore.refreshToken }
+                        }
                     }
                     Log.i(TAG, "Token refreshed successfully with bearer fallback")
                 } else {
-                    Log.w(TAG, "Token refresh failed: ${resp.code()}, bearer fallback: ${fallback.code()}")
+                    Log.w(
+                        TAG,
+                        "Token refresh failed: ${resp.code()}, bearer fallback: ${fallback.code()}",
+                    )
                 }
             } else if (resp.code() == 401) {
                 Log.w(TAG, "Token refresh failed with 401, token has expired")
