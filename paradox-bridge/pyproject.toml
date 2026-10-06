@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "paradox-bridge"
-version = "1.0.11"
+version = "1.0.12"
 description = "Local FastAPI bridge between Paradox SP6000 alarm and Android app"
 requires-python = ">=3.11"
 dependencies = [
@@ -22,7 +22,7 @@ dependencies = [
 
 [project.optional-dependencies]
 pi = [
-    "paradox-alarm-interface>=3.7",
+    "paradox-alarm-interface==3.7.0",
 ]
 dev = [
     "pytest>=8.0",

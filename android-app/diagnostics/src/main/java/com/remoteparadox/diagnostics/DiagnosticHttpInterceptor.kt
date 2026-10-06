@@ -10,11 +10,19 @@ import okhttp3.Response
 
 internal class DiagnosticHttpInterceptor(private val recorder: DiagnosticRecorder?) : Interceptor {
     private val scope = recorder?.captureScope()
+    private companion object {
+        val alarmChangingRoutes = setOf("/alarm/arm-away", "/alarm/arm-stay", "/alarm/disarm", "/alarm/bypass", "/alarm/panic")
+    }
 
     override fun intercept(chain: Interceptor.Chain): Response {
         val requestId = UUID.randomUUID().toString()
         val original = chain.request()
-        val request = original.newBuilder().header("X-Diagnostic-Request-Id", requestId).build()
+        val builder = original.newBuilder().header("X-Diagnostic-Request-Id", requestId)
+        val body = original.body
+        if (original.method == "POST" && original.url.encodedPath in alarmChangingRoutes && body != null && !body.isOneShot()) {
+            builder.method(original.method, OneShotRequestBody(body))
+        }
+        val request = builder.build()
         val route = original.url.encodedPath.takeIf { it in Fields.routes }
         val repetitivePoll = original.method == "GET" && route == "/alarm/status"
         val started = System.nanoTime()

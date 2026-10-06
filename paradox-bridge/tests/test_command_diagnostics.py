@@ -15,6 +15,7 @@ from fastapi.testclient import TestClient
 
 from paradox_bridge import diagnostics as diag
 from paradox_bridge.alarm import AlarmService
+from paradox_bridge.pai_adapter import PanelSession
 
 
 @pytest.fixture
@@ -43,7 +44,7 @@ def alarm():
             request_lock=asyncio.Lock(),
             storage=SimpleNamespace(get_container=containers.__getitem__),
         ),
-        _connected=True, _pai_loop_task=None, _last_panel_status_at=time.monotonic()-20,
+        _connected=True, _pai_loop_task=None, _last_panel_status_at=time.monotonic()-31,
         _pc_password="PRIVATE PASSWORD",
     )
 
@@ -51,7 +52,7 @@ def alarm():
 def test_snapshot_exposes_stale_polling_and_readiness_without_labels(alarm):
     state = diag.panel_snapshot(alarm)
     assert state["status_stale"] is True
-    assert state["status_age_s"] >= 20
+    assert state["status_age_s"] >= 31
     assert state["partitions"]["1"]["ready_status"] is False
     assert state["open_zones"] == ["2"]
     assert "PRIVATE" not in json.dumps(state)
@@ -311,6 +312,8 @@ async def test_alarm_zone_and_panic_tracing_preserves_calls_and_outcomes(records
         send.return_value = outcome
     alarm._pai = SimpleNamespace(connection=SimpleNamespace(connected=True), control_zone=send, send_panic=send)
     alarm._connected = True
+    alarm._session = PanelSession(lambda: True, lambda: alarm.is_connected, pai=alarm._pai)
+    alarm._last_panel_status_at = time.monotonic()
     command = alarm.send_panic(2, "fire") if operation == "send_panic" else getattr(alarm, operation)(16)
     if isinstance(outcome, type):
         with pytest.raises(outcome):

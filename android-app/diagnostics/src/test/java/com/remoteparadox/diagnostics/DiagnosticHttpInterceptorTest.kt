@@ -9,8 +9,11 @@ import okhttp3.Interceptor
 import okhttp3.OkHttpClient
 import okhttp3.Protocol
 import okhttp3.Request
+import okhttp3.RequestBody.Companion.toRequestBody
 import okhttp3.Response
 import okhttp3.ResponseBody.Companion.toResponseBody
+import okhttp3.mockwebserver.MockResponse
+import okhttp3.mockwebserver.MockWebServer
 import kotlinx.serialization.encodeToString
 import org.junit.Assert.*
 import org.junit.Rule
@@ -98,6 +101,69 @@ class DiagnosticHttpInterceptorTest {
     @Test fun `diagnostics unavailable does not block network`() {
         val chain = FakeChain(request())
         assertSame(chain.response, DiagnosticHttpInterceptor(null).intercept(chain))
+    }
+
+    @Test fun `alarm changing POSTs cannot replay on 503 retry after zero even without a recorder`() {
+        val payload = "{\"code\":\"private-code\",\"partition_id\":1}"
+        for (path in listOf("/alarm/arm-away", "/alarm/arm-stay", "/alarm/disarm", "/alarm/bypass", "/alarm/panic")) {
+            MockWebServer().use { server ->
+                server.enqueue(MockResponse().setResponseCode(503).addHeader("Retry-After", "0"))
+                server.enqueue(MockResponse().setBody("would hide a replay"))
+                val client = OkHttpClient.Builder().retryOnConnectionFailure(false)
+                    .addInterceptor(DiagnosticHttpInterceptor(null)).build()
+                val request = Request.Builder().url(server.url(path)).header("Authorization", "Bearer private-token")
+                    .post(payload.toRequestBody()).build()
+                val status = client.newCall(request).execute().use { it.code }
+                assertEquals("Request count for $path", 1, server.requestCount)
+                assertEquals(503, status)
+                val sent = server.takeRequest(1, TimeUnit.SECONDS)!!
+                assertEquals(path, sent.path)
+                assertEquals(payload, sent.body.readUtf8())
+                assertEquals("Bearer private-token", sent.getHeader("Authorization"))
+                assertTrue(Fields.uuid.matches(sent.getHeader("X-Diagnostic-Request-Id")!!))
+            }
+        }
+    }
+
+    @Test fun `status GET retains ordinary 503 follow up behavior`() {
+        MockWebServer().use { server ->
+            server.enqueue(MockResponse().setResponseCode(503).addHeader("Retry-After", "0"))
+            server.enqueue(MockResponse().setBody("status result"))
+            val client = OkHttpClient.Builder().retryOnConnectionFailure(false)
+                .addInterceptor(DiagnosticHttpInterceptor(null)).build()
+            val request = Request.Builder().url(server.url("/alarm/status")).get().build()
+            client.newCall(request).execute().use {
+                assertEquals(200, it.code)
+                assertEquals("status result", it.body!!.string())
+            }
+            assertEquals(2, server.requestCount)
+            repeat(2) {
+                val sent = server.takeRequest(1, TimeUnit.SECONDS)!!
+                assertEquals("GET", sent.method)
+                assertEquals("/alarm/status", sent.path)
+                assertEquals(0L, sent.body.size)
+            }
+        }
+    }
+
+    @Test fun `one shot policy is limited to recognized alarm POST bodies`() {
+        val body = "private-payload".toRequestBody()
+        for ((method, path) in listOf("POST" to "/alarm/status", "POST" to "/auth/login",
+            "POST" to "/alarm/unknown", "POST" to "/alarm/arm-away/", "POST" to "/prefix/alarm/arm-away",
+            "PUT" to "/alarm/arm-away")) {
+            val original = request(path).newBuilder().method(method, body).build()
+            val chain = FakeChain(original)
+            DiagnosticHttpInterceptor(null).intercept(chain)
+            assertSame(body, chain.received!!.body)
+            assertFalse(chain.received!!.body!!.isOneShot())
+        }
+        val chain = FakeChain(request("/alarm/status"))
+        DiagnosticHttpInterceptor(null).intercept(chain)
+        assertNull(chain.received!!.body)
+        val oneShot = OneShotRequestBody(body)
+        val alreadyMarked = FakeChain(request().newBuilder().post(oneShot).build())
+        DiagnosticHttpInterceptor(null).intercept(alreadyMarked)
+        assertSame(oneShot, alreadyMarked.received!!.body)
     }
 
     @Test fun `cancellation is a bounded category`() {

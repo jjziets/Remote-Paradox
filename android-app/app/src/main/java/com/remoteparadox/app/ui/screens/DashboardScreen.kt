@@ -50,6 +50,7 @@ fun DashboardScreen(
     username: String?,
     savedAlarmCode: String?,
     wsConnected: Boolean,
+    panicAvailable: Boolean,
     requestHistoryTab: Boolean = false,
     onSelectPartition: (Int) -> Unit,
     onArmAway: (code: String, partitionId: Int) -> Unit,
@@ -125,7 +126,7 @@ fun DashboardScreen(
                 Spacer(Modifier.height(8.dp))
 
                 PanicButtons(
-                    connected = alarmStatus?.connected ?: false,
+                    available = panicAvailable,
                     actionInProgress = actionInProgress,
                     onPanic = { type -> onPanic(type, currentPartition?.id ?: 1) },
                 )
@@ -547,13 +548,17 @@ private fun ControlButtons(
 
 // ── Panic buttons ──
 
+internal fun panicButtonsEnabled(available: Boolean, actionInProgress: String?): Boolean =
+    available && actionInProgress == null
+
 @Composable
 private fun PanicButtons(
-    connected: Boolean,
+    available: Boolean,
     actionInProgress: String?,
     onPanic: (String) -> Unit,
 ) {
     var showConfirm by remember { mutableStateOf<String?>(null) }
+    val enabled = panicButtonsEnabled(available, actionInProgress)
 
     Row(
         Modifier.fillMaxWidth().height(IntrinsicSize.Max),
@@ -563,7 +568,7 @@ private fun PanicButtons(
             icon = "\uD83D\uDEA8",
             label = "PANIC",
             color = Color(0xFFE94560),
-            enabled = connected && actionInProgress == null,
+            enabled = enabled,
             onClick = { showConfirm = "emergency" },
             modifier = Modifier.weight(1f).fillMaxHeight(),
         )
@@ -571,7 +576,7 @@ private fun PanicButtons(
             icon = "\uD83C\uDFE5",
             label = "MEDICAL",
             color = Color(0xFF42A5F5),
-            enabled = connected && actionInProgress == null,
+            enabled = enabled,
             onClick = { showConfirm = "medical" },
             modifier = Modifier.weight(1f).fillMaxHeight(),
         )
@@ -579,7 +584,7 @@ private fun PanicButtons(
             icon = "\uD83D\uDD25",
             label = "FIRE",
             color = Color(0xFFFF7043),
-            enabled = connected && actionInProgress == null,
+            enabled = enabled,
             onClick = { showConfirm = "fire" },
             modifier = Modifier.weight(1f).fillMaxHeight(),
         )

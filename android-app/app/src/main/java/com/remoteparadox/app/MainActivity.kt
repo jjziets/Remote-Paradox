@@ -135,6 +135,7 @@ class MainActivity : ComponentActivity() {
                         username = vm.tokenStore.username,
                         savedAlarmCode = vm.savedAlarmCode,
                         wsConnected = state.wsConnected,
+                        panicAvailable = state.panicAvailable,
                         requestHistoryTab = state.requestHistoryTab,
                         onSelectPartition = { vm.selectPartition(it) },
                         onArmAway = { code, pid -> vm.armAway(code, pid) },

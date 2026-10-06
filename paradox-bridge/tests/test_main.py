@@ -539,12 +539,16 @@ class TestRealModeLifespan:
 
         async def flaky_connect(self_alarm):
             from types import SimpleNamespace
+            import time
+            from paradox_bridge.pai_adapter import PanelSession
             nonlocal call_count
             call_count += 1
             if call_count < 3:
                 raise ConnectionError("Serial port busy")
             self_alarm._pai = SimpleNamespace(connection=SimpleNamespace(connected=True))
             self_alarm._connected = True
+            self_alarm._session = PanelSession(lambda: True, lambda: self_alarm.is_connected, pai=self_alarm._pai)
+            self_alarm._last_panel_status_at = time.monotonic()
 
         with patch.object(AlarmService, "connect", flaky_connect), \
              patch.object(app_module, "_CONNECT_RETRY_DELAY", 0):
